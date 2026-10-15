@@ -27,10 +27,15 @@ public class OcrFeatureTests : IDisposable
             for (int i = 0; i < pageCount; i++) pages.Add(new byte[] { 0x89, (byte)'P' });
             return Task.FromResult<IReadOnlyList<byte[]>>(pages);
         }
+
+        public Task<byte[]> RenderFirstPageAsync(string pdfPath, int dpi) =>
+            Task.FromResult(new byte[] { 0x89, (byte)'P' });
     }
 
     private sealed class FakeEngine(IReadOnlyList<string> lines) : IOcrEngine
     {
+        public string DisplayName => "测试引擎";
+
         public Task<IReadOnlyList<string>> RecognizeAsync(byte[] imageBytes) =>
             Task.FromResult(lines);
     }
@@ -38,6 +43,9 @@ public class OcrFeatureTests : IDisposable
     private sealed class ThrowingRenderer : IPdfPageRenderer
     {
         public Task<IReadOnlyList<byte[]>> RenderPagesAsync(string pdfPath, int dpi) =>
+            throw new InvalidOperationException("渲染失败");
+
+        public Task<byte[]> RenderFirstPageAsync(string pdfPath, int dpi) =>
             throw new InvalidOperationException("渲染失败");
     }
 

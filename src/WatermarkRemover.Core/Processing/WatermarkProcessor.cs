@@ -1,4 +1,5 @@
 using WatermarkRemover.Core.Documents;
+using WatermarkRemover.Core.Features.Naming;
 using WatermarkRemover.Core.Settings;
 using WatermarkRemover.Core.Watermarks;
 
@@ -13,17 +14,20 @@ public sealed class WatermarkProcessor
     private readonly IDocumentSource _source;
     private readonly IReadOnlyList<IWatermarkStrategy> _strategies;
     private readonly AppSettings _settings;
+    private readonly Func<string, AutoNameResult?>? _autoNamer;
 
     public WatermarkProcessor(
         IDocumentSource source,
         IEnumerable<IWatermarkStrategy> strategies,
-        AppSettings settings)
+        AppSettings settings,
+        Func<string, AutoNameResult?>? autoNamer = null)
     {
         _source = source ?? throw new ArgumentNullException(nameof(source));
         _strategies = strategies?.ToList() ?? throw new ArgumentNullException(nameof(strategies));
         if (_strategies.Count == 0)
             throw new ArgumentException("At least one watermark strategy is required.", nameof(strategies));
         _settings = settings ?? throw new ArgumentNullException(nameof(settings));
+        _autoNamer = autoNamer;
     }
 
     /// <summary>Processes one file synchronously. Never throws for expected failures.</summary>
@@ -48,7 +52,7 @@ public sealed class WatermarkProcessor
 
             var edits = BuildEdits(raw, analysis, marks);
 
-            string outputPath = OutputNameGenerator.GetOutputPath(inputPath, _settings);
+            string outputPath = ResolveOutputPath(inputPath);
             _source.Apply(inputPath, outputPath, edits);
 
             return ProcessingResult.Succeeded(inputPath, outputPath, marks);
@@ -57,6 +61,34 @@ public sealed class WatermarkProcessor
         {
             return ProcessingResult.Failed(inputPath, ex.Message);
         }
+    }
+
+    /// <summary>
+    /// Picks the output path: content-based naming when the auto-namer can identify the document
+    /// (e.g. 林孝明执照.pdf), otherwise the default suffix naming. The auto-namer never throws —
+    /// any failure simply falls back to the default, so the main pipeline is never at risk.
+    /// </summary>
+    private string ResolveOutputPath(string inputPath)
+    {
+        string directory = _settings.OutputMode == OutputMode.CustomDirectory &&
+                           !string.IsNullOrWhiteSpace(_settings.OutputDirectory)
+            ? _settings.OutputDirectory
+            : Path.GetDirectoryName(inputPath) ?? string.Empty;
+        string extension = Path.GetExtension(inputPath);
+
+        AutoNameResult? autoName = null;
+        try
+        {
+            autoName = _autoNamer?.Invoke(inputPath);
+        }
+        catch
+        {
+            // Naming is a convenience; never let it fail the watermark removal itself.
+        }
+
+        return autoName is not null
+            ? OutputNameGenerator.FindAvailablePath(directory, autoName.SuggestedStem + extension)
+            : OutputNameGenerator.GetOutputPath(inputPath, _settings);
     }
 
     /// <summary>Parses raw pages into an analysis document. Kept separate for testability.</summary>

@@ -17,6 +17,8 @@ public sealed class WindowsMediaOcrEngine : IOcrEngine
 
     public WindowsMediaOcrEngine() => _engine = TryCreateEngine();
 
+    public string DisplayName => "Windows原生OCR";
+
     /// <summary>Whether a usable OCR engine exists on this machine.</summary>
     public bool IsAvailable => _engine is not null;
 

@@ -155,6 +155,14 @@
                 </StackPanel>
             </Border>
 
+            <!-- Smart naming -->
+            <TextBlock Text="自动命名" Style="{StaticResource SectionLabel}" Margin="0,10,0,8"/>
+            <CheckBox x:Name="AutoNameBox" Content="按文件内容自动命名去水印结果（如 林孝明执照）"
+                      FontSize="13" Margin="0,0,0,4"/>
+            <TextBlock Text="识别文件类型并提取客户姓名，生成「姓名＋类型」文件名；识别不出来时沿用上面的后缀规则。"
+                       FontSize="11" Foreground="{StaticResource TextSecondaryBrush}"
+                       TextWrapping="Wrap" Margin="22,0,0,18"/>
+
             <!-- Advanced -->
             <TextBlock Text="其他" Style="{StaticResource SectionLabel}" Margin="0,10,0,8"/>
             <CheckBox x:Name="RemoveLinksBox" Content="同时移除水印附带的链接注释"

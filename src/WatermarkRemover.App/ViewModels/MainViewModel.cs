@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Windows;
+using Microsoft.VisualBasic.FileIO;
 using WatermarkRemover.App.Logging;
 using WatermarkRemover.App.Ocr;
 using WatermarkRemover.App.Settings;
@@ -18,10 +19,18 @@ namespace WatermarkRemover.App.ViewModels;
 /// </summary>
 public sealed class MainViewModel : ObservableObject
 {
+    /// <summary>One shared engine: the WeChat OCR worker is a single channel, so both features
+    /// must go through the same instance to keep recognition serialised.</summary>
+    private static readonly IOcrEngine SharedOcrEngine = CreateOcrEngine();
+
     private readonly FeatureRegistry _registry = new(new IFeature[]
     {
-        new WatermarkFeature(new PdfDocumentSource(), new IWatermarkStrategy[] { new BottomRightBadgeStrategy() }),
-        new OcrFeature(new WinRtPdfPageRenderer(), new WindowsMediaOcrEngine()),
+        new WatermarkFeature(
+            new PdfDocumentSource(),
+            new IWatermarkStrategy[] { new BottomRightBadgeStrategy() },
+            new WinRtPdfPageRenderer(),
+            SharedOcrEngine),
+        new OcrFeature(new WinRtPdfPageRenderer(), SharedOcrEngine),
     });
 
     private IFeature _selectedFeature;
@@ -40,7 +49,25 @@ public sealed class MainViewModel : ObservableObject
 
         ClearCommand = new RelayCommand(ClearJobs, () => Jobs.Count > 0 && !IsBusy);
         OpenOutputCommand = new RelayCommand(p => OpenOutput(p as string), p => p is string path && File.Exists(path));
+        DeleteJobCommand = new RelayCommand(DeleteJob, p => p is FileJobViewModel && !IsBusy);
         SaveSettingsCommand = new RelayCommand(SaveSettings);
+    }
+
+    /// <summary>
+    /// WeChat's local engine recognises Chinese documents far better than the system one, so it
+    /// is preferred whenever the machine has a WeChat install; otherwise fall back to the
+    /// zero-dependency Windows OCR.
+    /// </summary>
+    private static IOcrEngine CreateOcrEngine()
+    {
+        if (WeChatOcrEngine.TryLocate(out WeChatOcrEngine? wechat, out string reason))
+        {
+            AppLog.Info("OCR 引擎：微信本地 OCR");
+            return wechat!;
+        }
+
+        AppLog.Info($"OCR 引擎：Windows 原生 OCR（未启用微信引擎：{reason}）");
+        return new WindowsMediaOcrEngine();
     }
 
     public AppSettings Settings { get; }
@@ -94,6 +121,8 @@ public sealed class MainViewModel : ObservableObject
 
     public RelayCommand OpenOutputCommand { get; }
 
+    public RelayCommand DeleteJobCommand { get; }
+
     public RelayCommand SaveSettingsCommand { get; }
 
     public bool IsBusy
@@ -106,6 +135,7 @@ public sealed class MainViewModel : ObservableObject
                 OnPropertyChanged(nameof(IsIdle));
                 OnPropertyChanged(nameof(StatusText));
                 ClearCommand.RaiseCanExecuteChanged();
+                DeleteJobCommand.RaiseCanExecuteChanged();
             }
         }
     }
@@ -258,6 +288,40 @@ public sealed class MainViewModel : ObservableObject
         if (IsBusy) return;
         Jobs.Clear();
         CompletedCount = 0;
+        OnPropertyChanged(nameof(StatusText));
+    }
+
+    /// <summary>
+    /// Removes one finished record from the list after a single confirmation. The generated
+    /// output file goes to the Recycle Bin (recoverable); the original input file is never touched.
+    /// </summary>
+    private void DeleteJob(object? parameter)
+    {
+        if (parameter is not FileJobViewModel job) return;
+
+        bool hasOutput = job.OutputPath is not null && File.Exists(job.OutputPath);
+        string message = hasOutput
+            ? $"确定要删除「{job.DisplayName}」吗？\n\n已生成的文件将移入回收站，源文件不受影响。"
+            : $"确定要删除「{job.FileName}」这条记录吗？";
+        MessageBoxResult confirm = MessageBox.Show(message, "删除确认", MessageBoxButton.OKCancel, MessageBoxImage.Warning);
+        if (confirm != MessageBoxResult.OK) return;
+
+        try
+        {
+            if (hasOutput)
+            {
+                FileSystem.DeleteFile(job.OutputPath!, UIOption.OnlyErrorDialogs, RecycleOption.SendToRecycleBin);
+                AppLog.Info($"已删除生成文件：{job.OutputPath}");
+            }
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error($"删除生成文件失败：{job.OutputPath}", ex);
+            MessageBox.Show($"删除文件失败：{ex.Message}", "删除失败", MessageBoxButton.OK, MessageBoxImage.Error);
+            return;
+        }
+
+        Jobs.Remove(job);
         OnPropertyChanged(nameof(StatusText));
     }
 

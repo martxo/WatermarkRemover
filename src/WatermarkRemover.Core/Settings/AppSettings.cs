@@ -36,6 +36,13 @@ public sealed class AppSettings
     /// </summary>
     public List<string> QuickSuffixes { get; set; } = new() { "身份证", "户口本", "房产证", "征信", "执照" };
 
+    /// <summary>
+    /// Name watermark-removal outputs after the document's content (e.g. 林孝明执照.pdf) when
+    /// the document type and customer name can be recognised. Falls back to
+    /// <see cref="OutputSuffix"/> naming otherwise.
+    /// </summary>
+    public bool AutoNameByContent { get; set; } = true;
+
     /// <summary>Deep copy: safe to hand to background work while the original keeps being edited.</summary>
     public AppSettings Clone() => new()
     {
@@ -46,5 +53,6 @@ public sealed class AppSettings
         MaxConcurrency = MaxConcurrency,
         CheckUpdatesOnStartup = CheckUpdatesOnStartup,
         QuickSuffixes = new List<string>(QuickSuffixes),
+        AutoNameByContent = AutoNameByContent,
     };
 }

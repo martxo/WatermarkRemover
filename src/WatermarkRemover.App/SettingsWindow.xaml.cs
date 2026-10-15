@@ -16,6 +16,7 @@ public partial class SettingsWindow : Window
         _settings = settings;
 
         SuffixBox.Text = settings.OutputSuffix;
+        AutoNameBox.IsChecked = settings.AutoNameByContent;
         RemoveLinksBox.IsChecked = settings.RemoveLinkedAnnotations;
         ConcurrencyBox.SelectedIndex = Math.Clamp(settings.MaxConcurrency, 1, 4) - 1;
         CheckUpdatesBox.IsChecked = settings.CheckUpdatesOnStartup;
@@ -212,6 +213,7 @@ public partial class SettingsWindow : Window
         _settings.OutputSuffix = suffix;
         _settings.OutputMode = customMode ? OutputMode.CustomDirectory : OutputMode.SameDirectory;
         _settings.OutputDirectory = directory;
+        _settings.AutoNameByContent = AutoNameBox.IsChecked == true;
         _settings.RemoveLinkedAnnotations = RemoveLinksBox.IsChecked == true;
         _settings.MaxConcurrency = ConcurrencyBox.SelectedIndex + 1;
         _settings.CheckUpdatesOnStartup = CheckUpdatesBox.IsChecked == true;

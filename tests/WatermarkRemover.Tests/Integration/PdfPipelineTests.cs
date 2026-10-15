@@ -1,4 +1,5 @@
 using System.Text;
+using WatermarkRemover.Core.Features.Naming;
 using WatermarkRemover.Core.Processing;
 using WatermarkRemover.Core.Settings;
 using WatermarkRemover.Core.Watermarks;
@@ -186,6 +187,65 @@ public class PdfPipelineTests : IDisposable
         Assert.Equal(ProcessingStatus.Succeeded, result.Status);
         Assert.Equal(Path.Combine(_dir, "input_no-watermark (2).pdf"), result.OutputPath);
         Assert.Equal("occupied", Encoding.Latin1.GetString(File.ReadAllBytes(Path.Combine(_dir, "input_no-watermark.pdf"))));
+    }
+
+    [Fact]
+    public void Process_names_the_output_after_the_auto_namer_result()
+    {
+        string input = WriteInput(PdfFixture.CamScannerLike().Build());
+        var processor = new WatermarkProcessor(
+            new PdfDocumentSource(), new IWatermarkStrategy[] { new BottomRightBadgeStrategy() },
+            new AppSettings(), _ => AutoNameResult.Create("林孝明", "执照"));
+
+        var result = processor.Process(input);
+
+        Assert.Equal(ProcessingStatus.Succeeded, result.Status);
+        Assert.Equal(Path.Combine(_dir, "林孝明执照.pdf"), result.OutputPath);
+        Assert.True(File.Exists(result.OutputPath));
+    }
+
+    [Fact]
+    public void Process_falls_back_to_default_naming_when_the_auto_namer_returns_null()
+    {
+        string input = WriteInput(PdfFixture.CamScannerLike().Build());
+        var processor = new WatermarkProcessor(
+            new PdfDocumentSource(), new IWatermarkStrategy[] { new BottomRightBadgeStrategy() },
+            new AppSettings(), _ => null);
+
+        var result = processor.Process(input);
+
+        Assert.Equal(ProcessingStatus.Succeeded, result.Status);
+        Assert.EndsWith("_no-watermark.pdf", Path.GetFileName(result.OutputPath));
+    }
+
+    [Fact]
+    public void Process_falls_back_to_default_naming_when_the_auto_namer_throws()
+    {
+        string input = WriteInput(PdfFixture.CamScannerLike().Build());
+        var processor = new WatermarkProcessor(
+            new PdfDocumentSource(), new IWatermarkStrategy[] { new BottomRightBadgeStrategy() },
+            new AppSettings(), _ => throw new InvalidOperationException("OCR 失败"));
+
+        var result = processor.Process(input);
+
+        Assert.Equal(ProcessingStatus.Succeeded, result.Status);
+        Assert.EndsWith("_no-watermark.pdf", Path.GetFileName(result.OutputPath));
+    }
+
+    [Fact]
+    public void Auto_named_output_does_not_overwrite_an_existing_file()
+    {
+        string input = WriteInput(PdfFixture.CamScannerLike().Build());
+        File.WriteAllBytes(Path.Combine(_dir, "林孝明执照.pdf"), Encoding.Latin1.GetBytes("occupied"));
+        var processor = new WatermarkProcessor(
+            new PdfDocumentSource(), new IWatermarkStrategy[] { new BottomRightBadgeStrategy() },
+            new AppSettings(), _ => AutoNameResult.Create("林孝明", "执照"));
+
+        var result = processor.Process(input);
+
+        Assert.Equal(ProcessingStatus.Succeeded, result.Status);
+        Assert.Equal(Path.Combine(_dir, "林孝明执照 (2).pdf"), result.OutputPath);
+        Assert.Equal("occupied", Encoding.Latin1.GetString(File.ReadAllBytes(Path.Combine(_dir, "林孝明执照.pdf"))));
     }
 
     private static string ContentRewriterToText(byte[] bytes) => Encoding.Latin1.GetString(bytes);

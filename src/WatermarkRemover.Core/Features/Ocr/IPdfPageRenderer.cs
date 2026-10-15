@@ -8,4 +8,10 @@ public interface IPdfPageRenderer
 {
     /// <summary>Renders every page of the PDF to an encoded image (PNG) at the requested DPI.</summary>
     Task<IReadOnlyList<byte[]>> RenderPagesAsync(string pdfPath, int dpi);
+
+    /// <summary>
+    /// Renders just the first page — enough for content-based naming, much cheaper than
+    /// rendering a whole document.
+    /// </summary>
+    Task<byte[]> RenderFirstPageAsync(string pdfPath, int dpi);
 }

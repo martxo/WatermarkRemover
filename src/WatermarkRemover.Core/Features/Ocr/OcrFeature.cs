@@ -62,7 +62,7 @@ public sealed class OcrFeature : IFeature
             // UTF-8 with BOM so Notepad and Excel detect the encoding reliably.
             File.WriteAllText(outputPath, text, new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
 
-            return FeatureResult.Success(inputPath, outputPath, $"识别 {pages.Count} 页", pages.Count);
+            return FeatureResult.Success(inputPath, outputPath, $"识别 {pages.Count} 页（{_engine.DisplayName}）", pages.Count);
         }
         catch (Exception ex)
         {

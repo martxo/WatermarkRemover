@@ -21,8 +21,7 @@ public sealed class WinRtPdfPageRenderer : IPdfPageRenderer
 
     public async Task<IReadOnlyList<byte[]>> RenderPagesAsync(string pdfPath, int dpi)
     {
-        if (dpi is < 72 or > 600)
-            throw new ArgumentOutOfRangeException(nameof(dpi), "DPI must be between 72 and 600.");
+        ValidateDpi(dpi);
 
         StorageFile file = await StorageFile.GetFileFromPathAsync(pdfPath);
         PdfDocument document = await PdfDocument.LoadFromFileAsync(file);
@@ -35,6 +34,25 @@ public sealed class WinRtPdfPageRenderer : IPdfPageRenderer
         }
 
         return results;
+    }
+
+    public async Task<byte[]> RenderFirstPageAsync(string pdfPath, int dpi)
+    {
+        ValidateDpi(dpi);
+
+        StorageFile file = await StorageFile.GetFileFromPathAsync(pdfPath);
+        PdfDocument document = await PdfDocument.LoadFromFileAsync(file);
+        if (document.PageCount == 0)
+            throw new InvalidOperationException("文档没有可渲染的页面。");
+
+        using PdfPage page = document.GetPage(0);
+        return await RenderPageAsync(page, dpi);
+    }
+
+    private static void ValidateDpi(int dpi)
+    {
+        if (dpi is < 72 or > 600)
+            throw new ArgumentOutOfRangeException(nameof(dpi), "DPI must be between 72 and 600.");
     }
 
     private static async Task<byte[]> RenderPageAsync(PdfPage page, int dpi)
