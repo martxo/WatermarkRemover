@@ -13,6 +13,17 @@ public static class UpdateConfig
     /// <summary>Name of the release asset that contains the app executable.</summary>
     public const string AssetName = "WatermarkRemover.exe";
 
+    /// <summary>
+    /// Fallback download accelerators for networks where github.com is unreliable. Each entry
+    /// is a prefix prepended to the direct download URL. The GitHub API digest still guards
+    /// integrity — a mirror can withhold the file, never alter it.
+    /// </summary>
+    public static readonly string[] DownloadMirrors =
+    {
+        "https://ghfast.top/",
+        "https://ghproxy.net/",
+    };
+
     /// <summary>False until <see cref="Repository"/> is filled in with a real repo.</summary>
     public static bool IsConfigured => !string.IsNullOrWhiteSpace(Repository)
         && Repository != "YOUR-GITHUB-USERNAME/WatermarkRemover"

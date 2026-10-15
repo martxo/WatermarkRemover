@@ -30,10 +30,10 @@ public static class UpdateCoordinator
 
         if (!settings.CheckUpdatesOnStartup && silent) return;
 
-        UpdateInfo? info;
+        UpdateCheckResult result;
         try
         {
-            info = await Service.CheckForUpdateAsync();
+            result = await Service.CheckForUpdateAsync();
         }
         catch (Exception ex)
         {
@@ -44,14 +44,38 @@ public static class UpdateCoordinator
             return;
         }
 
-        if (info == null)
+        switch (result.Status)
         {
-            if (!silent)
-                MessageBox.Show(owner, $"当前已是最新版本（v{UpdateService.CurrentVersion}）。", "软件更新",
-                    MessageBoxButton.OK, MessageBoxImage.Information);
-            return;
+            case UpdateCheckStatus.UpdateAvailable:
+                break;
+
+            case UpdateCheckStatus.UpToDate:
+                AppLog.Info($"当前已是最新版本 v{UpdateService.CurrentVersion}");
+                if (!silent)
+                    MessageBox.Show(owner,
+                        $"当前已是最新版本（v{UpdateService.CurrentVersion}）。\n" +
+                        $"更新通道最新发布：v{result.ChannelLatestVersion}",
+                        "软件更新", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+
+            case UpdateCheckStatus.NoUpdateSource:
+                AppLog.Info($"更新源不可用：{result.Message}");
+                if (!silent)
+                    MessageBox.Show(owner,
+                        $"暂无可用的更新来源。\n\n{result.Message}",
+                        "软件更新", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+
+            default: // CheckFailed
+                AppLog.Info($"检查更新失败：{result.Message}");
+                if (!silent)
+                    MessageBox.Show(owner,
+                        $"暂时无法连接更新服务器，请检查网络后重试。\n\n{result.Message}",
+                        "软件更新", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
         }
 
+        UpdateInfo info = result.Update!;
         AppLog.Info($"发现新版本 v{info.Version}（当前 v{UpdateService.CurrentVersion}）");
 
         MessageBoxResult choice = MessageBox.Show(
