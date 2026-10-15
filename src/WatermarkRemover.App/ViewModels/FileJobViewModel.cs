@@ -81,7 +81,10 @@ public sealed class FileJobViewModel : ObservableObject
         private set
         {
             if (SetProperty(ref _state, value))
+            {
                 OnPropertyChanged(nameof(StateText));
+                OnPropertyChanged(nameof(ShowStatusChip));
+            }
         }
     }
 
@@ -94,6 +97,12 @@ public sealed class FileJobViewModel : ObservableObject
         JobState.Failed => "失败",
         _ => State.ToString(),
     };
+
+    /// <summary>
+    /// Queued/processing/failed carry real signal, so the status chip shows. Terminal states
+    /// (done / skipped) say nothing the user needs — the delete button takes that spot instead.
+    /// </summary>
+    public bool ShowStatusChip => State is JobState.Queued or JobState.Processing or JobState.Failed;
 
     public string Detail
     {

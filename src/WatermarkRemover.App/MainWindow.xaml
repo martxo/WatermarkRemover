@@ -129,6 +129,36 @@
             </Style.Triggers>
         </Style>
 
+        <!-- Compact per-row delete: quiet grey pill that turns red on hover — destructive affordance -->
+        <Style x:Key="RowDeleteButton" TargetType="Button">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Padding" Value="10,4"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Content" Value="删除"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}"
+                                CornerRadius="12"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="#FFFDECEC"/>
+                    <Setter Property="Foreground" Value="{StaticResource DangerBrush}"/>
+                </Trigger>
+                <Trigger Property="IsEnabled" Value="False">
+                    <Setter Property="Foreground" Value="#FFC4C9D4"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
         <!-- Sidebar bottom row (like a profile area): settings entry + version, separated by a line -->
         <Style x:Key="SidebarRowButton" TargetType="Button">
             <Setter Property="Background" Value="Transparent"/>
@@ -317,7 +347,7 @@
                 </ListBox>
 
                 <!-- Bottom section, pinned like a profile area: separator, settings row, version -->
-                <StackPanel Grid.Row="1">
+                <StackPanel Grid.Row="2">
                     <Border BorderBrush="{StaticResource BorderBrushLight}"
                             BorderThickness="0,1,0,0"
                             Padding="0,10,0,0"
@@ -641,8 +671,9 @@
                                     </StackPanel>
 
                                     <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                        <!-- status chip -->
-                                        <Border CornerRadius="20" Padding="12,5">
+                                        <!-- status chip: queued/processing/failed only; finished rows show the delete button -->
+                                        <Border CornerRadius="20" Padding="12,5" Margin="0,0,8,0"
+                                                Visibility="{Binding ShowStatusChip, Converter={StaticResource BoolToVis}}">
                                             <Border.Style>
                                                 <Style TargetType="Border">
                                                     <Setter Property="Background" Value="#FFF1F3F7"/>
@@ -678,6 +709,11 @@
                                                 </TextBlock.Style>
                                             </TextBlock>
                                         </Border>
+
+                                        <Button Style="{StaticResource RowDeleteButton}"
+                                                Command="{Binding DataContext.DeleteJobCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                CommandParameter="{Binding}"
+                                                ToolTip="删除这条记录，已生成的文件移入回收站（源文件保留）"/>
                                     </StackPanel>
                                 </Grid>
                             </Border>
