@@ -1,6 +1,6 @@
 using System.Collections.ObjectModel;
 using System.IO;
-using WatermarkRemover.Core.Processing;
+using WatermarkRemover.Core.Features;
 using WatermarkRemover.Core.Settings;
 
 namespace WatermarkRemover.App.ViewModels;
@@ -216,26 +216,26 @@ public sealed class FileJobViewModel : ObservableObject
         Detail = "正在分析并去除水印…";
     }
 
-    public void Apply(ProcessingResult result)
+    public void Apply(FeatureResult result)
     {
         ProcessedAt = DateTime.Now;
         switch (result.Status)
         {
-            case ProcessingStatus.Succeeded:
+            case FeatureStatus.Succeeded:
                 string outputPath = result.OutputPath ?? string.Empty;
                 State = JobState.Succeeded;
                 OutputPath = outputPath;
-                WatermarkCount = result.Marks.Count;
+                WatermarkCount = result.ItemCount;
                 DisplayName = Path.GetFileName(outputPath);
-                Detail = $"已去除 {result.Marks.Count} 处水印 → {outputPath}";
+                Detail = $"{result.Summary} → {outputPath}";
                 break;
 
-            case ProcessingStatus.NoWatermarkFound:
+            case FeatureStatus.NoChange:
                 State = JobState.Skipped;
-                Detail = "未检测到水印，已跳过";
+                Detail = $"{result.Summary}，已跳过";
                 break;
 
-            case ProcessingStatus.Failed:
+            case FeatureStatus.Failed:
                 State = JobState.Failed;
                 Detail = result.Error ?? "处理失败";
                 break;

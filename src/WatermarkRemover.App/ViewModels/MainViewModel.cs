@@ -3,6 +3,7 @@ using System.IO;
 using System.Windows;
 using WatermarkRemover.App.Logging;
 using WatermarkRemover.App.Settings;
+using WatermarkRemover.Core.Features;
 using WatermarkRemover.Core.Processing;
 using WatermarkRemover.Core.Settings;
 using WatermarkRemover.Core.Watermarks;
@@ -12,11 +13,14 @@ namespace WatermarkRemover.App.ViewModels;
 
 /// <summary>
 /// Root view model. Dropping files triggers processing immediately; results are pushed into the
-/// observable queue as each job finishes.
+/// observable queue as each job finishes. Files are dispatched to features through the
+/// <see cref="FeatureRegistry"/> — this class holds no feature logic of its own.
 /// </summary>
 public sealed class MainViewModel : ObservableObject
 {
-    private readonly PdfDocumentSource _source = new();
+    private readonly FeatureRegistry _registry = new(
+        new IFeature[] { new WatermarkFeature(new PdfDocumentSource(), new IWatermarkStrategy[] { new BottomRightBadgeStrategy() }) });
+
     private readonly object _sync = new();
     private bool _isBusy;
     private int _completedCount;
@@ -108,6 +112,9 @@ public sealed class MainViewModel : ObservableObject
         IsBusy = true;
         try
         {
+            // Snapshot once per batch: background threads read this copy, the settings window
+            // keeps editing the live object — the two can never interfere.
+            var context = FeatureContext.Capture(Settings);
             int maxConcurrency = Math.Clamp(Settings.MaxConcurrency, 1, 8);
             using var throttle = new SemaphoreSlim(maxConcurrency, maxConcurrency);
 
@@ -116,7 +123,7 @@ public sealed class MainViewModel : ObservableObject
                 await throttle.WaitAsync().ConfigureAwait(false);
                 try
                 {
-                    await ProcessOneAsync(job).ConfigureAwait(false);
+                    await ProcessOneAsync(job, context).ConfigureAwait(false);
                 }
                 finally
                 {
@@ -132,28 +139,30 @@ public sealed class MainViewModel : ObservableObject
         }
     }
 
-    private Task ProcessOneAsync(FileJobViewModel job)
+    private Task ProcessOneAsync(FileJobViewModel job, FeatureContext context)
     {
         return Task.Run(() =>
         {
             job.MarkProcessing();
             try
             {
-                var processor = new WatermarkProcessor(
-                    _source,
-                    new IWatermarkStrategy[] { new BottomRightBadgeStrategy() },
-                    Settings);
+                var feature = _registry.FindForFile(job.InputPath);
+                if (feature is null)
+                {
+                    job.Apply(FeatureResult.Fail(job.InputPath, "暂不支持该文件类型"));
+                    return;
+                }
 
-                ProcessingResult result = processor.Process(job.InputPath);
+                FeatureResult result = feature.Run(job.InputPath, context);
                 job.Apply(result);
                 LogResult(result);
             }
             catch (Exception ex)
             {
-                // The pipeline itself never throws for expected failures; this guards the queue
-                // against unexpected defects so one bad file cannot stall the whole batch.
+                // Features never throw for expected failures; this guards the queue against
+                // unexpected defects so one bad file cannot stall the whole batch.
                 AppLog.Error($"处理意外异常：{job.InputPath}", ex);
-                job.Apply(ProcessingResult.Failed(job.InputPath, $"意外错误：{ex.Message}"));
+                job.Apply(FeatureResult.Fail(job.InputPath, $"意外错误：{ex.Message}"));
             }
             finally
             {
@@ -182,13 +191,13 @@ public sealed class MainViewModel : ObservableObject
         else dispatcher.Invoke(Move);
     }
 
-    private static void LogResult(ProcessingResult result)
+    private static void LogResult(FeatureResult result)
     {
         string message = result.Status switch
         {
-            ProcessingStatus.Succeeded =>
-                $"处理完成：{result.InputPath} → {result.OutputPath}（去除 {result.Marks.Count} 处水印）",
-            ProcessingStatus.NoWatermarkFound => $"未检测到水印：{result.InputPath}",
+            FeatureStatus.Succeeded =>
+                $"处理完成：{result.InputPath} → {result.OutputPath}（{result.Summary}）",
+            FeatureStatus.NoChange => $"无需处理：{result.InputPath}（{result.Summary}）",
             _ => $"处理失败：{result.InputPath}（{result.Error}）",
         };
         AppLog.Info(message);

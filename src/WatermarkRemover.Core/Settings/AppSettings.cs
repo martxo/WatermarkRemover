@@ -35,4 +35,16 @@ public sealed class AppSettings
     /// the file name (clicking again removes it). Managed in the settings window.
     /// </summary>
     public List<string> QuickSuffixes { get; set; } = new() { "身份证", "户口本", "房产证", "征信", "执照" };
+
+    /// <summary>Deep copy: safe to hand to background work while the original keeps being edited.</summary>
+    public AppSettings Clone() => new()
+    {
+        OutputSuffix = OutputSuffix,
+        OutputMode = OutputMode,
+        OutputDirectory = OutputDirectory,
+        RemoveLinkedAnnotations = RemoveLinkedAnnotations,
+        MaxConcurrency = MaxConcurrency,
+        CheckUpdatesOnStartup = CheckUpdatesOnStartup,
+        QuickSuffixes = new List<string>(QuickSuffixes),
+    };
 }
