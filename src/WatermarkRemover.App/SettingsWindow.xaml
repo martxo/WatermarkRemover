@@ -129,7 +129,7 @@
 
             <!-- Quick suffixes -->
             <TextBlock Text="常用文件名后缀" Style="{StaticResource SectionLabel}" Margin="0,10,0,4"/>
-            <TextBlock Text="处理完成后，点击文件名右侧的标签可把后缀快速加到文件名末尾，再点一次取消"
+            <TextBlock Text="处理完成后，点击文件名右侧的标签可把后缀快速加到文件名末尾，再点一次取消。标签顺序与任务列表中一致，可用上移、下移调整。"
                        FontSize="11" Foreground="{StaticResource TextSecondaryBrush}"
                        TextWrapping="Wrap" Margin="0,0,0,6"/>
             <Border BorderBrush="{StaticResource BorderBrushLight}" BorderThickness="1"
@@ -140,18 +140,18 @@
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
                         <TextBox x:Name="NewSuffixBox" Grid.Column="0" Style="{StaticResource InputBox}"
                                  Padding="10,6" KeyDown="OnSuffixBoxKeyDown"/>
                         <Button Grid.Column="1" Content="添加" Style="{StaticResource SmallButton}"
                                 Margin="8,0,0,0" Click="OnAddSuffix"/>
-                        <Button Grid.Column="2" Content="改为输入内容" Style="{StaticResource SmallButton}"
-                                Margin="8,0,0,0" Click="OnUpdateSuffix"/>
-                        <Button Grid.Column="3" Content="删除" Style="{StaticResource SmallButton}"
-                                Margin="8,0,0,0" Click="OnDeleteSuffix"/>
                     </Grid>
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
+                        <Button Content="上移" Style="{StaticResource SmallButton}" Click="OnMoveSuffixUp"/>
+                        <Button Content="下移" Style="{StaticResource SmallButton}" Margin="8,0,0,0" Click="OnMoveSuffixDown"/>
+                        <Button Content="改为输入内容" Style="{StaticResource SmallButton}" Margin="16,0,0,0" Click="OnUpdateSuffix"/>
+                        <Button Content="删除" Style="{StaticResource SmallButton}" Margin="8,0,0,0" Click="OnDeleteSuffix"/>
+                    </StackPanel>
                 </StackPanel>
             </Border>
 

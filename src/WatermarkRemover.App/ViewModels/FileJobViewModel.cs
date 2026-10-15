@@ -18,6 +18,9 @@ public enum JobState
 /// <summary>One input file in the processing queue.</summary>
 public sealed class FileJobViewModel : ObservableObject
 {
+    /// <summary>How many quick-suffix chips are shown before the expand toggle appears.</summary>
+    private const int MaxVisibleChips = 4;
+
     private JobState _state = JobState.Queued;
     private string _detail = "等待处理";
     private string? _outputPath;
@@ -27,6 +30,9 @@ public sealed class FileJobViewModel : ObservableObject
     private bool _isEditing;
     private string _editText = string.Empty;
     private ObservableCollection<SuffixChipViewModel> _suffixChips = new();
+    private ObservableCollection<object> _visibleChips = new();
+    private ChipToggleViewModel _chipToggle = new();
+    private bool _isChipsExpanded;
 
     public FileJobViewModel(string inputPath, IReadOnlyList<string> quickSuffixes)
     {
@@ -39,6 +45,7 @@ public sealed class FileJobViewModel : ObservableObject
         CommitEditCommand = new RelayCommand(CommitEdit, () => IsEditing);
         CancelEditCommand = new RelayCommand(CancelEdit, () => IsEditing);
         ToggleSuffixCommand = new RelayCommand(p => ToggleSuffix(p as SuffixChipViewModel), p => IsRenamable && !IsEditing);
+        ToggleChipsExpandedCommand = new RelayCommand(ToggleChipsExpanded, () => IsRenamable);
     }
 
     /// <summary>Raised when the user commits an edited name. The coordinator performs the move.</summary>
@@ -126,6 +133,25 @@ public sealed class FileJobViewModel : ObservableObject
 
     public ObservableCollection<SuffixChipViewModel> SuffixChips => _suffixChips;
 
+    /// <summary>
+    /// The chip row actually displayed: the first <see cref="MaxVisibleChips"/> suffixes when
+    /// collapsed (plus an expand toggle), all suffixes when expanded (plus a collapse toggle).
+    /// </summary>
+    public ObservableCollection<object> VisibleChips => _visibleChips;
+
+    public bool IsChipsExpanded
+    {
+        get => _isChipsExpanded;
+        private set
+        {
+            if (SetProperty(ref _isChipsExpanded, value))
+            {
+                _chipToggle.IsExpanded = value;
+                RebuildVisibleChips();
+            }
+        }
+    }
+
     /// <summary>Quick suffixes are only useful once the output file exists.</summary>
     public bool ChipsVisible => IsRenamable && _suffixChips.Count > 0;
 
@@ -139,6 +165,8 @@ public sealed class FileJobViewModel : ObservableObject
     public RelayCommand CancelEditCommand { get; }
 
     public RelayCommand ToggleSuffixCommand { get; }
+
+    public RelayCommand ToggleChipsExpandedCommand { get; }
 
     public int WatermarkCount
     {
@@ -208,8 +236,31 @@ public sealed class FileJobViewModel : ObservableObject
             _suffixChips.Add(new SuffixChipViewModel(suffix.Trim()));
 
         RefreshChipStates();
+        RebuildVisibleChips();
         OnPropertyChanged(nameof(ChipsVisible));
     }
+
+    private void RebuildVisibleChips()
+    {
+        _visibleChips.Clear();
+
+        int overflow = _suffixChips.Count - MaxVisibleChips;
+        if (overflow <= 0 || IsChipsExpanded)
+        {
+            foreach (var chip in _suffixChips)
+                _visibleChips.Add(chip);
+        }
+        else
+        {
+            for (int i = 0; i < MaxVisibleChips; i++)
+                _visibleChips.Add(_suffixChips[i]);
+        }
+
+        if (overflow > 0)
+            _visibleChips.Add(_chipToggle);
+    }
+
+    private void ToggleChipsExpanded() => IsChipsExpanded = !IsChipsExpanded;
 
     private void RefreshChipStates()
     {

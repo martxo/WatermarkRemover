@@ -108,6 +108,23 @@ public partial class SettingsWindow : Window
             SuffixList.SelectedIndex = Math.Min(index, _quickSuffixes.Count - 1);
     }
 
+    private void OnMoveSuffixUp(object sender, RoutedEventArgs e) => MoveSelectedSuffix(-1);
+
+    private void OnMoveSuffixDown(object sender, RoutedEventArgs e) => MoveSelectedSuffix(1);
+
+    /// <summary>Moves the selected suffix by the given offset and keeps it selected.</summary>
+    private void MoveSelectedSuffix(int offset)
+    {
+        int index = SuffixList.SelectedIndex;
+        int target = index + offset;
+        if (index < 0 || target < 0 || target >= _quickSuffixes.Count)
+            return;
+
+        (_quickSuffixes[index], _quickSuffixes[target]) = (_quickSuffixes[target], _quickSuffixes[index]);
+        RefreshSuffixList();
+        SuffixList.SelectedIndex = target;
+    }
+
     private void OnSuffixBoxKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
     {
         if (e.Key != System.Windows.Input.Key.Enter) return;
