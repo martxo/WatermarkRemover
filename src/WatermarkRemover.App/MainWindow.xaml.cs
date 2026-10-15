@@ -97,4 +97,28 @@ public partial class MainWindow : Window
         // Settings are edited in place on the shared object; persist whatever changed.
         _viewModel.SaveSettingsCommand.Execute(null);
     }
+
+    /// <summary>Losing focus commits the inline rename (matches the Enter key).</summary>
+    private void OnRenameBoxLostFocus(object sender, RoutedEventArgs e)
+    {
+        if (sender is System.Windows.Controls.TextBox { DataContext: FileJobViewModel job })
+            job.CommitEditCommand.Execute(null);
+    }
+
+    /// <summary>Enter commits the rename; Escape cancels it.</summary>
+    private void OnRenameBoxKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (sender is not System.Windows.Controls.TextBox { DataContext: FileJobViewModel job }) return;
+
+        if (e.Key == System.Windows.Input.Key.Enter)
+        {
+            job.CommitEditCommand.Execute(null);
+            e.Handled = true;
+        }
+        else if (e.Key == System.Windows.Input.Key.Escape)
+        {
+            job.CancelEditCommand.Execute(null);
+            e.Handled = true;
+        }
+    }
 }

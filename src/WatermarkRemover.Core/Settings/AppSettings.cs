@@ -29,4 +29,10 @@ public sealed class AppSettings
 
     /// <summary>Check the release channel for a newer version when the app starts.</summary>
     public bool CheckUpdatesOnStartup { get; set; } = true;
+
+    /// <summary>
+    /// Quick suffix chips shown next to each processed file. Clicking one appends the suffix to
+    /// the file name (clicking again removes it). Managed in the settings window.
+    /// </summary>
+    public List<string> QuickSuffixes { get; set; } = new() { "身份证", "户口本", "房产证", "征信", "执照" };
 }

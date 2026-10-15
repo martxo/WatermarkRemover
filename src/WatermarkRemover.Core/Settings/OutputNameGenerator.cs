@@ -24,16 +24,29 @@ public static class OutputNameGenerator
         string extension = Path.GetExtension(inputPath);
         string suffix = SanitizeSuffix(settings.OutputSuffix);
 
-        string candidate = Path.Combine(directory, stem + suffix + extension);
+        return FindAvailablePath(directory, stem + suffix + extension);
+    }
+
+    /// <summary>
+    /// Returns a full path for <paramref name="fileName"/> inside <paramref name="directory"/>,
+    /// appending a counter (<c>name (2).ext</c>) when the file already exists so nothing is ever
+    /// overwritten. Shared by output naming and user-driven renames.
+    /// </summary>
+    public static string FindAvailablePath(string directory, string fileName)
+    {
+        string candidate = Path.Combine(directory, fileName);
         if (!File.Exists(candidate)) return candidate;
+
+        string stem = Path.GetFileNameWithoutExtension(fileName);
+        string extension = Path.GetExtension(fileName);
 
         for (int n = 2; n < 1000; n++)
         {
-            candidate = Path.Combine(directory, $"{stem}{suffix} ({n}){extension}");
+            candidate = Path.Combine(directory, $"{stem} ({n}){extension}");
             if (!File.Exists(candidate)) return candidate;
         }
 
-        return Path.Combine(directory, $"{stem}{suffix} ({Guid.NewGuid():N}){extension}");
+        return Path.Combine(directory, $"{stem} ({Guid.NewGuid():N}){extension}");
     }
 
     /// <summary>Strips characters that are invalid in file names.</summary>

@@ -86,7 +86,13 @@ public sealed class MainViewModel : ObservableObject
 
         AppLog.Info($"收到 {files.Length} 个待处理文件");
 
-        var newJobs = files.Select(f => new FileJobViewModel(f)).ToList();
+        var newJobs = files.Select(f =>
+        {
+            var job = new FileJobViewModel(f, Settings.QuickSuffixes);
+            job.RenameRequested += OnJobRenameRequested;
+            job.SuffixToggleRequested += OnJobSuffixToggleRequested;
+            return job;
+        }).ToList();
         lock (_sync)
         {
             foreach (var job in newJobs) Jobs.Add(job);
@@ -199,9 +205,54 @@ public sealed class MainViewModel : ObservableObject
     private void SaveSettings()
     {
         if (SettingsService.Save(Settings))
+        {
             AppLog.Info("设置已保存");
+            // Quick suffixes may have changed: refresh the chips of every existing job.
+            foreach (var job in Jobs)
+                job.RefreshSuffixChips(Settings.QuickSuffixes);
+        }
         else
             AppLog.Error("设置保存失败（目录不可写？）");
+    }
+
+    private void OnJobRenameRequested(object? sender, string desiredName)
+    {
+        if (sender is FileJobViewModel job) RenameJob(job, desiredName);
+    }
+
+    private void OnJobSuffixToggleRequested(object? sender, string suffix)
+    {
+        if (sender is not FileJobViewModel job) return;
+        RenameJob(job, OutputNameEditor.WithSuffix(job.DisplayName, suffix));
+    }
+
+    /// <summary>
+    /// Renames the generated output file on disk. Name rules come from <see cref="OutputNameEditor"/>;
+    /// a name collision is resolved by counting up, never by overwriting.
+    /// </summary>
+    private void RenameJob(FileJobViewModel job, string desiredName)
+    {
+        if (job.OutputPath is null) return;
+
+        string currentName = Path.GetFileName(job.OutputPath);
+        string? newName = OutputNameEditor.BuildRenamedName(currentName, desiredName);
+        if (newName is null || string.Equals(newName, currentName, StringComparison.OrdinalIgnoreCase))
+            return;
+
+        string directory = Path.GetDirectoryName(job.OutputPath)!;
+        try
+        {
+            string target = OutputNameGenerator.FindAvailablePath(directory, newName);
+            File.Move(job.OutputPath, target);
+
+            AppLog.Info($"重命名输出文件：{currentName} → {Path.GetFileName(target)}");
+            job.UpdateRenamed(target);
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error($"重命名失败：{job.OutputPath} → {newName}", ex);
+            MessageBox.Show($"重命名失败：{ex.Message}", "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
     }
 
     private static void OpenOutput(string? path)

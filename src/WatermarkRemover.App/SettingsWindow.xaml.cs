@@ -8,6 +8,7 @@ namespace WatermarkRemover.App;
 public partial class SettingsWindow : Window
 {
     private readonly AppSettings _settings;
+    private List<string> _quickSuffixes;
 
     public SettingsWindow(AppSettings settings)
     {
@@ -20,6 +21,12 @@ public partial class SettingsWindow : Window
         CheckUpdatesBox.IsChecked = settings.CheckUpdatesOnStartup;
         VersionText.Text = $"当前版本：v{UpdateService.CurrentVersion}";
 
+        _quickSuffixes = settings.QuickSuffixes
+            .Select(s => s.Trim())
+            .Where(s => s.Length > 0)
+            .ToList();
+        RefreshSuffixList();
+
         if (settings.OutputMode == OutputMode.CustomDirectory && !string.IsNullOrWhiteSpace(settings.OutputDirectory))
         {
             CustomDirRadio.IsChecked = true;
@@ -31,6 +38,82 @@ public partial class SettingsWindow : Window
         }
 
         UpdateSuffixPreview();
+    }
+
+    private void RefreshSuffixList()
+    {
+        SuffixList.ItemsSource = null;
+        SuffixList.ItemsSource = _quickSuffixes;
+    }
+
+    private void OnAddSuffix(object sender, RoutedEventArgs e)
+    {
+        string token = OutputNameEditor.SanitizeSuffixToken(NewSuffixBox.Text);
+        if (token.Length == 0)
+        {
+            MessageBox.Show("请输入后缀内容。", "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        if (_quickSuffixes.Contains(token, StringComparer.OrdinalIgnoreCase))
+        {
+            MessageBox.Show("该后缀已存在。", "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        _quickSuffixes.Add(token);
+        RefreshSuffixList();
+        SuffixList.SelectedIndex = _quickSuffixes.Count - 1;
+        NewSuffixBox.Text = string.Empty;
+        NewSuffixBox.Focus();
+    }
+
+    private void OnUpdateSuffix(object sender, RoutedEventArgs e)
+    {
+        int index = SuffixList.SelectedIndex;
+        if (index < 0)
+        {
+            MessageBox.Show("请先在列表中选中要修改的后缀。", "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        string token = OutputNameEditor.SanitizeSuffixToken(NewSuffixBox.Text);
+        if (token.Length == 0)
+        {
+            MessageBox.Show("请输入新的后缀内容。", "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        if (_quickSuffixes.Where((_, i) => i != index).Contains(token, StringComparer.OrdinalIgnoreCase))
+        {
+            MessageBox.Show("该后缀已存在。", "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        _quickSuffixes[index] = token;
+        RefreshSuffixList();
+        SuffixList.SelectedIndex = index;
+    }
+
+    private void OnDeleteSuffix(object sender, RoutedEventArgs e)
+    {
+        int index = SuffixList.SelectedIndex;
+        if (index < 0)
+        {
+            MessageBox.Show("请先在列表中选中要删除的后缀。", "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        _quickSuffixes.RemoveAt(index);
+        RefreshSuffixList();
+        if (_quickSuffixes.Count > 0)
+            SuffixList.SelectedIndex = Math.Min(index, _quickSuffixes.Count - 1);
+    }
+
+    private void OnSuffixBoxKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key != System.Windows.Input.Key.Enter) return;
+        e.Handled = true;
+        if (SuffixList.SelectedIndex >= 0) OnUpdateSuffix(sender, e);
+        else OnAddSuffix(sender, e);
     }
 
     private void UpdateSuffixPreview()
@@ -115,6 +198,7 @@ public partial class SettingsWindow : Window
         _settings.RemoveLinkedAnnotations = RemoveLinksBox.IsChecked == true;
         _settings.MaxConcurrency = ConcurrencyBox.SelectedIndex + 1;
         _settings.CheckUpdatesOnStartup = CheckUpdatesBox.IsChecked == true;
+        _settings.QuickSuffixes = _quickSuffixes.ToList();
 
         DialogResult = true;
         Close();
