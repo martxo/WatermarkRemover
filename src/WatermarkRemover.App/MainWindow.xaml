@@ -200,28 +200,34 @@
                                                 <ColumnDefinition Width="Auto"/>
                                             </Grid.ColumnDefinitions>
 
-                                            <!-- file name: click to edit inline, click away/Enter saves, Esc cancels -->
+                                            <!-- file name: click to edit inline, click away/Enter saves, Esc cancels.
+                                                 Hover shows a subtle pill background — the standard "this is editable" affordance. -->
                                             <Grid Grid.Column="0">
-                                                <TextBlock Text="{Binding DisplayName}"
-                                                           FontSize="14" FontWeight="SemiBold"
-                                                           Foreground="{StaticResource TextPrimaryBrush}"
-                                                           TextTrimming="CharacterEllipsis"
-                                                           Cursor="Hand"
-                                                           ToolTip="{Binding HeaderToolTip}">
-                                                    <TextBlock.Style>
-                                                        <Style TargetType="TextBlock">
+                                                <Border CornerRadius="6" Padding="4,2" Background="Transparent"
+                                                        ToolTip="{Binding HeaderToolTip}">
+                                                    <Border.Style>
+                                                        <Style TargetType="Border">
                                                             <Setter Property="Visibility" Value="Visible"/>
                                                             <Style.Triggers>
                                                                 <DataTrigger Binding="{Binding IsEditing}" Value="True">
                                                                     <Setter Property="Visibility" Value="Collapsed"/>
                                                                 </DataTrigger>
+                                                                <Trigger Property="IsMouseOver" Value="True">
+                                                                    <Setter Property="Background" Value="#FFF1F3F7"/>
+                                                                </Trigger>
                                                             </Style.Triggers>
                                                         </Style>
-                                                    </TextBlock.Style>
-                                                    <TextBlock.InputBindings>
-                                                        <MouseBinding Gesture="LeftClick" Command="{Binding BeginEditCommand}"/>
-                                                    </TextBlock.InputBindings>
-                                                </TextBlock>
+                                                    </Border.Style>
+                                                    <TextBlock Text="{Binding DisplayName}"
+                                                               FontSize="14" FontWeight="SemiBold"
+                                                               Foreground="{StaticResource TextPrimaryBrush}"
+                                                               TextTrimming="CharacterEllipsis"
+                                                               Cursor="Hand">
+                                                        <TextBlock.InputBindings>
+                                                            <MouseBinding Gesture="LeftClick" Command="{Binding BeginEditCommand}"/>
+                                                        </TextBlock.InputBindings>
+                                                    </TextBlock>
+                                                </Border>
 
                                                 <TextBox Text="{Binding EditText, UpdateSourceTrigger=PropertyChanged}"
                                                          FontSize="14" FontWeight="SemiBold"
