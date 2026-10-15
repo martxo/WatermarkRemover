@@ -99,19 +99,29 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Clicking outside the active rename box commits it. WPF only moves keyboard focus to
-    /// focusable elements, so TextBox.LostFocus alone never fires when the user clicks empty
-    /// space; committing on every outside click makes "click away to save" work everywhere.
+    /// Clicking anywhere outside the app (another window, the desktop) deactivates this window —
+    /// no WPF mouse event reaches us, so Deactivated is the only reliable "clicked away" signal.
+    /// </summary>
+    private void OnWindowDeactivated(object? sender, EventArgs e) => CommitActiveRenames();
+
+    /// <summary>
+    /// Clicking outside the rename box but inside the window commits it. WPF only moves keyboard
+    /// focus to focusable elements, so TextBox.LostFocus alone never fires when the user clicks
+    /// empty space.
     /// </summary>
     private void OnWindowPreviewMouseDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
     {
-        var editingJobs = _viewModel.Jobs.Where(j => j.IsEditing).ToList();
-        if (editingJobs.Count == 0) return;
+        if (!_viewModel.Jobs.Any(j => j.IsEditing)) return;
 
         // A click inside the edit box (text area, selection, caret) must not commit.
         if (IsWithinRenameBox(e.OriginalSource as DependencyObject)) return;
 
-        foreach (var job in editingJobs)
+        CommitActiveRenames();
+    }
+
+    private void CommitActiveRenames()
+    {
+        foreach (var job in _viewModel.Jobs.Where(j => j.IsEditing).ToList())
             job.CommitEditCommand.Execute(null);
     }
 

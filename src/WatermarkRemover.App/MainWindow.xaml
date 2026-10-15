@@ -9,6 +9,7 @@
         Background="#FFF6F7F9"
         AllowDrop="True"
         PreviewMouseDown="OnWindowPreviewMouseDown"
+        Deactivated="OnWindowDeactivated"
         Drop="OnDrop"
         DragOver="OnDragOver">
 
@@ -191,101 +192,112 @@
                                     </Grid.ColumnDefinitions>
 
                                     <StackPanel Grid.Column="0">
-                                        <!-- file name: click to edit inline, blur/Enter saves, Esc cancels -->
+                                        <!-- name and quick-suffix chips share one row -->
                                         <Grid>
-                                            <TextBlock Text="{Binding DisplayName}"
-                                                       FontSize="14" FontWeight="SemiBold"
-                                                       Foreground="{StaticResource TextPrimaryBrush}"
-                                                       TextTrimming="CharacterEllipsis"
-                                                       Cursor="Hand"
-                                                       ToolTip="{Binding HeaderToolTip}">
-                                                <TextBlock.Style>
-                                                    <Style TargetType="TextBlock">
-                                                        <Setter Property="Visibility" Value="Visible"/>
-                                                        <Style.Triggers>
-                                                            <DataTrigger Binding="{Binding IsEditing}" Value="True">
-                                                                <Setter Property="Visibility" Value="Collapsed"/>
-                                                            </DataTrigger>
-                                                        </Style.Triggers>
-                                                    </Style>
-                                                </TextBlock.Style>
-                                                <TextBlock.InputBindings>
-                                                    <MouseBinding Gesture="LeftClick" Command="{Binding BeginEditCommand}"/>
-                                                </TextBlock.InputBindings>
-                                            </TextBlock>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
 
-                                            <TextBox Text="{Binding EditText, UpdateSourceTrigger=PropertyChanged}"
-                                                     FontSize="14" FontWeight="SemiBold"
-                                                     Padding="6,2"
-                                                     VerticalContentAlignment="Center"
-                                                     LostFocus="OnRenameBoxLostFocus"
-                                                     KeyDown="OnRenameBoxKeyDown"
-                                                     Visibility="{Binding IsEditing, Converter={StaticResource BoolToVis}}"
-                                                     behaviors:FocusWhenVisible.Enabled="True">
-                                                <TextBox.Style>
-                                                    <Style TargetType="TextBox">
-                                                        <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}"/>
-                                                        <Setter Property="BorderThickness" Value="1"/>
-                                                        <Setter Property="Background" Value="White"/>
-                                                        <Style.Triggers>
-                                                            <DataTrigger Binding="{Binding IsRenamable}" Value="False">
-                                                                <Setter Property="IsEnabled" Value="False"/>
-                                                            </DataTrigger>
-                                                        </Style.Triggers>
-                                                    </Style>
-                                                </TextBox.Style>
-                                            </TextBox>
+                                            <!-- file name: click to edit inline, click away/Enter saves, Esc cancels -->
+                                            <Grid Grid.Column="0">
+                                                <TextBlock Text="{Binding DisplayName}"
+                                                           FontSize="14" FontWeight="SemiBold"
+                                                           Foreground="{StaticResource TextPrimaryBrush}"
+                                                           TextTrimming="CharacterEllipsis"
+                                                           Cursor="Hand"
+                                                           ToolTip="{Binding HeaderToolTip}">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock">
+                                                            <Setter Property="Visibility" Value="Visible"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding IsEditing}" Value="True">
+                                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                    <TextBlock.InputBindings>
+                                                        <MouseBinding Gesture="LeftClick" Command="{Binding BeginEditCommand}"/>
+                                                    </TextBlock.InputBindings>
+                                                </TextBlock>
+
+                                                <TextBox Text="{Binding EditText, UpdateSourceTrigger=PropertyChanged}"
+                                                         FontSize="14" FontWeight="SemiBold"
+                                                         Padding="6,2"
+                                                         VerticalContentAlignment="Center"
+                                                         LostFocus="OnRenameBoxLostFocus"
+                                                         KeyDown="OnRenameBoxKeyDown"
+                                                         Visibility="{Binding IsEditing, Converter={StaticResource BoolToVis}}"
+                                                         behaviors:FocusWhenVisible.Enabled="True">
+                                                    <TextBox.Style>
+                                                        <Style TargetType="TextBox">
+                                                            <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}"/>
+                                                            <Setter Property="BorderThickness" Value="1"/>
+                                                            <Setter Property="Background" Value="White"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding IsRenamable}" Value="False">
+                                                                    <Setter Property="IsEnabled" Value="False"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBox.Style>
+                                                </TextBox>
+                                            </Grid>
+
+                                            <!-- quick suffix chips, right after the file name -->
+                                            <ItemsControl Grid.Column="1"
+                                                          ItemsSource="{Binding SuffixChips}"
+                                                          VerticalAlignment="Center"
+                                                          Margin="8,0,0,0"
+                                                          Focusable="False"
+                                                          Visibility="{Binding ChipsVisible, Converter={StaticResource BoolToVis}}">
+                                                <ItemsControl.ItemsPanel>
+                                                    <ItemsPanelTemplate>
+                                                        <StackPanel Orientation="Horizontal"/>
+                                                    </ItemsPanelTemplate>
+                                                </ItemsControl.ItemsPanel>
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <Button Content="{Binding Label}"
+                                                                Command="{Binding DataContext.ToggleSuffixCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                                CommandParameter="{Binding}"
+                                                                Cursor="Hand"
+                                                                Margin="4,0,0,0"
+                                                                ToolTip="点击把该后缀加到文件名末尾；再次点击取消">
+                                                            <Button.Style>
+                                                                <Style TargetType="Button">
+                                                                    <Setter Property="Background" Value="#FFF1F3F7"/>
+                                                                    <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}"/>
+                                                                    <Setter Property="FontSize" Value="12"/>
+                                                                    <Setter Property="Padding" Value="12,4"/>
+                                                                    <Setter Property="Template">
+                                                                        <Setter.Value>
+                                                                            <ControlTemplate TargetType="Button">
+                                                                                <Border Background="{TemplateBinding Background}"
+                                                                                        CornerRadius="12"
+                                                                                        Padding="{TemplateBinding Padding}">
+                                                                                    <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                                                </Border>
+                                                                            </ControlTemplate>
+                                                                        </Setter.Value>
+                                                                    </Setter>
+                                                                    <Style.Triggers>
+                                                                        <Trigger Property="IsMouseOver" Value="True">
+                                                                            <Setter Property="Opacity" Value="0.8"/>
+                                                                        </Trigger>
+                                                                        <DataTrigger Binding="{Binding IsApplied}" Value="True">
+                                                                            <Setter Property="Background" Value="{StaticResource AccentBrush}"/>
+                                                                            <Setter Property="Foreground" Value="White"/>
+                                                                        </DataTrigger>
+                                                                    </Style.Triggers>
+                                                                </Style>
+                                                            </Button.Style>
+                                                        </Button>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
                                         </Grid>
-
-                                        <!-- quick suffix chips -->
-                                        <ItemsControl ItemsSource="{Binding SuffixChips}"
-                                                      Margin="0,6,0,0"
-                                                      Focusable="False"
-                                                      Visibility="{Binding ChipsVisible, Converter={StaticResource BoolToVis}}">
-                                            <ItemsControl.ItemsPanel>
-                                                <ItemsPanelTemplate>
-                                                    <StackPanel Orientation="Horizontal"/>
-                                                </ItemsPanelTemplate>
-                                            </ItemsControl.ItemsPanel>
-                                            <ItemsControl.ItemTemplate>
-                                                <DataTemplate>
-                                                    <Button Command="{Binding DataContext.ToggleSuffixCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
-                                                            CommandParameter="{Binding}"
-                                                            Cursor="Hand"
-                                                            Margin="0,0,6,0"
-                                                            ToolTip="点击把该后缀加到文件名末尾；再次点击取消">
-                                                        <Button.Style>
-                                                            <Style TargetType="Button">
-                                                                <Setter Property="Background" Value="#FFF1F3F7"/>
-                                                                <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}"/>
-                                                                <Setter Property="FontSize" Value="11"/>
-                                                                <Setter Property="Padding" Value="10,3"/>
-                                                                <Setter Property="Template">
-                                                                    <Setter.Value>
-                                                                        <ControlTemplate TargetType="Button">
-                                                                            <Border Background="{TemplateBinding Background}"
-                                                                                    CornerRadius="12"
-                                                                                    Padding="{TemplateBinding Padding}">
-                                                                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                                                            </Border>
-                                                                        </ControlTemplate>
-                                                                    </Setter.Value>
-                                                                </Setter>
-                                                                <Style.Triggers>
-                                                                    <Trigger Property="IsMouseOver" Value="True">
-                                                                        <Setter Property="Opacity" Value="0.8"/>
-                                                                    </Trigger>
-                                                                    <DataTrigger Binding="{Binding IsApplied}" Value="True">
-                                                                        <Setter Property="Background" Value="{StaticResource AccentBrush}"/>
-                                                                        <Setter Property="Foreground" Value="White"/>
-                                                                    </DataTrigger>
-                                                                </Style.Triggers>
-                                                            </Style>
-                                                        </Button.Style>
-                                                    </Button>
-                                                </DataTemplate>
-                                            </ItemsControl.ItemTemplate>
-                                        </ItemsControl>
 
                                         <TextBlock Text="{Binding Detail}"
                                                    FontSize="12"

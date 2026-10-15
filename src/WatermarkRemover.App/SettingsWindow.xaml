@@ -76,7 +76,8 @@
         <TextBlock Grid.Row="0" Text="设置" FontSize="18" FontWeight="Bold"
                    Foreground="{StaticResource TextPrimaryBrush}" Margin="0,0,0,18"/>
 
-        <StackPanel Grid.Row="1">
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Focusable="False">
+        <StackPanel>
 
             <!-- Output suffix -->
             <TextBlock Text="生成文件名后缀" Style="{StaticResource SectionLabel}"/>
@@ -128,7 +129,7 @@
 
             <!-- Quick suffixes -->
             <TextBlock Text="常用文件名后缀" Style="{StaticResource SectionLabel}" Margin="0,10,0,4"/>
-            <TextBlock Text="处理完成后，点击文件名下方的标签可把后缀快速加到文件名末尾，再点一次取消"
+            <TextBlock Text="处理完成后，点击文件名右侧的标签可把后缀快速加到文件名末尾，再点一次取消"
                        FontSize="11" Foreground="{StaticResource TextSecondaryBrush}"
                        TextWrapping="Wrap" Margin="0,0,0,6"/>
             <Border BorderBrush="{StaticResource BorderBrushLight}" BorderThickness="1"
@@ -198,6 +199,7 @@
                 </Button>
             </Grid>
         </StackPanel>
+        </ScrollViewer>
 
         <!-- Actions -->
         <Grid Grid.Row="2" Margin="0,22,0,0">
