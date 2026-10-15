@@ -7,8 +7,11 @@ logs/
 # Local tools (portable git/gh)
 .tools/
 
-# User documents and local data — never push these
-*.pdf
+# User documents and local data — never push these.
+# NOTE: "/*.pdf" only matches PDF files at the repo root; a bare "*.pdf" would
+# also ignore the src/WatermarkRemover.Pdf project folder (case-insensitive on
+# Windows) and break CI with MSB3202.
+/*.pdf
 WatermarkRemover.settings.json
 *.user
 .vs/
