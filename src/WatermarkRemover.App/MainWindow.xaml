@@ -203,17 +203,20 @@
                                             <!-- file name: click to edit inline, click away/Enter saves, Esc cancels.
                                                  Hover shows a subtle pill background — the standard "this is editable" affordance. -->
                                             <Grid Grid.Column="0">
-                                                <Border CornerRadius="6" Padding="4,2" Background="Transparent"
+                                                <Border CornerRadius="6" Padding="4,2"
                                                         ToolTip="{Binding HeaderToolTip}">
                                                     <Border.Style>
                                                         <Style TargetType="Border">
+                                                            <!-- Background must live in the Style: a local value on the element
+                                                                 would outrank the hover trigger and the effect would never show. -->
+                                                            <Setter Property="Background" Value="Transparent"/>
                                                             <Setter Property="Visibility" Value="Visible"/>
                                                             <Style.Triggers>
                                                                 <DataTrigger Binding="{Binding IsEditing}" Value="True">
                                                                     <Setter Property="Visibility" Value="Collapsed"/>
                                                                 </DataTrigger>
                                                                 <Trigger Property="IsMouseOver" Value="True">
-                                                                    <Setter Property="Background" Value="#FFF1F3F7"/>
+                                                                    <Setter Property="Background" Value="#FFEDF0F6"/>
                                                                 </Trigger>
                                                             </Style.Triggers>
                                                         </Style>
