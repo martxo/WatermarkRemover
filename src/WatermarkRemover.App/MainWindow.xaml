@@ -12,7 +12,16 @@
         PreviewMouseDown="OnWindowPreviewMouseDown"
         Deactivated="OnWindowDeactivated"
         Drop="OnDrop"
-        DragOver="OnDragOver">
+        DragOver="OnDragOver"
+        StateChanged="OnWindowStateChanged">
+    <WindowChrome.WindowChrome>
+        <!-- Flat, integrated title bar: the top 44px belongs to our layout (brand on the left),
+             while the system caption buttons stay for snap/min/max/close. -->
+        <WindowChrome CaptionHeight="44"
+                      ResizeBorderThickness="6"
+                      GlassFrameThickness="0"
+                      CornerRadius="0"/>
+    </WindowChrome.WindowChrome>
 
     <Window.Resources>
         <!-- Palette -->
@@ -84,6 +93,68 @@
             </Setter>
         </Style>
 
+        <!-- Flat caption buttons drawn by us (the system ones are gone with GlassFrameThickness=0) -->
+        <Style x:Key="CaptionButton" TargetType="Button">
+            <Setter Property="Width" Value="46"/>
+            <Setter Property="Height" Value="44"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
+            <Setter Property="FontFamily" Value="Segoe MDL2 Assets"/>
+            <Setter Property="FontSize" Value="10"/>
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="WindowChrome.IsHitTestVisibleInChrome" Value="True"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="#FFF1F3F7"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <Style x:Key="CloseCaptionButton" TargetType="Button" BasedOn="{StaticResource CaptionButton}">
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="#FFE81123"/>
+                    <Setter Property="Foreground" Value="White"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- Sidebar bottom row (like a profile area): settings entry + version, separated by a line -->
+        <Style x:Key="SidebarRowButton" TargetType="Button">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="Padding" Value="12,9"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="HorizontalContentAlignment" Value="Left"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}"
+                                CornerRadius="8"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Background" Value="#FFF1F3F7"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <!-- Shared chip template: used by the inline row and by the expanded wrap row below the name -->
         <DataTemplate DataType="{x:Type vm:SuffixChipViewModel}">
             <Button Content="{Binding Label}"
@@ -125,34 +196,61 @@
     </Window.Resources>
 
     <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="44"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
         <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="208"/>
+            <ColumnDefinition x:Name="SidebarColumn" Width="208"/>
             <ColumnDefinition Width="*"/>
         </Grid.ColumnDefinitions>
 
-        <!-- Sidebar: assistant identity, feature navigation, settings & version -->
-        <Border Grid.Column="0"
+        <!-- Flat title bar: sidebar toggle + brand on the left, caption buttons on the right -->
+        <Border Grid.Row="0" Grid.ColumnSpan="2"
+                Background="White"
+                BorderBrush="{StaticResource BorderBrushLight}"
+                BorderThickness="0,0,0,1">
+            <Grid>
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="6,0,0,0">
+                    <Button x:Name="SidebarToggleButton"
+                            Content="&#xE700;"
+                            Style="{StaticResource CaptionButton}"
+                            Width="40"
+                            Click="OnToggleSidebarClick"
+                            ToolTip="折叠 / 展开侧边栏"/>
+                    <Border Width="24" Height="24" CornerRadius="7" Background="{StaticResource AccentSoftBrush}" Margin="6,0,0,0">
+                        <TextBlock Text="◆" FontSize="11" Foreground="{StaticResource AccentBrush}"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Border>
+                    <TextBlock Text="办公助理" FontSize="13" FontWeight="SemiBold"
+                               Foreground="{StaticResource TextPrimaryBrush}"
+                               VerticalAlignment="Center" Margin="9,0,0,0"/>
+                </StackPanel>
+
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                    <Button x:Name="MinimizeButton" Content="&#xE921;" Style="{StaticResource CaptionButton}"
+                            Click="OnMinimizeClick" ToolTip="最小化"/>
+                    <Button x:Name="MaximizeButton" Content="&#xE922;" Style="{StaticResource CaptionButton}"
+                            Click="OnMaximizeClick" ToolTip="最大化"/>
+                    <Button Content="&#xE8BB;" Style="{StaticResource CloseCaptionButton}"
+                            Click="OnCloseClick" ToolTip="关闭"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- Sidebar: feature navigation, settings & version -->
+        <Border x:Name="SidebarBorder" Grid.Row="1" Grid.Column="0"
                 Background="White"
                 BorderBrush="{StaticResource BorderBrushLight}"
                 BorderThickness="0,0,1,0">
-            <Grid Margin="12,18,12,14">
+            <Grid Margin="12,14,12,14">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="*"/>
                     <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
 
-                <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="6,0,0,18">
-                    <Border Width="30" Height="30" CornerRadius="8" Background="{StaticResource AccentSoftBrush}">
-                        <TextBlock Text="◆" FontSize="13" Foreground="{StaticResource AccentBrush}"
-                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                    </Border>
-                    <TextBlock Text="办公助理" FontSize="15" FontWeight="Bold"
-                               Foreground="{StaticResource TextPrimaryBrush}"
-                               VerticalAlignment="Center" Margin="9,0,0,0"/>
-                </StackPanel>
-
-                <ListBox Grid.Row="1"
+                <ListBox Grid.Row="0"
                          ItemsSource="{Binding NavItems}"
                          SelectedItem="{Binding SelectedNavItem, Mode=TwoWay}"
                          BorderThickness="0"
@@ -218,22 +316,35 @@
                     </ListBox.ItemTemplate>
                 </ListBox>
 
-                <StackPanel Grid.Row="2">
-                    <Button Content="设置"
-                            Style="{StaticResource GhostButton}"
-                            HorizontalAlignment="Stretch"
-                            Click="OnSettingsClick"/>
+                <!-- Bottom section, pinned like a profile area: separator, settings row, version -->
+                <StackPanel Grid.Row="1">
+                    <Border BorderBrush="{StaticResource BorderBrushLight}"
+                            BorderThickness="0,1,0,0"
+                            Padding="0,10,0,0"
+                            Margin="0,8,0,0">
+                        <Button Click="OnSettingsClick"
+                                Style="{StaticResource SidebarRowButton}"
+                                ToolTip="打开设置">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="&#xE713;"
+                                           FontFamily="Segoe MDL2 Assets" FontSize="14"
+                                           Foreground="{StaticResource TextSecondaryBrush}"
+                                           VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                <TextBlock Text="设置" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Button>
+                    </Border>
                     <TextBlock Text="{Binding AppVersion}"
                                FontSize="11"
                                Foreground="{StaticResource TextSecondaryBrush}"
                                HorizontalAlignment="Center"
-                               Margin="0,10,0,0"/>
+                               Margin="0,8,0,0"/>
                 </StackPanel>
             </Grid>
         </Border>
 
         <!-- Work area -->
-        <Grid Grid.Column="1" Margin="24,20">
+        <Grid Grid.Row="1" Grid.Column="1" Margin="24,20">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="Auto"/>

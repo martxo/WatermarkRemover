@@ -97,6 +97,36 @@ public partial class MainWindow : Window
         _viewModel.SaveSettingsCommand.Execute(null);
     }
 
+    // Self-drawn caption buttons — with GlassFrameThickness=0 the system ones no longer exist.
+    private void OnMinimizeClick(object sender, RoutedEventArgs e) => SystemCommands.MinimizeWindow(this);
+
+    private void OnMaximizeClick(object sender, RoutedEventArgs e)
+    {
+        if (WindowState == WindowState.Maximized)
+            SystemCommands.RestoreWindow(this);
+        else
+            SystemCommands.MaximizeWindow(this);
+    }
+
+    private void OnCloseClick(object sender, RoutedEventArgs e) => Close();
+
+    /// <summary>Collapses / expands the sidebar; a pure view-state toggle.</summary>
+    private void OnToggleSidebarClick(object sender, RoutedEventArgs e)
+    {
+        bool isOpen = SidebarColumn.Width.Value > 0;
+        SidebarColumn.Width = isOpen ? new GridLength(0) : new GridLength(208);
+        SidebarBorder.Visibility = isOpen ? Visibility.Collapsed : Visibility.Visible;
+        SidebarToggleButton.ToolTip = isOpen ? "展开侧边栏" : "折叠侧边栏";
+    }
+
+    /// <summary>Flips the maximize/restore glyph when the window state changes.</summary>
+    private void OnWindowStateChanged(object? sender, EventArgs e)
+    {
+        bool maximized = WindowState == WindowState.Maximized;
+        MaximizeButton.Content = maximized ? "\uE923" : "\uE922";
+        MaximizeButton.ToolTip = maximized ? "还原" : "最大化";
+    }
+
     /// <summary>
     /// Clicking anywhere outside the app (another window, the desktop) deactivates this window —
     /// no WPF mouse event reaches us, so Deactivated is the only reliable "clicked away" signal.
