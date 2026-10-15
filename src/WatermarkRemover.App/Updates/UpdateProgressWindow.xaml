@@ -1,0 +1,45 @@
+<Window x:Class="WatermarkRemover.App.Updates.UpdateProgressWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="软件更新"
+        Width="420" Height="170"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="NoResize"
+        WindowStyle="ToolWindow"
+        Background="#FFF6F7F9">
+
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <TextBlock Grid.Row="0" x:Name="TitleText"
+                   Text="正在下载更新…"
+                   FontSize="14" FontWeight="SemiBold" Foreground="#FF1A1D26"
+                   Margin="0,0,0,12"/>
+
+        <ProgressBar Grid.Row="1" x:Name="Bar"
+                     Height="8" Minimum="0" Maximum="100"
+                     Foreground="#FF4F6EF7" Background="#FFE4E7ED"/>
+
+        <StackPanel Grid.Row="3" Orientation="Horizontal">
+            <TextBlock x:Name="PercentText" Text="0%"
+                       FontSize="12" Foreground="#FF6B7280" VerticalAlignment="Center"/>
+            <Button Content="取消" Margin="20,0,0,0" Padding="16,6"
+                    FontSize="12" Cursor="Hand" Click="OnCancel">
+                <Button.Template>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}" CornerRadius="6"
+                                Padding="{TemplateBinding Padding}"
+                                BorderBrush="#FFE4E7ED" BorderThickness="1">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                    </ControlTemplate>
+                </Button.Template>
+            </Button>
+        </StackPanel>
+    </Grid>
+</Window>

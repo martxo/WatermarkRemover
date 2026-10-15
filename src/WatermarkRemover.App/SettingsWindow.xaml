@@ -1,0 +1,175 @@
+<Window x:Class="WatermarkRemover.App.SettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="设置"
+        Width="520" Height="600"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="NoResize"
+        Background="#FFF6F7F9">
+
+    <Window.Resources>
+        <SolidColorBrush x:Key="AccentBrush" Color="#FF4F6EF7"/>
+        <SolidColorBrush x:Key="SurfaceBrush" Color="#FFFFFFFF"/>
+        <SolidColorBrush x:Key="BorderBrushLight" Color="#FFE4E7ED"/>
+        <SolidColorBrush x:Key="TextPrimaryBrush" Color="#FF1A1D26"/>
+        <SolidColorBrush x:Key="TextSecondaryBrush" Color="#FF6B7280"/>
+
+        <Style x:Key="SectionLabel" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}"/>
+            <Setter Property="Margin" Value="0,0,0,6"/>
+        </Style>
+
+        <Style x:Key="InputBox" TargetType="TextBox">
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="Padding" Value="10,8"/>
+            <Setter Property="BorderBrush" Value="{StaticResource BorderBrushLight}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+        </Style>
+
+        <Style x:Key="PrimaryButton" TargetType="Button">
+            <Setter Property="Background" Value="{StaticResource AccentBrush}"/>
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Padding" Value="20,9"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}" CornerRadius="8"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
+    <Grid Margin="24">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <TextBlock Grid.Row="0" Text="设置" FontSize="18" FontWeight="Bold"
+                   Foreground="{StaticResource TextPrimaryBrush}" Margin="0,0,0,18"/>
+
+        <StackPanel Grid.Row="1">
+
+            <!-- Output suffix -->
+            <TextBlock Text="生成文件名后缀" Style="{StaticResource SectionLabel}"/>
+            <Grid Margin="0,0,0,18">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <TextBox x:Name="SuffixBox" Style="{StaticResource InputBox}"/>
+            </Grid>
+            <TextBlock x:Name="SuffixPreview"
+                       FontSize="11" Foreground="{StaticResource TextSecondaryBrush}"
+                       Margin="0,-12,0,18"/>
+
+            <!-- Output location -->
+            <TextBlock Text="输出位置" Style="{StaticResource SectionLabel}"/>
+            <StackPanel Margin="0,0,0,8">
+                <RadioButton x:Name="SameDirRadio" Content="与源文件相同目录" GroupName="OutputMode"
+                             FontSize="13" Margin="0,0,0,8" Checked="OnOutputModeChanged"/>
+                <RadioButton x:Name="CustomDirRadio" Content="指定目录" GroupName="OutputMode"
+                             FontSize="13" Margin="0,0,0,8" Checked="OnOutputModeChanged"/>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBox x:Name="DirBox" Grid.Column="0" Style="{StaticResource InputBox}"
+                             IsEnabled="False" TextChanged="OnDirChanged"/>
+                    <Button Grid.Column="1" Content="浏览…" Margin="8,0,0,0"
+                            FontSize="12" Padding="12,8" Click="OnBrowseDirectory">
+                        <Button.Style>
+                            <Style TargetType="Button">
+                                <Setter Property="Background" Value="#FFF1F3F7"/>
+                                <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
+                                <Setter Property="Template">
+                                    <Setter.Value>
+                                        <ControlTemplate TargetType="Button">
+                                            <Border Background="{TemplateBinding Background}"
+                                                    CornerRadius="6" Padding="{TemplateBinding Padding}">
+                                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                            </Border>
+                                        </ControlTemplate>
+                                    </Setter.Value>
+                                </Setter>
+                            </Style>
+                        </Button.Style>
+                    </Button>
+                </Grid>
+            </StackPanel>
+
+            <!-- Advanced -->
+            <TextBlock Text="其他" Style="{StaticResource SectionLabel}" Margin="0,10,0,8"/>
+            <CheckBox x:Name="RemoveLinksBox" Content="同时移除水印附带的链接注释"
+                      FontSize="13" Margin="0,0,0,8"/>
+            <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                <TextBlock Text="同时处理文件数：" FontSize="13" VerticalAlignment="Center"
+                           Foreground="{StaticResource TextPrimaryBrush}"/>
+                <ComboBox x:Name="ConcurrencyBox" Width="80" FontSize="13" Padding="8,6"
+                          VerticalContentAlignment="Center">
+                    <ComboBoxItem Content="1"/>
+                    <ComboBoxItem Content="2"/>
+                    <ComboBoxItem Content="3"/>
+                    <ComboBoxItem Content="4"/>
+                </ComboBox>
+            </StackPanel>
+
+            <!-- Updates -->
+            <TextBlock Text="软件更新" Style="{StaticResource SectionLabel}" Margin="0,10,0,8"/>
+            <Grid Margin="0,0,0,8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                    <TextBlock x:Name="VersionText" FontSize="13"
+                               Foreground="{StaticResource TextPrimaryBrush}"/>
+                    <CheckBox x:Name="CheckUpdatesBox" Content="启动时自动检查更新"
+                              FontSize="13" Margin="0,6,0,0"/>
+                </StackPanel>
+                <Button x:Name="CheckUpdateButton" Grid.Column="1" Content="检查更新"
+                        VerticalAlignment="Center" FontSize="12" Padding="14,8"
+                        Background="#FFF1F3F7" Foreground="{StaticResource TextPrimaryBrush}"
+                        Cursor="Hand" Click="OnCheckUpdate">
+                    <Button.Template>
+                        <ControlTemplate TargetType="Button">
+                            <Border Background="{TemplateBinding Background}" CornerRadius="6"
+                                    Padding="{TemplateBinding Padding}">
+                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                        </ControlTemplate>
+                    </Button.Template>
+                </Button>
+            </Grid>
+        </StackPanel>
+
+        <!-- Actions -->
+        <Grid Grid.Row="2" Margin="0,22,0,0">
+            <Button x:Name="CancelButton" Content="取消" HorizontalAlignment="Left"
+                    Background="Transparent" Foreground="{StaticResource TextSecondaryBrush}"
+                    FontSize="13" Padding="18,9" Click="OnCancel">
+                <Button.Template>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}" CornerRadius="8"
+                                Padding="{TemplateBinding Padding}"
+                                BorderBrush="{StaticResource BorderBrushLight}" BorderThickness="1">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                    </ControlTemplate>
+                </Button.Template>
+            </Button>
+            <Button Content="保存" HorizontalAlignment="Right" Style="{StaticResource PrimaryButton}"
+                    Click="OnSave"/>
+        </Grid>
+    </Grid>
+</Window>

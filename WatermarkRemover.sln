@@ -1,0 +1,50 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{4B314BD7-D56C-4EF5-9736-DDCC32843AB4}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "WatermarkRemover.Core", "src\WatermarkRemover.Core\WatermarkRemover.Core.csproj", "{FA625EA8-477F-474F-B1DE-7DA667FE451E}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "WatermarkRemover.Pdf", "src\WatermarkRemover.Pdf\WatermarkRemover.Pdf.csproj", "{91EEB373-CA9D-433A-8E6E-ABA2C435901C}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "WatermarkRemover.App", "src\WatermarkRemover.App\WatermarkRemover.App.csproj", "{B2FEED0B-3407-4107-AA68-64284F6D5B10}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{364EB618-12A3-4B2F-A7D8-756960CAFF70}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "WatermarkRemover.Tests", "tests\WatermarkRemover.Tests\WatermarkRemover.Tests.csproj", "{7D780215-3ECA-4E97-A777-C811AB440E56}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{FA625EA8-477F-474F-B1DE-7DA667FE451E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{FA625EA8-477F-474F-B1DE-7DA667FE451E}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{FA625EA8-477F-474F-B1DE-7DA667FE451E}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{FA625EA8-477F-474F-B1DE-7DA667FE451E}.Release|Any CPU.Build.0 = Release|Any CPU
+		{91EEB373-CA9D-433A-8E6E-ABA2C435901C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{91EEB373-CA9D-433A-8E6E-ABA2C435901C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{91EEB373-CA9D-433A-8E6E-ABA2C435901C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{91EEB373-CA9D-433A-8E6E-ABA2C435901C}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B2FEED0B-3407-4107-AA68-64284F6D5B10}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B2FEED0B-3407-4107-AA68-64284F6D5B10}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B2FEED0B-3407-4107-AA68-64284F6D5B10}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B2FEED0B-3407-4107-AA68-64284F6D5B10}.Release|Any CPU.Build.0 = Release|Any CPU
+		{7D780215-3ECA-4E97-A777-C811AB440E56}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{7D780215-3ECA-4E97-A777-C811AB440E56}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{7D780215-3ECA-4E97-A777-C811AB440E56}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{7D780215-3ECA-4E97-A777-C811AB440E56}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{FA625EA8-477F-474F-B1DE-7DA667FE451E} = {4B314BD7-D56C-4EF5-9736-DDCC32843AB4}
+		{91EEB373-CA9D-433A-8E6E-ABA2C435901C} = {4B314BD7-D56C-4EF5-9736-DDCC32843AB4}
+		{B2FEED0B-3407-4107-AA68-64284F6D5B10} = {4B314BD7-D56C-4EF5-9736-DDCC32843AB4}
+		{7D780215-3ECA-4E97-A777-C811AB440E56} = {364EB618-12A3-4B2F-A7D8-756960CAFF70}
+	EndGlobalSection
+EndGlobal

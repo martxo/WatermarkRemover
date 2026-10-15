@@ -1,0 +1,14 @@
+# Build output
+publish/
+bin/
+obj/
+logs/
+
+# Local tools (portable git/gh)
+.tools/
+
+# User documents and local data — never push these
+*.pdf
+WatermarkRemover.settings.json
+*.user
+.vs/
