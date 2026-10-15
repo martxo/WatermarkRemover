@@ -33,7 +33,10 @@ public sealed class MainViewModel : ObservableObject
     {
         Settings = SettingsService.Load();
         Jobs = new ObservableCollection<FileJobViewModel>();
-        _selectedFeature = _registry.Features[0];
+        NavItems = new ObservableCollection<FeatureNavItemViewModel>(
+            _registry.Features.Select(f => new FeatureNavItemViewModel(f, GlyphFor(f.Id))));
+        NavItems[0].IsSelected = true;
+        _selectedFeature = NavItems[0].Feature;
 
         ClearCommand = new RelayCommand(ClearJobs, () => Jobs.Count > 0 && !IsBusy);
         OpenOutputCommand = new RelayCommand(p => OpenOutput(p as string), p => p is string path && File.Exists(path));
@@ -42,8 +45,22 @@ public sealed class MainViewModel : ObservableObject
 
     public AppSettings Settings { get; }
 
-    /// <summary>Features offered in the UI, in registration (priority) order.</summary>
-    public IReadOnlyList<IFeature> Features => _registry.Features;
+    /// <summary>Left-navigation entries, in registration (priority) order.</summary>
+    public ObservableCollection<FeatureNavItemViewModel> NavItems { get; }
+
+    /// <summary>The navigation item picked in the sidebar; drives <see cref="SelectedFeature"/>.</summary>
+    public FeatureNavItemViewModel SelectedNavItem
+    {
+        get => NavItems.First(n => n.IsSelected);
+        set
+        {
+            if (value is null || value.IsSelected) return;
+            foreach (var item in NavItems) item.IsSelected = ReferenceEquals(item, value);
+            _selectedFeature = value.Feature;
+            OnPropertyChanged(nameof(SelectedFeature));
+            OnPropertyChanged(nameof(StatusText));
+        }
+    }
 
     /// <summary>The feature every newly added file is processed with.</summary>
     public IFeature SelectedFeature
@@ -52,9 +69,24 @@ public sealed class MainViewModel : ObservableObject
         set
         {
             if (SetProperty(ref _selectedFeature, value))
+            {
+                foreach (var item in NavItems) item.IsSelected = ReferenceEquals(item.Feature, value);
                 OnPropertyChanged(nameof(StatusText));
+            }
         }
     }
+
+    public string AppVersion =>
+        "v" + (System.Reflection.Assembly.GetEntryAssembly()
+            ?.GetName().Version?.ToString(3) ?? "1.0.0");
+
+    /// <summary>Maps feature ids to Segoe MDL2 glyphs; unknown features get a generic page icon.</summary>
+    private static string GlyphFor(string featureId) => featureId switch
+    {
+        "watermark.badge" => "\uE75C", // Erase
+        "ocr.text" => "\uE7C3",        // Page
+        _ => "\uE7C3",
+    };
 
     public ObservableCollection<FileJobViewModel> Jobs { get; }
 

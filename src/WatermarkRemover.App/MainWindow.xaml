@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:behaviors="clr-namespace:WatermarkRemover.App.Behaviors"
         xmlns:vm="clr-namespace:WatermarkRemover.App.ViewModels"
-        Title="去水印工具"
+        Title="办公助理"
         Width="960" Height="680"
         MinWidth="760" MinHeight="520"
         WindowStartupLocation="CenterScreen"
@@ -124,45 +124,136 @@
         </DataTemplate>
     </Window.Resources>
 
-    <Grid Margin="24,20">
-        <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="*"/>
-            <RowDefinition Height="Auto"/>
-        </Grid.RowDefinitions>
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="208"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
 
-        <!-- Header -->
-        <Grid Grid.Row="0" Margin="0,0,0,16">
-            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                <Border Width="40" Height="40" CornerRadius="10" Background="{StaticResource AccentSoftBrush}" Margin="0,0,14,0">
-                    <TextBlock Text="◆" FontSize="18" Foreground="{StaticResource AccentBrush}"
-                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                </Border>
-                <StackPanel VerticalAlignment="Center">
-                    <TextBlock Text="去水印工具" FontSize="21" FontWeight="Bold" Foreground="{StaticResource TextPrimaryBrush}"/>
-                    <TextBlock Text="右下角角标水印 · PDF" FontSize="12" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,3,0,0"/>
+        <!-- Sidebar: assistant identity, feature navigation, settings & version -->
+        <Border Grid.Column="0"
+                Background="White"
+                BorderBrush="{StaticResource BorderBrushLight}"
+                BorderThickness="0,0,1,0">
+            <Grid Margin="12,18,12,14">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+
+                <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="6,0,0,18">
+                    <Border Width="30" Height="30" CornerRadius="8" Background="{StaticResource AccentSoftBrush}">
+                        <TextBlock Text="◆" FontSize="13" Foreground="{StaticResource AccentBrush}"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Border>
+                    <TextBlock Text="办公助理" FontSize="15" FontWeight="Bold"
+                               Foreground="{StaticResource TextPrimaryBrush}"
+                               VerticalAlignment="Center" Margin="9,0,0,0"/>
                 </StackPanel>
-            </StackPanel>
 
-            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-                <TextBlock Text="功能"
-                           VerticalAlignment="Center"
-                           Margin="0,0,8,0"
-                           FontSize="13"
-                           Foreground="{StaticResource TextSecondaryBrush}"/>
-                <ComboBox ItemsSource="{Binding Features}"
-                          SelectedItem="{Binding SelectedFeature, Mode=TwoWay}"
-                          DisplayMemberPath="DisplayName"
-                          Width="150"
-                          VerticalAlignment="Center"
-                          ToolTip="选择拖入的文件要用哪个功能处理"/>
-                <Button Content="设置"
-                        Style="{StaticResource GhostButton}"
-                        Margin="14,0,0,0"
-                        Click="OnSettingsClick"/>
-            </StackPanel>
-        </Grid>
+                <ListBox Grid.Row="1"
+                         ItemsSource="{Binding NavItems}"
+                         SelectedItem="{Binding SelectedNavItem, Mode=TwoWay}"
+                         BorderThickness="0"
+                         Background="Transparent"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                    <ListBox.ItemContainerStyle>
+                        <Style TargetType="ListBoxItem">
+                            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                            <Setter Property="Padding" Value="0"/>
+                            <Setter Property="Margin" Value="0,0,0,2"/>
+                            <Setter Property="Cursor" Value="Hand"/>
+                            <Setter Property="Template">
+                                <Setter.Value>
+                                    <ControlTemplate TargetType="ListBoxItem">
+                                        <Border x:Name="Root" CornerRadius="8" Padding="12,9" Background="Transparent">
+                                            <ContentPresenter/>
+                                        </Border>
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="IsMouseOver" Value="True">
+                                                <Setter TargetName="Root" Property="Background" Value="#FFF1F3F7"/>
+                                            </Trigger>
+                                            <Trigger Property="IsSelected" Value="True">
+                                                <Setter TargetName="Root" Property="Background" Value="{StaticResource AccentSoftBrush}"/>
+                                            </Trigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </Setter.Value>
+                            </Setter>
+                        </Style>
+                    </ListBox.ItemContainerStyle>
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="{Binding Glyph}"
+                                           FontFamily="Segoe MDL2 Assets" FontSize="14"
+                                           VerticalAlignment="Center" Margin="0,0,10,0">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                                                    <Setter Property="Foreground" Value="{StaticResource AccentBrush}"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                                <TextBlock Text="{Binding DisplayName}" FontSize="13" VerticalAlignment="Center">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                                                    <Setter Property="Foreground" Value="{StaticResource AccentBrush}"/>
+                                                    <Setter Property="FontWeight" Value="SemiBold"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </StackPanel>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+
+                <StackPanel Grid.Row="2">
+                    <Button Content="设置"
+                            Style="{StaticResource GhostButton}"
+                            HorizontalAlignment="Stretch"
+                            Click="OnSettingsClick"/>
+                    <TextBlock Text="{Binding AppVersion}"
+                               FontSize="11"
+                               Foreground="{StaticResource TextSecondaryBrush}"
+                               HorizontalAlignment="Center"
+                               Margin="0,10,0,0"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- Work area -->
+        <Grid Grid.Column="1" Margin="24,20">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <!-- Header: current feature -->
+            <Grid Grid.Row="0" Margin="0,0,0,16">
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock Text="{Binding SelectedFeature.DisplayName}"
+                               FontSize="21" FontWeight="Bold"
+                               Foreground="{StaticResource TextPrimaryBrush}"/>
+                    <Border CornerRadius="10" Background="{StaticResource AccentSoftBrush}"
+                            Padding="10,3" Margin="12,0,0,0" VerticalAlignment="Center">
+                        <TextBlock Text="PDF" FontSize="11" FontWeight="SemiBold"
+                                   Foreground="{StaticResource AccentBrush}"/>
+                    </Border>
+                </StackPanel>
+            </Grid>
 
         <!-- Drop zone -->
         <Border Grid.Row="1"
@@ -181,7 +272,7 @@
                            Foreground="{StaticResource TextPrimaryBrush}"
                            HorizontalAlignment="Center"
                            Margin="0,10,0,0"/>
-                <TextBlock Text="选择右上角功能 · 支持多个文件同时拖入 · 完成后保存在下方设置的目录"
+                <TextBlock Text="在左侧选择功能 · 支持多个文件同时拖入 · 完成后保存在下方设置的目录"
                            FontSize="12"
                            Foreground="{StaticResource TextSecondaryBrush}"
                            HorizontalAlignment="Center"
@@ -495,6 +586,7 @@
                     Style="{StaticResource GhostButton}"
                     HorizontalAlignment="Right"
                     Command="{Binding ClearCommand}"/>
+        </Grid>
         </Grid>
     </Grid>
 </Window>
