@@ -8,6 +8,7 @@
         WindowStartupLocation="CenterScreen"
         Background="#FFF6F7F9"
         AllowDrop="True"
+        PreviewMouseDown="OnWindowPreviewMouseDown"
         Drop="OnDrop"
         DragOver="OnDragOver">
 

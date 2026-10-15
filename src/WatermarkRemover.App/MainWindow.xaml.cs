@@ -98,6 +98,33 @@ public partial class MainWindow : Window
         _viewModel.SaveSettingsCommand.Execute(null);
     }
 
+    /// <summary>
+    /// Clicking outside the active rename box commits it. WPF only moves keyboard focus to
+    /// focusable elements, so TextBox.LostFocus alone never fires when the user clicks empty
+    /// space; committing on every outside click makes "click away to save" work everywhere.
+    /// </summary>
+    private void OnWindowPreviewMouseDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        var editingJobs = _viewModel.Jobs.Where(j => j.IsEditing).ToList();
+        if (editingJobs.Count == 0) return;
+
+        // A click inside the edit box (text area, selection, caret) must not commit.
+        if (IsWithinRenameBox(e.OriginalSource as DependencyObject)) return;
+
+        foreach (var job in editingJobs)
+            job.CommitEditCommand.Execute(null);
+    }
+
+    private static bool IsWithinRenameBox(DependencyObject? source)
+    {
+        while (source is not null)
+        {
+            if (source is System.Windows.Controls.TextBox) return true;
+            source = System.Windows.Media.VisualTreeHelper.GetParent(source);
+        }
+        return false;
+    }
+
     /// <summary>Losing focus commits the inline rename (matches the Enter key).</summary>
     private void OnRenameBoxLostFocus(object sender, RoutedEventArgs e)
     {

@@ -58,7 +58,11 @@ public sealed class FileJobViewModel : ObservableObject
     public string DisplayName
     {
         get => _displayName;
-        private set => SetProperty(ref _displayName, value);
+        private set
+        {
+            if (SetProperty(ref _displayName, value))
+                RefreshChipStates();
+        }
     }
 
     public JobState State
@@ -93,7 +97,10 @@ public sealed class FileJobViewModel : ObservableObject
         private set
         {
             if (SetProperty(ref _outputPath, value))
+            {
                 OnPropertyChanged(nameof(IsRenamable));
+                OnPropertyChanged(nameof(ChipsVisible));
+            }
         }
     }
 
