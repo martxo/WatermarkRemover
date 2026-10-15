@@ -80,7 +80,7 @@ public sealed class FileJobViewModel : ObservableObject
         }
     }
 
-    public string ProcessedAtText => ProcessedAt?.ToString("HH:mm:ss") ?? string.Empty;
+    public string ProcessedAtText => ProcessedAt?.ToString("yyyy-MM-dd HH:mm:ss") ?? string.Empty;
 
     public void MarkProcessing()
     {
