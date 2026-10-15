@@ -1,6 +1,5 @@
 using System.Collections.ObjectModel;
 using System.IO;
-using System.Windows.Input;
 using WatermarkRemover.Core.Processing;
 using WatermarkRemover.Core.Settings;
 
@@ -18,7 +17,7 @@ public enum JobState
 /// <summary>One input file in the processing queue.</summary>
 public sealed class FileJobViewModel : ObservableObject
 {
-    /// <summary>How many quick-suffix chips are shown before the expand toggle appears.</summary>
+    /// <summary>How many quick-suffix chips are shown before the expand chevron appears.</summary>
     private const int MaxVisibleChips = 4;
 
     private JobState _state = JobState.Queued;
@@ -30,9 +29,12 @@ public sealed class FileJobViewModel : ObservableObject
     private bool _isEditing;
     private string _editText = string.Empty;
     private ObservableCollection<SuffixChipViewModel> _suffixChips = new();
-    private ObservableCollection<object> _visibleChips = new();
-    private ChipToggleViewModel _chipToggle = new();
-    private bool _isChipsExpanded;
+    private ObservableCollection<SuffixChipViewModel> _inlineChips = new();
+    private ObservableCollection<SuffixChipViewModel> _overflowChips = new();
+    private bool _isSuffixDropdownOpen;
+    private long _closedByOutsideClickTick;
+    private bool _closedByOutsideClickArmed;
+    private bool _suppressCloseStamp;
 
     public FileJobViewModel(string inputPath, IReadOnlyList<string> quickSuffixes)
     {
@@ -45,7 +47,7 @@ public sealed class FileJobViewModel : ObservableObject
         CommitEditCommand = new RelayCommand(CommitEdit, () => IsEditing);
         CancelEditCommand = new RelayCommand(CancelEdit, () => IsEditing);
         ToggleSuffixCommand = new RelayCommand(p => ToggleSuffix(p as SuffixChipViewModel), p => IsRenamable && !IsEditing);
-        ToggleChipsExpandedCommand = new RelayCommand(ToggleChipsExpanded, () => IsRenamable);
+        ToggleSuffixDropdownCommand = new RelayCommand(ToggleSuffixDropdown, () => IsRenamable);
     }
 
     /// <summary>Raised when the user commits an edited name. The coordinator performs the move.</summary>
@@ -133,24 +135,45 @@ public sealed class FileJobViewModel : ObservableObject
 
     public ObservableCollection<SuffixChipViewModel> SuffixChips => _suffixChips;
 
-    /// <summary>
-    /// The chip row actually displayed: the first <see cref="MaxVisibleChips"/> suffixes when
-    /// collapsed (plus an expand toggle), all suffixes when expanded (plus a collapse toggle).
-    /// </summary>
-    public ObservableCollection<object> VisibleChips => _visibleChips;
+    /// <summary>The first <see cref="MaxVisibleChips"/> suffixes shown directly on the card.</summary>
+    public ObservableCollection<SuffixChipViewModel> InlineChips => _inlineChips;
 
-    public bool IsChipsExpanded
+    /// <summary>Suffixes beyond the inline limit — the only ones the dropdown overlay shows.</summary>
+    public ObservableCollection<SuffixChipViewModel> OverflowChips => _overflowChips;
+
+    /// <summary>
+    /// Whether the suffix dropdown overlay is shown. The Popup writes false back through this
+    /// setter when the user clicks outside it (StaysOpen=False), keeping the VM in sync.
+    /// </summary>
+    public bool IsSuffixDropdownOpen
     {
-        get => _isChipsExpanded;
-        private set
+        get => _isSuffixDropdownOpen;
+        set
         {
-            if (SetProperty(ref _isChipsExpanded, value))
+            if (SetProperty(ref _isSuffixDropdownOpen, value))
             {
-                _chipToggle.IsExpanded = value;
-                RebuildVisibleChips();
+                OnPropertyChanged(nameof(HasMoreChips));
+                if (!value)
+                {
+                    // Remember outside-click closes: the stray Click the toggle button receives for
+                    // that same click must not instantly reopen the dropdown (flicker).
+                    if (_suppressCloseStamp)
+                    {
+                        _suppressCloseStamp = false;
+                        _closedByOutsideClickArmed = false;
+                    }
+                    else
+                    {
+                        _closedByOutsideClickArmed = true;
+                        _closedByOutsideClickTick = Environment.TickCount64;
+                    }
+                }
             }
         }
     }
+
+    /// <summary>More suffixes exist than the inline row can show, so the chevron toggle is visible.</summary>
+    public bool HasMoreChips => _suffixChips.Count > MaxVisibleChips;
 
     /// <summary>Quick suffixes are only useful once the output file exists.</summary>
     public bool ChipsVisible => IsRenamable && _suffixChips.Count > 0;
@@ -166,7 +189,7 @@ public sealed class FileJobViewModel : ObservableObject
 
     public RelayCommand ToggleSuffixCommand { get; }
 
-    public RelayCommand ToggleChipsExpandedCommand { get; }
+    public RelayCommand ToggleSuffixDropdownCommand { get; }
 
     public int WatermarkCount
     {
@@ -235,32 +258,32 @@ public sealed class FileJobViewModel : ObservableObject
         foreach (string suffix in quickSuffixes.Where(s => !string.IsNullOrWhiteSpace(s)))
             _suffixChips.Add(new SuffixChipViewModel(suffix.Trim()));
 
+        _inlineChips.Clear();
+        for (int i = 0; i < _suffixChips.Count && i < MaxVisibleChips; i++)
+            _inlineChips.Add(_suffixChips[i]);
+
+        _overflowChips.Clear();
+        for (int i = MaxVisibleChips; i < _suffixChips.Count; i++)
+            _overflowChips.Add(_suffixChips[i]);
+
         RefreshChipStates();
-        RebuildVisibleChips();
+        OnPropertyChanged(nameof(HasMoreChips));
         OnPropertyChanged(nameof(ChipsVisible));
     }
 
-    private void RebuildVisibleChips()
+    /// <summary>
+    /// Opens the suffix dropdown; closing happens via the Popup (outside click) or a chip click.
+    /// A close from an outside click is immediately followed by the toggle button's stray Click —
+    /// swallow that one so the dropdown does not flicker closed-then-open.
+    /// </summary>
+    private void ToggleSuffixDropdown()
     {
-        _visibleChips.Clear();
+        if (!IsSuffixDropdownOpen && _closedByOutsideClickArmed && Environment.TickCount64 - _closedByOutsideClickTick < 300)
+            return;
 
-        int overflow = _suffixChips.Count - MaxVisibleChips;
-        if (overflow <= 0 || IsChipsExpanded)
-        {
-            foreach (var chip in _suffixChips)
-                _visibleChips.Add(chip);
-        }
-        else
-        {
-            for (int i = 0; i < MaxVisibleChips; i++)
-                _visibleChips.Add(_suffixChips[i]);
-        }
-
-        if (overflow > 0)
-            _visibleChips.Add(_chipToggle);
+        _closedByOutsideClickArmed = false;
+        IsSuffixDropdownOpen = !IsSuffixDropdownOpen;
     }
-
-    private void ToggleChipsExpanded() => IsChipsExpanded = !IsChipsExpanded;
 
     private void RefreshChipStates()
     {
@@ -293,5 +316,16 @@ public sealed class FileJobViewModel : ObservableObject
     {
         if (chip is null || !IsRenamable || IsEditing) return;
         SuffixToggleRequested?.Invoke(this, chip.Label);
+
+        // A dropdown menu item applies and dismisses — standard dropdown behaviour.
+        CloseSuffixDropdown();
+    }
+
+    /// <summary>Closes the suffix dropdown from within the view model (chip applied).</summary>
+    private void CloseSuffixDropdown()
+    {
+        // VM-initiated close: not an outside click, so do not arm the flicker guard.
+        _suppressCloseStamp = true;
+        IsSuffixDropdownOpen = false;
     }
 }

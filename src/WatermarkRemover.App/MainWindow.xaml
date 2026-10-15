@@ -83,6 +83,45 @@
                 </Setter.Value>
             </Setter>
         </Style>
+
+        <!-- Shared chip template: used by the inline row and by the expanded wrap row below the name -->
+        <DataTemplate DataType="{x:Type vm:SuffixChipViewModel}">
+            <Button Content="{Binding Label}"
+                    Command="{Binding DataContext.ToggleSuffixCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                    CommandParameter="{Binding}"
+                    Cursor="Hand"
+                    Margin="4,0,0,0"
+                    ToolTip="点击把该后缀加到文件名末尾；再次点击取消">
+                <Button.Style>
+                    <Style TargetType="Button">
+                        <Setter Property="Background" Value="#FFF1F3F7"/>
+                        <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}"/>
+                        <Setter Property="FontSize" Value="12"/>
+                        <Setter Property="Padding" Value="12,4"/>
+                        <Setter Property="Template">
+                            <Setter.Value>
+                                <ControlTemplate TargetType="Button">
+                                    <Border Background="{TemplateBinding Background}"
+                                            CornerRadius="12"
+                                            Padding="{TemplateBinding Padding}">
+                                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    </Border>
+                                </ControlTemplate>
+                            </Setter.Value>
+                        </Setter>
+                        <Style.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Opacity" Value="0.8"/>
+                            </Trigger>
+                            <DataTrigger Binding="{Binding IsApplied}" Value="True">
+                                <Setter Property="Background" Value="{StaticResource AccentBrush}"/>
+                                <Setter Property="Foreground" Value="White"/>
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </Button.Style>
+            </Button>
+        </DataTemplate>
     </Window.Resources>
 
     <Grid Margin="24,20">
@@ -193,7 +232,8 @@
                                     </Grid.ColumnDefinitions>
 
                                     <StackPanel Grid.Column="0">
-                                        <!-- name and quick-suffix chips share one row -->
+                                        <!-- Name row: the file name takes the remaining width, quick-suffix chips
+                                             sit to its right. -->
                                         <Grid>
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="*"/>
@@ -255,91 +295,84 @@
                                                 </TextBox>
                                             </Grid>
 
-                                            <!-- quick suffix chips (limited to MaxVisibleChips, with an expand toggle), right after the file name -->
-                                            <ItemsControl Grid.Column="1"
-                                                          ItemsSource="{Binding VisibleChips}"
+                                            <!-- Quick suffix chips — a dropdown component: sits right of the name; the
+                                                 toggle opens an overlay with the overflow suffixes that floats above
+                                                 the card, so the card layout never changes. -->
+                                            <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="4,0,0,0"
+                                                        Visibility="{Binding ChipsVisible, Converter={StaticResource BoolToVis}}">
+                                            <ItemsControl ItemsSource="{Binding InlineChips}"
                                                           VerticalAlignment="Center"
-                                                          Margin="8,0,0,0"
-                                                          Focusable="False"
-                                                          Visibility="{Binding ChipsVisible, Converter={StaticResource BoolToVis}}">
+                                                          Focusable="False">
                                                 <ItemsControl.ItemsPanel>
                                                     <ItemsPanelTemplate>
                                                         <StackPanel Orientation="Horizontal"/>
                                                     </ItemsPanelTemplate>
                                                 </ItemsControl.ItemsPanel>
-                                                <ItemsControl.Resources>
-                                                    <DataTemplate DataType="{x:Type vm:SuffixChipViewModel}">
-                                                        <Button Content="{Binding Label}"
-                                                                Command="{Binding DataContext.ToggleSuffixCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
-                                                                CommandParameter="{Binding}"
-                                                                Cursor="Hand"
-                                                                Margin="4,0,0,0"
-                                                                ToolTip="点击把该后缀加到文件名末尾；再次点击取消">
-                                                            <Button.Style>
-                                                                <Style TargetType="Button">
-                                                                    <Setter Property="Background" Value="#FFF1F3F7"/>
-                                                                    <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}"/>
-                                                                    <Setter Property="FontSize" Value="12"/>
-                                                                    <Setter Property="Padding" Value="12,4"/>
-                                                                    <Setter Property="Template">
-                                                                        <Setter.Value>
-                                                                            <ControlTemplate TargetType="Button">
-                                                                                <Border Background="{TemplateBinding Background}"
-                                                                                        CornerRadius="12"
-                                                                                        Padding="{TemplateBinding Padding}">
-                                                                                    <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                                                                </Border>
-                                                                            </ControlTemplate>
-                                                                        </Setter.Value>
-                                                                    </Setter>
-                                                                    <Style.Triggers>
-                                                                        <Trigger Property="IsMouseOver" Value="True">
-                                                                            <Setter Property="Opacity" Value="0.8"/>
-                                                                        </Trigger>
-                                                                        <DataTrigger Binding="{Binding IsApplied}" Value="True">
-                                                                            <Setter Property="Background" Value="{StaticResource AccentBrush}"/>
-                                                                            <Setter Property="Foreground" Value="White"/>
-                                                                        </DataTrigger>
-                                                                    </Style.Triggers>
-                                                                </Style>
-                                                            </Button.Style>
-                                                        </Button>
-                                                    </DataTemplate>
-
-                                                    <DataTemplate DataType="{x:Type vm:ChipToggleViewModel}">
-                                                        <Button Content="{Binding Label}"
-                                                                Command="{Binding DataContext.ToggleChipsExpandedCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
-                                                                Cursor="Hand"
-                                                                Margin="4,0,0,0"
-                                                                ToolTip="展开或收起更多常用后缀">
-                                                            <Button.Style>
-                                                                <Style TargetType="Button">
-                                                                    <Setter Property="Background" Value="{StaticResource AccentSoftBrush}"/>
-                                                                    <Setter Property="Foreground" Value="{StaticResource AccentBrush}"/>
-                                                                    <Setter Property="FontSize" Value="12"/>
-                                                                    <Setter Property="Padding" Value="10,4"/>
-                                                                    <Setter Property="Template">
-                                                                        <Setter.Value>
-                                                                            <ControlTemplate TargetType="Button">
-                                                                                <Border Background="{TemplateBinding Background}"
-                                                                                        CornerRadius="12"
-                                                                                        Padding="{TemplateBinding Padding}">
-                                                                                    <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                                                                                </Border>
-                                                                            </ControlTemplate>
-                                                                        </Setter.Value>
-                                                                    </Setter>
-                                                                    <Style.Triggers>
-                                                                        <Trigger Property="IsMouseOver" Value="True">
-                                                                            <Setter Property="Opacity" Value="0.8"/>
-                                                                        </Trigger>
-                                                                    </Style.Triggers>
-                                                                </Style>
-                                                            </Button.Style>
-                                                        </Button>
-                                                    </DataTemplate>
-                                                </ItemsControl.Resources>
                                             </ItemsControl>
+
+                                            <!-- Chevron toggle: always in place, flips between ▾ / ▴ to reflect state —
+                                                 part of the chip family, never jumps. -->
+                                            <Button Command="{Binding ToggleSuffixDropdownCommand}"
+                                                    Cursor="Hand"
+                                                    Margin="2,0,0,0"
+                                                    ToolTip="展开或收起更多常用后缀"
+                                                    Visibility="{Binding HasMoreChips, Converter={StaticResource BoolToVis}}">
+                                                <Button.Style>
+                                                    <Style TargetType="Button">
+                                                        <Setter Property="Background" Value="#FFF1F3F7"/>
+                                                        <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}"/>
+                                                        <Setter Property="Content" Value="▾"/>
+                                                        <Setter Property="FontSize" Value="12"/>
+                                                        <Setter Property="Padding" Value="7,4"/>
+                                                        <Setter Property="Template">
+                                                            <Setter.Value>
+                                                                <ControlTemplate TargetType="Button">
+                                                                    <Border Background="{TemplateBinding Background}"
+                                                                            CornerRadius="12"
+                                                                            Padding="{TemplateBinding Padding}">
+                                                                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                                    </Border>
+                                                                </ControlTemplate>
+                                                            </Setter.Value>
+                                                        </Setter>
+                                                        <Style.Triggers>
+                                                            <Trigger Property="IsMouseOver" Value="True">
+                                                                <Setter Property="Background" Value="{StaticResource AccentSoftBrush}"/>
+                                                                <Setter Property="Foreground" Value="{StaticResource AccentBrush}"/>
+                                                            </Trigger>
+                                                            <DataTrigger Binding="{Binding IsSuffixDropdownOpen}" Value="True">
+                                                                <Setter Property="Content" Value="▴"/>
+                                                                <Setter Property="Foreground" Value="{StaticResource AccentBrush}"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Button.Style>
+                                            </Button>
+
+                                            <!-- Seamless expansion: the overlay is pure card-white with no border, shadow
+                                                 or corners — on the white card it is invisible, so the overflow chips
+                                                 simply read as the same pill group continuing on a wrapped second line
+                                                 (the white surface only masks the path row underneath). -->
+                                            <Popup IsOpen="{Binding IsSuffixDropdownOpen}"
+                                                   StaysOpen="False"
+                                                   Placement="Bottom"
+                                                   PlacementTarget="{Binding RelativeSource={RelativeSource AncestorType=StackPanel}}"
+                                                   VerticalOffset="5"
+                                                   AllowsTransparency="True"
+                                                   PopupAnimation="Fade">
+                                                <Border Background="White"
+                                                        Padding="2,2,6,6"
+                                                        MaxWidth="420">
+                                                    <ItemsControl ItemsSource="{Binding OverflowChips}" Focusable="False">
+                                                        <ItemsControl.ItemsPanel>
+                                                            <ItemsPanelTemplate>
+                                                                <WrapPanel Orientation="Horizontal"/>
+                                                            </ItemsPanelTemplate>
+                                                        </ItemsControl.ItemsPanel>
+                                                    </ItemsControl>
+                                                </Border>
+                                            </Popup>
+                                            </StackPanel>
                                         </Grid>
 
                                         <!-- path row: click the path to open its folder; time at the right -->
