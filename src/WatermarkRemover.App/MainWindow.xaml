@@ -333,41 +333,60 @@
                                             </ItemsControl>
                                         </Grid>
 
-                                        <TextBlock Text="{Binding Detail}"
-                                                   FontSize="12"
-                                                   Foreground="{StaticResource TextSecondaryBrush}"
-                                                   TextTrimming="CharacterEllipsis"
-                                                   Margin="0,4,0,0">
-                                            <TextBlock.ToolTip>
-                                                <ToolTip Content="{Binding Detail}"/>
-                                            </TextBlock.ToolTip>
-                                        </TextBlock>
+                                        <!-- path row: click the path to open its folder; time at the right -->
+                                        <Grid Margin="0,4,0,0">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+
+                                            <TextBlock Grid.Column="0"
+                                                       Text="{Binding Detail}"
+                                                       FontSize="12"
+                                                       Foreground="{StaticResource TextSecondaryBrush}"
+                                                       TextTrimming="CharacterEllipsis">
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock">
+                                                        <Setter Property="Cursor" Value="Hand"/>
+                                                        <Setter Property="ToolTip" Value="点击打开文件所在位置"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding OutputPath}" Value="{x:Null}">
+                                                                <Setter Property="Cursor" Value="Arrow"/>
+                                                                <Setter Property="ToolTip" Value="{x:Null}"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                                <TextBlock.InputBindings>
+                                                    <MouseBinding Gesture="LeftClick"
+                                                                  Command="{Binding DataContext.OpenOutputCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                                  CommandParameter="{Binding OutputPath}"/>
+                                                </TextBlock.InputBindings>
+                                            </TextBlock>
+
+                                            <TextBlock Grid.Column="1"
+                                                       Text="{Binding ProcessedAtText}"
+                                                       FontSize="12"
+                                                       Foreground="{StaticResource TextSecondaryBrush}"
+                                                       VerticalAlignment="Center"
+                                                       Margin="12,0,0,0"
+                                                       ToolTip="{Binding ProcessedAt, TargetNullValue=处理完成时间}">
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock">
+                                                        <Style.Triggers>
+                                                            <Trigger Property="Text" Value="">
+                                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                            </Trigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
+                                        </Grid>
                                     </StackPanel>
 
                                     <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                        <!-- processed-at time -->
-                                        <TextBlock Text="{Binding ProcessedAtText}"
-                                                   FontSize="12"
-                                                   Margin="0,0,12,0"
-                                                   VerticalAlignment="Center">
-                                            <TextBlock.Style>
-                                                <Style TargetType="TextBlock">
-                                                    <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}"/>
-                                                    <Setter Property="Visibility" Value="Visible"/>
-                                                    <Style.Triggers>
-                                                        <Trigger Property="Text" Value="">
-                                                            <Setter Property="Visibility" Value="Collapsed"/>
-                                                        </Trigger>
-                                                    </Style.Triggers>
-                                                </Style>
-                                            </TextBlock.Style>
-                                            <TextBlock.ToolTip>
-                                                <ToolTip Content="{Binding ProcessedAt, TargetNullValue=处理完成时间}"/>
-                                            </TextBlock.ToolTip>
-                                        </TextBlock>
-
                                         <!-- status chip -->
-                                        <Border CornerRadius="20" Padding="12,5" Margin="0,0,12,0">
+                                        <Border CornerRadius="20" Padding="12,5">
                                             <Border.Style>
                                                 <Style TargetType="Border">
                                                     <Setter Property="Background" Value="#FFF1F3F7"/>
@@ -403,21 +422,6 @@
                                                 </TextBlock.Style>
                                             </TextBlock>
                                         </Border>
-
-                                        <Button Content="打开位置"
-                                                Padding="12,6"
-                                                Command="{Binding DataContext.OpenOutputCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                                CommandParameter="{Binding OutputPath}">
-                                            <Button.Style>
-                                                <Style TargetType="Button" BasedOn="{StaticResource GhostButton}">
-                                                    <Style.Triggers>
-                                                        <DataTrigger Binding="{Binding OutputPath}" Value="{x:Null}">
-                                                            <Setter Property="Visibility" Value="Collapsed"/>
-                                                        </DataTrigger>
-                                                    </Style.Triggers>
-                                                </Style>
-                                            </Button.Style>
-                                        </Button>
                                     </StackPanel>
                                 </Grid>
                             </Border>
