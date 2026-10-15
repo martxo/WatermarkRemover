@@ -23,7 +23,8 @@ public sealed class FileJobViewModel : ObservableObject
     private JobState _state = JobState.Queued;
     private string _detail = "等待处理";
     private string? _outputPath;
-    private int _watermarkCount;
+    private int _itemCount;
+    private string _resultSummary = "已处理";
     private DateTime? _processedAt;
     private string _displayName;
     private bool _isEditing;
@@ -191,10 +192,11 @@ public sealed class FileJobViewModel : ObservableObject
 
     public RelayCommand ToggleSuffixDropdownCommand { get; }
 
-    public int WatermarkCount
+    /// <summary>How many discrete items the feature acted on (watermarks removed, pages recognised…).</summary>
+    public int ItemCount
     {
-        get => _watermarkCount;
-        private set => SetProperty(ref _watermarkCount, value);
+        get => _itemCount;
+        private set => SetProperty(ref _itemCount, value);
     }
 
     /// <summary>Time the job reached a terminal state (done, skipped, or failed).</summary>
@@ -225,9 +227,10 @@ public sealed class FileJobViewModel : ObservableObject
                 string outputPath = result.OutputPath ?? string.Empty;
                 State = JobState.Succeeded;
                 OutputPath = outputPath;
-                WatermarkCount = result.ItemCount;
+                ItemCount = result.ItemCount;
+                _resultSummary = string.IsNullOrWhiteSpace(result.Summary) ? "已处理" : result.Summary;
                 DisplayName = Path.GetFileName(outputPath);
-                Detail = $"{result.Summary} → {outputPath}";
+                Detail = $"{_resultSummary} → {outputPath}";
                 break;
 
             case FeatureStatus.NoChange:
@@ -247,7 +250,7 @@ public sealed class FileJobViewModel : ObservableObject
     {
         OutputPath = newPath;
         DisplayName = Path.GetFileName(newPath);
-        Detail = $"已去除 {WatermarkCount} 处水印 → {newPath}";
+        Detail = $"{_resultSummary} → {newPath}";
         RefreshChipStates();
     }
 

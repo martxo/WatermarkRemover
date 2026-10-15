@@ -7,8 +7,15 @@ public static class OutputNameGenerator
     /// Returns the output path for <paramref name="inputPath"/>. The suffix is inserted before the
     /// extension, e.g. <c>scan.pdf</c> → <c>scan_no-watermark.pdf</c>. If that name already exists,
     /// a counter is appended (<c>scan_no-watermark (2).pdf</c>) so no work is ever overwritten.
+    /// Features that produce a different artefact (e.g. OCR text) override the suffix and/or the
+    /// extension; when overridden, the fallback suffix follows the override instead of the
+    /// watermark default.
     /// </summary>
-    public static string GetOutputPath(string inputPath, AppSettings settings)
+    public static string GetOutputPath(
+        string inputPath,
+        AppSettings settings,
+        string? suffixOverride = null,
+        string? extensionOverride = null)
     {
         if (string.IsNullOrWhiteSpace(inputPath))
             throw new ArgumentException("Input path must not be empty.", nameof(inputPath));
@@ -21,8 +28,8 @@ public static class OutputNameGenerator
         };
 
         string stem = Path.GetFileNameWithoutExtension(inputPath);
-        string extension = Path.GetExtension(inputPath);
-        string suffix = SanitizeSuffix(settings.OutputSuffix);
+        string extension = extensionOverride ?? Path.GetExtension(inputPath);
+        string suffix = SanitizeSuffix(suffixOverride ?? settings.OutputSuffix, suffixOverride ?? "_no-watermark");
 
         return FindAvailablePath(directory, stem + suffix + extension);
     }
@@ -49,14 +56,14 @@ public static class OutputNameGenerator
         return Path.Combine(directory, $"{stem} ({Guid.NewGuid():N}){extension}");
     }
 
-    /// <summary>Strips characters that are invalid in file names.</summary>
-    public static string SanitizeSuffix(string suffix)
+    /// <summary>Strips characters that are invalid in file names, falling back when nothing remains.</summary>
+    public static string SanitizeSuffix(string suffix, string fallback = "_no-watermark")
     {
-        if (string.IsNullOrEmpty(suffix)) return "_no-watermark";
+        if (string.IsNullOrEmpty(suffix)) return fallback;
 
         var invalid = Path.GetInvalidFileNameChars();
         var chars = suffix.Select(c => invalid.Contains(c) ? '_' : c).ToArray();
         string result = new(chars);
-        return result.Trim().Length == 0 ? "_no-watermark" : result;
+        return result.Trim().Length == 0 ? fallback : result;
     }
 }

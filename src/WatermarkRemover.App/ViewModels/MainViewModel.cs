@@ -2,9 +2,10 @@ using System.Collections.ObjectModel;
 using System.IO;
 using System.Windows;
 using WatermarkRemover.App.Logging;
+using WatermarkRemover.App.Ocr;
 using WatermarkRemover.App.Settings;
 using WatermarkRemover.Core.Features;
-using WatermarkRemover.Core.Processing;
+using WatermarkRemover.Core.Features.Ocr;
 using WatermarkRemover.Core.Settings;
 using WatermarkRemover.Core.Watermarks;
 using WatermarkRemover.Pdf;
@@ -12,15 +13,18 @@ using WatermarkRemover.Pdf;
 namespace WatermarkRemover.App.ViewModels;
 
 /// <summary>
-/// Root view model. Dropping files triggers processing immediately; results are pushed into the
-/// observable queue as each job finishes. Files are dispatched to features through the
-/// <see cref="FeatureRegistry"/> — this class holds no feature logic of its own.
+/// Root view model. Dropping files triggers the selected feature immediately; results are pushed
+/// into the observable queue as each job finishes. This class holds no feature logic of its own.
 /// </summary>
 public sealed class MainViewModel : ObservableObject
 {
-    private readonly FeatureRegistry _registry = new(
-        new IFeature[] { new WatermarkFeature(new PdfDocumentSource(), new IWatermarkStrategy[] { new BottomRightBadgeStrategy() }) });
+    private readonly FeatureRegistry _registry = new(new IFeature[]
+    {
+        new WatermarkFeature(new PdfDocumentSource(), new IWatermarkStrategy[] { new BottomRightBadgeStrategy() }),
+        new OcrFeature(new WinRtPdfPageRenderer(), new WindowsMediaOcrEngine()),
+    });
 
+    private IFeature _selectedFeature;
     private readonly object _sync = new();
     private bool _isBusy;
     private int _completedCount;
@@ -29,6 +33,7 @@ public sealed class MainViewModel : ObservableObject
     {
         Settings = SettingsService.Load();
         Jobs = new ObservableCollection<FileJobViewModel>();
+        _selectedFeature = _registry.Features[0];
 
         ClearCommand = new RelayCommand(ClearJobs, () => Jobs.Count > 0 && !IsBusy);
         OpenOutputCommand = new RelayCommand(p => OpenOutput(p as string), p => p is string path && File.Exists(path));
@@ -36,6 +41,20 @@ public sealed class MainViewModel : ObservableObject
     }
 
     public AppSettings Settings { get; }
+
+    /// <summary>Features offered in the UI, in registration (priority) order.</summary>
+    public IReadOnlyList<IFeature> Features => _registry.Features;
+
+    /// <summary>The feature every newly added file is processed with.</summary>
+    public IFeature SelectedFeature
+    {
+        get => _selectedFeature;
+        set
+        {
+            if (SetProperty(ref _selectedFeature, value))
+                OnPropertyChanged(nameof(StatusText));
+        }
+    }
 
     public ObservableCollection<FileJobViewModel> Jobs { get; }
 
@@ -74,7 +93,7 @@ public sealed class MainViewModel : ObservableObject
     public string StatusText => IsBusy
         ? $"处理中… 已完成 {CompletedCount}/{Jobs.Count}"
         : Jobs.Count == 0
-            ? "拖入 PDF 文件即可开始去水印"
+            ? $"拖入 PDF 文件即可开始{SelectedFeature.DisplayName}"
             : $"已完成 {CompletedCount} 个文件";
 
     /// <summary>Entry point for drag-and-drop and the file picker.</summary>
@@ -104,10 +123,10 @@ public sealed class MainViewModel : ObservableObject
         }
         OnPropertyChanged(nameof(StatusText));
 
-        await ProcessJobsAsync(newJobs).ConfigureAwait(true);
+        await ProcessJobsAsync(newJobs, SelectedFeature).ConfigureAwait(true);
     }
 
-    private async Task ProcessJobsAsync(IReadOnlyList<FileJobViewModel> jobs)
+    private async Task ProcessJobsAsync(IReadOnlyList<FileJobViewModel> jobs, IFeature feature)
     {
         IsBusy = true;
         try
@@ -123,7 +142,7 @@ public sealed class MainViewModel : ObservableObject
                 await throttle.WaitAsync().ConfigureAwait(false);
                 try
                 {
-                    await ProcessOneAsync(job, context).ConfigureAwait(false);
+                    await ProcessOneAsync(job, feature, context).ConfigureAwait(false);
                 }
                 finally
                 {
@@ -139,23 +158,22 @@ public sealed class MainViewModel : ObservableObject
         }
     }
 
-    private Task ProcessOneAsync(FileJobViewModel job, FeatureContext context)
+    private Task ProcessOneAsync(FileJobViewModel job, IFeature feature, FeatureContext context)
     {
         return Task.Run(() =>
         {
             job.MarkProcessing();
             try
             {
-                var feature = _registry.FindForFile(job.InputPath);
-                if (feature is null)
+                if (!feature.CanHandle(job.InputPath))
                 {
-                    job.Apply(FeatureResult.Fail(job.InputPath, "暂不支持该文件类型"));
+                    job.Apply(FeatureResult.Fail(job.InputPath, $"{feature.DisplayName}只支持 PDF 文件"));
                     return;
                 }
 
                 FeatureResult result = feature.Run(job.InputPath, context);
                 job.Apply(result);
-                LogResult(result);
+                LogResult(result, feature);
             }
             catch (Exception ex)
             {
@@ -191,14 +209,14 @@ public sealed class MainViewModel : ObservableObject
         else dispatcher.Invoke(Move);
     }
 
-    private static void LogResult(FeatureResult result)
+    private static void LogResult(FeatureResult result, IFeature feature)
     {
         string message = result.Status switch
         {
             FeatureStatus.Succeeded =>
-                $"处理完成：{result.InputPath} → {result.OutputPath}（{result.Summary}）",
-            FeatureStatus.NoChange => $"无需处理：{result.InputPath}（{result.Summary}）",
-            _ => $"处理失败：{result.InputPath}（{result.Error}）",
+                $"{feature.DisplayName}完成：{result.InputPath} → {result.OutputPath}（{result.Summary}）",
+            FeatureStatus.NoChange => $"{feature.DisplayName}无输出：{result.InputPath}（{result.Summary}）",
+            _ => $"{feature.DisplayName}失败：{result.InputPath}（{result.Error}）",
         };
         AppLog.Info(message);
     }

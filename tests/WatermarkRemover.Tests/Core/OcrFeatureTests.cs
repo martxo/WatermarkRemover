@@ -1,0 +1,128 @@
+using System.Text;
+using WatermarkRemover.Core.Features;
+using WatermarkRemover.Core.Features.Ocr;
+using WatermarkRemover.Core.Settings;
+
+namespace WatermarkRemover.Tests.Core;
+
+public class OcrFeatureTests : IDisposable
+{
+    private readonly string _dir = Path.Combine(Path.GetTempPath(), "wm-ocr-" + Guid.NewGuid().ToString("N"));
+
+    public OcrFeatureTests() => Directory.CreateDirectory(_dir);
+
+    public void Dispose()
+    {
+        if (Directory.Exists(_dir)) Directory.Delete(_dir, true);
+    }
+
+    private sealed class FakeRenderer(int pageCount) : IPdfPageRenderer
+    {
+        public int Calls { get; private set; }
+
+        public Task<IReadOnlyList<byte[]>> RenderPagesAsync(string pdfPath, int dpi)
+        {
+            Calls++;
+            var pages = new List<byte[]>();
+            for (int i = 0; i < pageCount; i++) pages.Add(new byte[] { 0x89, (byte)'P' });
+            return Task.FromResult<IReadOnlyList<byte[]>>(pages);
+        }
+    }
+
+    private sealed class FakeEngine(IReadOnlyList<string> lines) : IOcrEngine
+    {
+        public Task<IReadOnlyList<string>> RecognizeAsync(byte[] imageBytes) =>
+            Task.FromResult(lines);
+    }
+
+    private sealed class ThrowingRenderer : IPdfPageRenderer
+    {
+        public Task<IReadOnlyList<byte[]>> RenderPagesAsync(string pdfPath, int dpi) =>
+            throw new InvalidOperationException("渲染失败");
+    }
+
+    private string WriteInput(string name = "scan.pdf")
+    {
+        string path = Path.Combine(_dir, name);
+        File.WriteAllBytes(path, new byte[] { 0x25, 0x50 }); // "%P"
+        return path;
+    }
+
+    [Fact]
+    public void CanHandle_only_accepts_pdf_files()
+    {
+        var feature = new OcrFeature(new FakeRenderer(0), new FakeEngine(Array.Empty<string>()));
+
+        Assert.True(feature.CanHandle("C:\\a\\doc.PDF"));
+        Assert.False(feature.CanHandle("C:\\a\\doc.jpg"));
+    }
+
+    [Fact]
+    public async Task Run_writes_one_text_file_with_all_page_text()
+    {
+        string input = WriteInput();
+        var feature = new OcrFeature(new FakeRenderer(2), new FakeEngine(new[] { "第一页内容" }));
+
+        FeatureResult result = await Task.Run(() => feature.Run(input, FeatureContext.Capture(new AppSettings())));
+
+        Assert.Equal(FeatureStatus.Succeeded, result.Status);
+        Assert.True(File.Exists(result.OutputPath));
+        Assert.EndsWith("_ocr.txt", Path.GetFileName(result.OutputPath));
+        Assert.Equal(2, result.ItemCount);
+        Assert.Contains("识别 2 页", result.Summary);
+
+        string text = File.ReadAllText(result.OutputPath!, Encoding.UTF8);
+        Assert.Contains("第一页内容", text);
+    }
+
+    [Fact]
+    public async Task Run_reports_nochange_when_no_text_is_recognised()
+    {
+        string input = WriteInput();
+        var feature = new OcrFeature(new FakeRenderer(1), new FakeEngine(Array.Empty<string>()));
+
+        FeatureResult result = await Task.Run(() => feature.Run(input, FeatureContext.Capture(new AppSettings())));
+
+        Assert.Equal(FeatureStatus.NoChange, result.Status);
+        Assert.Null(result.OutputPath);
+        Assert.Contains("未识别到文字", result.Summary);
+    }
+
+    [Fact]
+    public async Task Run_reports_renderer_failures_as_failed()
+    {
+        string input = WriteInput();
+        var feature = new OcrFeature(new ThrowingRenderer(), new FakeEngine(Array.Empty<string>()));
+
+        FeatureResult result = await Task.Run(() => feature.Run(input, FeatureContext.Capture(new AppSettings())));
+
+        Assert.Equal(FeatureStatus.Failed, result.Status);
+        Assert.Contains("渲染失败", result.Error);
+    }
+
+    [Fact]
+    public async Task Run_fails_for_a_missing_file()
+    {
+        var feature = new OcrFeature(new FakeRenderer(1), new FakeEngine(new[] { "x" }));
+
+        FeatureResult result = await Task.Run(() =>
+            feature.Run(Path.Combine(_dir, "missing.pdf"), FeatureContext.Capture(new AppSettings())));
+
+        Assert.Equal(FeatureStatus.Failed, result.Status);
+    }
+
+    [Fact]
+    public async Task Run_respects_a_custom_output_directory()
+    {
+        string input = WriteInput();
+        string custom = Path.Combine(_dir, "custom");
+        Directory.CreateDirectory(custom);
+        var settings = new AppSettings { OutputMode = OutputMode.CustomDirectory, OutputDirectory = custom };
+
+        var feature = new OcrFeature(new FakeRenderer(1), new FakeEngine(new[] { "文本" }));
+        FeatureResult result = await Task.Run(() => feature.Run(input, FeatureContext.Capture(settings)));
+
+        Assert.True(File.Exists(result.OutputPath));
+        Assert.StartsWith(custom, result.OutputPath);
+    }
+}

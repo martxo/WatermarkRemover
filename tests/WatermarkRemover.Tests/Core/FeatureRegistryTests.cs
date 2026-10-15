@@ -51,6 +51,16 @@ public class FeatureRegistryTests
     }
 
     [Fact]
+    public void FindById_returns_the_registered_feature()
+    {
+        var feature = new StubFeature("pdf.f", ".pdf");
+        var registry = new FeatureRegistry(new IFeature[] { feature });
+
+        Assert.Same(feature, registry.FindById("pdf.f"));
+        Assert.Null(registry.FindById("nope"));
+    }
+
+    [Fact]
     public void Duplicate_ids_are_rejected()
     {
         Assert.Throws<ArgumentException>(() =>

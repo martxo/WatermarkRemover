@@ -145,11 +145,23 @@
                 </StackPanel>
             </StackPanel>
 
-            <Button Content="设置"
-                    Style="{StaticResource GhostButton}"
-                    HorizontalAlignment="Right"
-                    VerticalAlignment="Center"
-                    Click="OnSettingsClick"/>
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                <TextBlock Text="功能"
+                           VerticalAlignment="Center"
+                           Margin="0,0,8,0"
+                           FontSize="13"
+                           Foreground="{StaticResource TextSecondaryBrush}"/>
+                <ComboBox ItemsSource="{Binding Features}"
+                          SelectedItem="{Binding SelectedFeature, Mode=TwoWay}"
+                          DisplayMemberPath="DisplayName"
+                          Width="150"
+                          VerticalAlignment="Center"
+                          ToolTip="选择拖入的文件要用哪个功能处理"/>
+                <Button Content="设置"
+                        Style="{StaticResource GhostButton}"
+                        Margin="14,0,0,0"
+                        Click="OnSettingsClick"/>
+            </StackPanel>
         </Grid>
 
         <!-- Drop zone -->
@@ -164,12 +176,12 @@
             <StackPanel HorizontalAlignment="Center">
                 <TextBlock Text="📄" FontSize="34" HorizontalAlignment="Center"/>
                 <TextBlock x:Name="DropHintText"
-                           Text="把 PDF 文件拖到这里，松手即开始去水印"
+                           Text="把 PDF 文件拖到这里，松手即开始"
                            FontSize="15" FontWeight="SemiBold"
                            Foreground="{StaticResource TextPrimaryBrush}"
                            HorizontalAlignment="Center"
                            Margin="0,10,0,0"/>
-                <TextBlock Text="支持多个文件同时拖入 · 处理完成后保存在下方设置的目录"
+                <TextBlock Text="选择右上角功能 · 支持多个文件同时拖入 · 完成后保存在下方设置的目录"
                            FontSize="12"
                            Foreground="{StaticResource TextSecondaryBrush}"
                            HorizontalAlignment="Center"

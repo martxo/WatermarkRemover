@@ -29,4 +29,8 @@ public sealed class FeatureRegistry
     /// <summary>The first feature that can process this file, or null when the type is unsupported.</summary>
     public IFeature? FindForFile(string filePath) =>
         _features.FirstOrDefault(f => f.CanHandle(filePath));
+
+    /// <summary>The feature with the given <paramref name="id"/>, or null when unknown.</summary>
+    public IFeature? FindById(string id) =>
+        _features.FirstOrDefault(f => string.Equals(f.Id, id, StringComparison.OrdinalIgnoreCase));
 }
