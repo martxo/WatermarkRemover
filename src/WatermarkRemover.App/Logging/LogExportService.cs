@@ -1,7 +1,5 @@
 using System.IO;
 using System.Text;
-using WatermarkRemover.App.Ocr;
-using WatermarkRemover.App.Updates;
 using WatermarkRemover.Core.Logging;
 using WatermarkRemover.Core.Settings;
 
@@ -68,14 +66,11 @@ public static class LogExportService
     public static string BuildReport(IReadOnlyList<LogEntry> entries, TimeSpan range)
     {
         var report = new StringBuilder();
-        report.AppendLine($"应用版本：v{UpdateService.CurrentVersion}");
-        report.AppendLine($"系统：{Environment.OSVersion.VersionString}");
-        report.AppendLine($"进程：{(Environment.Is64BitProcess ? "64" : "32")} 位（{(Environment.Is64BitOperatingSystem ? "64" : "32")} 位系统）");
+        DiagnosticReportBuilder.AppendEnvironmentHeader(report);
         report.AppendLine($"导出时间：{DateTime.Now:yyyy-MM-dd HH:mm:ss}");
         report.AppendLine($"时间范围：最近 {FormatRange(range)}（{DateTime.Now - range:yyyy-MM-dd HH:mm:ss} 起）");
         report.AppendLine($"日志条数：{entries.Count}");
-        report.AppendLine("---- OCR 引擎 ----");
-        report.AppendLine(OcrDiagnostics.Current);
+        DiagnosticReportBuilder.AppendEngineSection(report);
         report.AppendLine("---- 执行记录 ----");
         foreach (LogEntry entry in entries)
             report.AppendLine(LogFilter.Format(entry));

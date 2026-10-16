@@ -10,6 +10,7 @@ namespace WatermarkRemover.App;
 public partial class MainWindow : Window
 {
     private readonly MainViewModel _viewModel = new();
+    private readonly Services.IDialogService _dialogs = new Services.DialogService();
 
     public MainWindow()
     {
@@ -68,7 +69,7 @@ public partial class MainWindow : Window
 
         if (pdfs.Length == 0)
         {
-            MessageBox.Show("只支持 PDF 文件。", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+            _dialogs.Info("只支持 PDF 文件。", "提示");
             return;
         }
 

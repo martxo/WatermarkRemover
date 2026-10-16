@@ -1,7 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
+    <!-- Matches the App project's TFM so the WPF assembly can be referenced and its
+         view models / services exercised with fakes. -->
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <UseWPF>true</UseWPF>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
 
@@ -18,11 +21,14 @@
 
   <ItemGroup>
     <Using Include="Xunit" />
+    <!-- WPF implicit usings exclude System.IO; the tests rely on it heavily. -->
+    <Using Include="System.IO" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\WatermarkRemover.Core\WatermarkRemover.Core.csproj" />
     <ProjectReference Include="..\..\src\WatermarkRemover.Pdf\WatermarkRemover.Pdf.csproj" />
+    <ProjectReference Include="..\..\src\WatermarkRemover.App\WatermarkRemover.App.csproj" />
   </ItemGroup>
 
 </Project>

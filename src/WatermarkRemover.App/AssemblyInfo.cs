@@ -1,4 +1,8 @@
+using System.Runtime.CompilerServices;
 using System.Windows;
+
+// View-model tests inject fake dialog/shell services through internal constructors.
+[assembly: InternalsVisibleTo("WatermarkRemover.Tests")]
 
 [assembly:ThemeInfo(
     ResourceDictionaryLocation.None,            //where theme specific resource dictionaries are located

@@ -2,8 +2,7 @@ using System.Collections.ObjectModel;
 using System.IO;
 using System.Text;
 using System.Windows;
-using WatermarkRemover.App.Ocr;
-using WatermarkRemover.App.Updates;
+using WatermarkRemover.App.Logging;
 using WatermarkRemover.Core.Features;
 using WatermarkRemover.Core.Settings;
 
@@ -278,9 +277,7 @@ public sealed class FileJobViewModel : ObservableObject
     private void CopyErrorReport(object? parameter)
     {
         var report = new StringBuilder();
-        report.AppendLine($"应用版本：v{UpdateService.CurrentVersion}");
-        report.AppendLine($"系统：{Environment.OSVersion.VersionString}");
-        report.AppendLine($"进程：{(Environment.Is64BitProcess ? "64" : "32")} 位（{(Environment.Is64BitOperatingSystem ? "64" : "32")} 位系统）");
+        DiagnosticReportBuilder.AppendEnvironmentHeader(report);
         report.AppendLine($"时间：{ProcessedAt:yyyy-MM-dd HH:mm:ss}");
         report.AppendLine($"文件：{FileName}");
         if (!string.IsNullOrEmpty(_featureName))
@@ -288,8 +285,7 @@ public sealed class FileJobViewModel : ObservableObject
         report.AppendLine($"错误：{Detail}");
         report.AppendLine("---- 异常详情 ----");
         report.AppendLine(string.IsNullOrEmpty(_errorDetails) ? "（无异常详情）" : _errorDetails);
-        report.AppendLine("---- OCR 引擎 ----");
-        report.AppendLine(OcrDiagnostics.Current);
+        DiagnosticReportBuilder.AppendEngineSection(report);
 
         try
         {

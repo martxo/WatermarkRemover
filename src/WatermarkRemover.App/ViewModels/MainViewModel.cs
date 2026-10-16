@@ -4,6 +4,7 @@ using System.Windows;
 using Microsoft.VisualBasic.FileIO;
 using WatermarkRemover.App.Logging;
 using WatermarkRemover.App.Ocr;
+using WatermarkRemover.App.Services;
 using WatermarkRemover.App.Settings;
 using WatermarkRemover.Core.Features;
 using WatermarkRemover.Core.Features.Ocr;
@@ -40,11 +41,23 @@ public sealed class MainViewModel : ObservableObject
 
     private IFeature _selectedFeature;
     private readonly object _sync = new();
+    private readonly IDialogService _dialogs;
+    private readonly IShellOpenService _shell;
+    private readonly JobQueueService _queue = new();
     private bool _isBusy;
     private int _completedCount;
 
     public MainViewModel()
+        : this(DialogService.Default, ShellOpenService.Default)
     {
+    }
+
+    /// <summary>Service-injected constructor; tests drive the UI surface through fakes.</summary>
+    internal MainViewModel(IDialogService dialogs, IShellOpenService shell)
+    {
+        _dialogs = dialogs ?? throw new ArgumentNullException(nameof(dialogs));
+        _shell = shell ?? throw new ArgumentNullException(nameof(shell));
+
         Settings = SettingsService.Load();
         Jobs = new ObservableCollection<FileJobViewModel>();
         NavItems = new ObservableCollection<FeatureNavItemViewModel>(
@@ -58,56 +71,18 @@ public sealed class MainViewModel : ObservableObject
         SaveSettingsCommand = new RelayCommand(SaveSettings);
     }
 
-    /// <summary>
-    /// Engine chain, best quality first: WeChat's local engine recognises Chinese documents best,
-    /// then the bundled offline PP-OCR models (for machines without WeChat), then the OCR built
-    /// into Windows. Each step degrades safely — a machine missing one engine simply falls through
-    /// to the next instead of failing the job.
-    /// </summary>
+    /// <summary>Logs the resolved engine (and every skipped link) once per process.</summary>
     private static IOcrEngine CreateOcrEngine()
     {
-        if (WeChatOcrEngine.TryLocate(out WeChatOcrEngine? wechat, out string wechatReason))
+        foreach (OcrEngineLink link in AppOcrEngineChain.Instance.Links)
         {
-            AppLog.Info("OCR 引擎：微信本地 OCR");
-            return wechat!;
+            if (link.Available)
+                AppLog.Info($"OCR 引擎：{link.Name}");
+            else
+                AppLog.Info($"未启用 {link.Name}：{link.Reason}");
         }
 
-        AppLog.Info($"未启用微信 OCR 引擎：{wechatReason}");
-
-        if (PpOcrEngine.TryLocate(out PpOcrEngine? ppocr, out string ppocrReason))
-        {
-            AppLog.Info("OCR 引擎：PP-OCR（内置离线模型）");
-            return ppocr!;
-        }
-
-        AppLog.Info($"未启用 PP-OCR 引擎：{ppocrReason}");
-
-        try
-        {
-            var windows = new WindowsMediaOcrEngine();
-            AppLog.Info($"OCR 引擎：Windows 原生 OCR（可用：{windows.IsAvailable}）");
-            return windows;
-        }
-        catch (Exception ex)
-        {
-            // The WinRT OCR stack itself is missing/broken on some systems (REGDB_E_CLASSNOTREG);
-            // keep the chain alive with a stub so the failure is reported per job, not at startup.
-            AppLog.Error("Windows 原生 OCR 初始化失败", ex);
-            return new UnavailableOcrEngine($"微信 OCR 不可用（{wechatReason}）；PP-OCR 不可用（{ppocrReason}）；Windows OCR 初始化失败：{ex.Message}");
-        }
-    }
-
-    /// <summary>Terminal fallback: every call fails with the full diagnosis of the chain above.</summary>
-    private sealed class UnavailableOcrEngine : IOcrEngine
-    {
-        private readonly string _reason;
-
-        public UnavailableOcrEngine(string reason) => _reason = reason;
-
-        public string DisplayName => "无可用OCR引擎";
-
-        public Task<IReadOnlyList<string>> RecognizeAsync(byte[] imageBytes) =>
-            throw new InvalidOperationException($"此电脑没有可用的 OCR 引擎。\n{_reason}");
+        return AppOcrEngineChain.Instance.Engine;
     }
 
     public AppSettings Settings { get; }
@@ -237,59 +212,17 @@ public sealed class MainViewModel : ObservableObject
             // keeps editing the live object — the two can never interfere.
             var context = FeatureContext.Capture(Settings);
             int maxConcurrency = Math.Clamp(Settings.MaxConcurrency, 1, 8);
-            using var throttle = new SemaphoreSlim(maxConcurrency, maxConcurrency);
 
-            var tasks = jobs.Select(async job =>
+            await _queue.RunAsync(jobs, feature, context, maxConcurrency, job =>
             {
-                await throttle.WaitAsync().ConfigureAwait(false);
-                try
-                {
-                    await ProcessOneAsync(job, feature, context).ConfigureAwait(false);
-                }
-                finally
-                {
-                    throttle.Release();
-                }
-            });
-
-            await Task.WhenAll(tasks).ConfigureAwait(true);
+                lock (_sync) CompletedCount++;
+                MoveToTop(job);
+            }).ConfigureAwait(true);
         }
         finally
         {
             IsBusy = false;
         }
-    }
-
-    private Task ProcessOneAsync(FileJobViewModel job, IFeature feature, FeatureContext context)
-    {
-        return Task.Run(() =>
-        {
-            job.MarkProcessing();
-            try
-            {
-                if (!feature.CanHandle(job.InputPath))
-                {
-                    job.Apply(FeatureResult.Fail(job.InputPath, $"{feature.DisplayName}只支持 PDF 文件"));
-                    return;
-                }
-
-                FeatureResult result = feature.Run(job.InputPath, context);
-                job.Apply(result);
-                LogResult(result, feature);
-            }
-            catch (Exception ex)
-            {
-                // Features never throw for expected failures; this guards the queue against
-                // unexpected defects so one bad file cannot stall the whole batch.
-                AppLog.Error($"处理意外异常：{job.InputPath}", ex);
-                job.Apply(FeatureResult.Fail(job.InputPath, $"意外错误：{ex.Message}", ex, feature.DisplayName));
-            }
-            finally
-            {
-                lock (_sync) CompletedCount++;
-                MoveToTop(job);
-            }
-        });
     }
 
     /// <summary>
@@ -309,18 +242,6 @@ public sealed class MainViewModel : ObservableObject
 
         if (dispatcher.CheckAccess()) Move();
         else dispatcher.Invoke(Move);
-    }
-
-    private static void LogResult(FeatureResult result, IFeature feature)
-    {
-        string message = result.Status switch
-        {
-            FeatureStatus.Succeeded =>
-                $"{feature.DisplayName}完成：{result.InputPath} → {result.OutputPath}（{result.Summary}）",
-            FeatureStatus.NoChange => $"{feature.DisplayName}无输出：{result.InputPath}（{result.Summary}）",
-            _ => $"{feature.DisplayName}失败：{result.InputPath}（{result.Error}）",
-        };
-        AppLog.Info(message);
     }
 
     private void ClearJobs()
@@ -343,8 +264,7 @@ public sealed class MainViewModel : ObservableObject
         string message = hasOutput
             ? $"确定要删除「{job.DisplayName}」吗？\n\n已生成的文件将移入回收站，源文件不受影响。"
             : $"确定要删除「{job.FileName}」这条记录吗？";
-        MessageBoxResult confirm = MessageBox.Show(message, "删除确认", MessageBoxButton.OKCancel, MessageBoxImage.Warning);
-        if (confirm != MessageBoxResult.OK) return;
+        if (!_dialogs.Confirm(message, "删除确认")) return;
 
         try
         {
@@ -357,7 +277,7 @@ public sealed class MainViewModel : ObservableObject
         catch (Exception ex)
         {
             AppLog.Error($"删除生成文件失败：{job.OutputPath}", ex);
-            MessageBox.Show($"删除文件失败：{ex.Message}", "删除失败", MessageBoxButton.OK, MessageBoxImage.Error);
+            _dialogs.Error($"删除文件失败：{ex.Message}", "删除失败");
             return;
         }
 
@@ -414,30 +334,19 @@ public sealed class MainViewModel : ObservableObject
         catch (Exception ex)
         {
             AppLog.Error($"重命名失败：{job.OutputPath} → {newName}", ex);
-            MessageBox.Show($"重命名失败：{ex.Message}", "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
+            _dialogs.Warn($"重命名失败：{ex.Message}", "提示");
         }
     }
 
-    private static void OpenOutput(string? path)
+    private void OpenOutput(string? path)
     {
         if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) return;
 
-        try
-        {
-            // Reveal the file in Explorer rather than opening the PDF viewer.
-            string? directory = Path.GetDirectoryName(path);
-            if (directory != null)
-            {
-                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
-                {
-                    FileName = directory,
-                    UseShellExecute = true,
-                });
-            }
-        }
-        catch (Exception ex)
-        {
-            MessageBox.Show($"无法打开输出目录：{ex.Message}", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
-        }
+        // Reveal the file in Explorer rather than opening the PDF viewer.
+        string? directory = Path.GetDirectoryName(path);
+        if (directory is null) return;
+
+        if (!_shell.TryOpenDirectory(directory, out string? error))
+            _dialogs.Info($"无法打开输出目录：{error}", "提示");
     }
 }

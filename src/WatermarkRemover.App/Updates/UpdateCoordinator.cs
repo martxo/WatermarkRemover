@@ -1,6 +1,7 @@
 using System.Threading;
 using System.Windows;
 using WatermarkRemover.App.Logging;
+using WatermarkRemover.App.Services;
 using WatermarkRemover.Core.Settings;
 using WatermarkRemover.Core.Updates;
 
@@ -26,12 +27,13 @@ public static class UpdateCoordinator
     /// </summary>
     public static async Task RunCheckAsync(Window owner, AppSettings settings, bool silent)
     {
+        var dialogs = new DialogService(owner);
+
         if (!UpdateConfig.IsConfigured)
         {
             AppLog.Info("更新源未配置，跳过检查更新");
             if (!silent)
-                MessageBox.Show(owner, "更新源尚未配置（GitHub 仓库地址待填入）。", "软件更新",
-                    MessageBoxButton.OK, MessageBoxImage.Information);
+                dialogs.Info("更新源尚未配置（GitHub 仓库地址待填入）。", "软件更新");
             return;
         }
 
@@ -45,7 +47,7 @@ public static class UpdateCoordinator
 
         try
         {
-            await RunCheckCoreAsync(owner, silent).ConfigureAwait(true);
+            await RunCheckCoreAsync(owner, dialogs, silent).ConfigureAwait(true);
         }
         finally
         {
@@ -53,7 +55,7 @@ public static class UpdateCoordinator
         }
     }
 
-    private static async Task RunCheckCoreAsync(Window owner, bool silent)
+    private static async Task RunCheckCoreAsync(Window owner, IDialogService dialogs, bool silent)
     {
         // The manual path opens the progress window up front: the channel query can take up to
         // 15 seconds and must not look like a frozen button. The startup path stays invisible.
@@ -75,10 +77,10 @@ public static class UpdateCoordinator
             checkingWindow?.Close();
             AppLog.Error("检查更新失败", ex);
             if (!silent)
-                MessageBox.Show(owner,
+                dialogs.Warn(
                     "检查更新时出错，可能是网络不稳定。\n可稍后重试，或到发布页手动下载。\n\n" +
                     $"详情：{ex.Message}",
-                    "软件更新", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    "软件更新");
             return;
         }
 
@@ -91,29 +93,29 @@ public static class UpdateCoordinator
                 checkingWindow?.Close();
                 AppLog.Info($"当前已是最新版本 v{UpdateService.CurrentVersion}");
                 if (!silent)
-                    MessageBox.Show(owner,
+                    dialogs.Info(
                         $"当前已是最新版本（v{UpdateService.CurrentVersion}）。\n" +
                         $"更新通道最新发布：v{result.ChannelLatestVersion}",
-                        "软件更新", MessageBoxButton.OK, MessageBoxImage.Information);
+                        "软件更新");
                 return;
 
             case UpdateCheckStatus.NoUpdateSource:
                 checkingWindow?.Close();
                 AppLog.Info($"更新源不可用：{result.Message}");
                 if (!silent)
-                    MessageBox.Show(owner,
+                    dialogs.Info(
                         $"暂无可用的更新来源。\n\n{result.Message}",
-                        "软件更新", MessageBoxButton.OK, MessageBoxImage.Information);
+                        "软件更新");
                 return;
 
             default: // CheckFailed
                 checkingWindow?.Close();
                 AppLog.Info($"检查更新失败：{result.Message}");
                 if (!silent)
-                    MessageBox.Show(owner,
+                    dialogs.Warn(
                         "暂时无法连接更新服务器，请检查网络后重试。\n\n" +
                         $"详情：{result.Message}",
-                        "软件更新", MessageBoxButton.OK, MessageBoxImage.Warning);
+                        "软件更新");
                 return;
         }
 
@@ -121,25 +123,22 @@ public static class UpdateCoordinator
         AppLog.Info($"发现新版本 v{info.Version}（当前 v{UpdateService.CurrentVersion}）");
 
         // The confirmation belongs to the check, not to the download: close the "checking…"
-        // window so a modal MessageBox cannot sit on top of a live progress window.
+        // window so a modal dialog cannot sit on top of a live progress window.
         checkingWindow?.Close();
 
         string sizeText = info.SizeBytes > 0 ? $"约 {ProgressTextFormatter.FormatBytes(info.SizeBytes)}" : "未知大小";
-        MessageBoxResult choice = MessageBox.Show(
-            owner,
+        bool accepted = dialogs.ConfirmYesNo(
             $"发现新版本 v{info.Version}（当前 v{UpdateService.CurrentVersion}），是否立即下载并更新？\n\n" +
             $"更新包大小：{sizeText}\n" +
             "下载、校验均有进度显示，更新完成后程序会自动重启，无需重新安装。",
-            "软件更新",
-            MessageBoxButton.YesNo,
-            MessageBoxImage.Question);
+            "软件更新");
 
-        if (choice != MessageBoxResult.Yes) return;
+        if (!accepted) return;
 
-        await DownloadAndApplyAsync(owner, info).ConfigureAwait(true);
+        await DownloadAndApplyAsync(owner, dialogs, info).ConfigureAwait(true);
     }
 
-    private static async Task DownloadAndApplyAsync(Window owner, UpdateInfo info)
+    private static async Task DownloadAndApplyAsync(Window owner, IDialogService dialogs, UpdateInfo info)
     {
         var progressWindow = new UpdateProgressWindow { Owner = owner };
         // This Show() is the whole reason a progress window exists: without it the download runs
@@ -175,11 +174,11 @@ public static class UpdateCoordinator
         {
             AppLog.Error($"更新到 v{info.Version} 失败", ex);
             if (progressWindow.IsLoaded) progressWindow.Close();
-            MessageBox.Show(owner,
+            dialogs.Warn(
                 "更新失败，当前版本不受影响。\n\n" +
                 $"原因：{ex.Message}\n\n" +
                 $"可稍后在设置中重试，或到发布页手动下载：\n{info.ReleasePageUrl}",
-                "软件更新", MessageBoxButton.OK, MessageBoxImage.Warning);
+                "软件更新");
         }
         finally
         {

@@ -1,4 +1,3 @@
-using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
 using Windows.Storage.Streams;
@@ -25,36 +24,15 @@ public static class OcrDiagnostics
     {
         var sb = new StringBuilder();
 
-        sb.AppendLine($"微信 OCR：{(WeChatOcrEngine.TryLocate(out _, out string wechatReason) ? "可用" : $"不可用（{wechatReason}）")}");
-
-        // File probe only — loading the ONNX models here would burn seconds in a bug report.
-        string[] missing = new[] { "ch_PP-OCRv5_det_mobile.onnx", "ch_PP-LCNet_x0_25_textline_ori_cls_mobile.onnx", "ch_PP-OCRv5_rec_mobile.onnx", "ppocrv5_dict.txt" }
-            .Where(f => !File.Exists(AppAssets.Model(f)))
-            .ToArray();
-        sb.AppendLine(missing.Length == 0
-            ? "PP-OCR：模型就绪（未加载）"
-            : $"PP-OCR：模型文件缺失（{string.Join("、", missing)}）");
-
-        sb.AppendLine($"Windows 原生 OCR：{DescribeWindowsOcr()}");
+        // The engine chain was already probed at startup — read the cached result instead of
+        // re-probing, so the report always matches what the job actually used.
+        sb.AppendLine(AppOcrEngineChain.Instance.Describe());
 
         // The PDF renderer used to go through WinRT too; record whether the OS PDF stack still
         // answers — that activation is what threw REGDB_E_CLASSNOTREG before the pdfium switch.
         sb.AppendLine($"Windows.Data.Pdf 组件：{(IsWinRtPdfAvailable() ? "可用" : "缺失/未注册（已由内置 PDFium 顶替）")}");
 
         return sb.ToString();
-    }
-
-    private static string DescribeWindowsOcr()
-    {
-        try
-        {
-            var engine = new WindowsMediaOcrEngine();
-            return engine.IsAvailable ? "可用" : "不可用（缺少 OCR 语言包）";
-        }
-        catch (Exception ex)
-        {
-            return $"初始化失败（{ex.Message}）";
-        }
     }
 
     /// <summary>

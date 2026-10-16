@@ -7,7 +7,7 @@
         Width="960" Height="680"
         MinWidth="760" MinHeight="520"
         WindowStartupLocation="CenterScreen"
-        Background="#FFF6F7F9"
+        Background="{StaticResource PageBrush}"
         AllowDrop="True"
         PreviewMouseDown="OnWindowPreviewMouseDown"
         Deactivated="OnWindowDeactivated"
@@ -24,193 +24,8 @@
     </WindowChrome.WindowChrome>
 
     <Window.Resources>
-        <!-- Palette -->
-        <SolidColorBrush x:Key="AccentBrush" Color="#FF4F6EF7"/>
-        <SolidColorBrush x:Key="AccentSoftBrush" Color="#FFEEF1FE"/>
-        <SolidColorBrush x:Key="SurfaceBrush" Color="#FFFFFFFF"/>
-        <SolidColorBrush x:Key="BorderBrushLight" Color="#FFE4E7ED"/>
-        <SolidColorBrush x:Key="TextPrimaryBrush" Color="#FF1A1D26"/>
-        <SolidColorBrush x:Key="TextSecondaryBrush" Color="#FF6B7280"/>
-        <SolidColorBrush x:Key="SuccessBrush" Color="#FF10B981"/>
-        <SolidColorBrush x:Key="WarningBrush" Color="#FFF59E0B"/>
-        <SolidColorBrush x:Key="DangerBrush" Color="#FFEF4444"/>
-        <BooleanToVisibilityConverter x:Key="BoolToVis"/>
-
-        <Style x:Key="CardBorder" TargetType="Border">
-            <Setter Property="Background" Value="{StaticResource SurfaceBrush}"/>
-            <Setter Property="BorderBrush" Value="{StaticResource BorderBrushLight}"/>
-            <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="CornerRadius" Value="12"/>
-            <Setter Property="Padding" Value="20"/>
-        </Style>
-
-        <Style x:Key="PrimaryButton" TargetType="Button">
-            <Setter Property="Background" Value="{StaticResource AccentBrush}"/>
-            <Setter Property="Foreground" Value="White"/>
-            <Setter Property="FontSize" Value="13"/>
-            <Setter Property="FontWeight" Value="SemiBold"/>
-            <Setter Property="Padding" Value="16,9"/>
-            <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border Background="{TemplateBinding Background}"
-                                CornerRadius="8"
-                                Padding="{TemplateBinding Padding}">
-                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter Property="Background" Value="#FF4058E0"/>
-                            </Trigger>
-                            <Trigger Property="IsEnabled" Value="False">
-                                <Setter Property="Background" Value="#FFB4BCE8"/>
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-
-        <Style x:Key="GhostButton" TargetType="Button">
-            <Setter Property="Background" Value="Transparent"/>
-            <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}"/>
-            <Setter Property="FontSize" Value="13"/>
-            <Setter Property="Padding" Value="14,9"/>
-            <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border Background="{TemplateBinding Background}"
-                                CornerRadius="8"
-                                Padding="{TemplateBinding Padding}"
-                                BorderBrush="{StaticResource BorderBrushLight}"
-                                BorderThickness="1">
-                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                        </Border>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-
-        <!-- Flat caption buttons drawn by us (the system ones are gone with GlassFrameThickness=0) -->
-        <Style x:Key="CaptionButton" TargetType="Button">
-            <Setter Property="Width" Value="46"/>
-            <Setter Property="Height" Value="44"/>
-            <Setter Property="Background" Value="Transparent"/>
-            <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
-            <Setter Property="FontFamily" Value="Segoe MDL2 Assets"/>
-            <Setter Property="FontSize" Value="10"/>
-            <Setter Property="Focusable" Value="False"/>
-            <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="WindowChrome.IsHitTestVisibleInChrome" Value="True"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border Background="{TemplateBinding Background}">
-                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                        </Border>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-            <Style.Triggers>
-                <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background" Value="#FFF1F3F7"/>
-                </Trigger>
-            </Style.Triggers>
-        </Style>
-
-        <Style x:Key="CloseCaptionButton" TargetType="Button" BasedOn="{StaticResource CaptionButton}">
-            <Style.Triggers>
-                <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background" Value="#FFE81123"/>
-                    <Setter Property="Foreground" Value="White"/>
-                </Trigger>
-            </Style.Triggers>
-        </Style>
-
-        <!-- Copy-error pill shown on failed rows: puts the full diagnostic report on the clipboard -->
-        <Style x:Key="RowCopyErrorButton" TargetType="Button">
-            <Setter Property="Background" Value="#FFF1F3F7"/>
-            <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}"/>
-            <Setter Property="FontSize" Value="12"/>
-            <Setter Property="Padding" Value="10,4"/>
-            <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="Content" Value="复制报错"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border Background="{TemplateBinding Background}"
-                                CornerRadius="12"
-                                Padding="{TemplateBinding Padding}">
-                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                        </Border>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-            <Style.Triggers>
-                <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background" Value="{StaticResource AccentSoftBrush}"/>
-                    <Setter Property="Foreground" Value="{StaticResource AccentBrush}"/>
-                </Trigger>
-            </Style.Triggers>
-        </Style>
-
-        <!-- Compact per-row delete: quiet grey pill that turns red on hover — destructive affordance -->
-        <Style x:Key="RowDeleteButton" TargetType="Button">
-            <Setter Property="Background" Value="Transparent"/>
-            <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}"/>
-            <Setter Property="FontSize" Value="12"/>
-            <Setter Property="Padding" Value="10,4"/>
-            <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="Content" Value="删除"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border Background="{TemplateBinding Background}"
-                                CornerRadius="12"
-                                Padding="{TemplateBinding Padding}">
-                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                        </Border>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-            <Style.Triggers>
-                <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background" Value="#FFFDECEC"/>
-                    <Setter Property="Foreground" Value="{StaticResource DangerBrush}"/>
-                </Trigger>
-                <Trigger Property="IsEnabled" Value="False">
-                    <Setter Property="Foreground" Value="#FFC4C9D4"/>
-                </Trigger>
-            </Style.Triggers>
-        </Style>
-
-        <!-- Sidebar bottom row (like a profile area): settings entry + version, separated by a line -->
-        <Style x:Key="SidebarRowButton" TargetType="Button">
-            <Setter Property="Background" Value="Transparent"/>
-            <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
-            <Setter Property="FontSize" Value="13"/>
-            <Setter Property="Padding" Value="12,9"/>
-            <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="HorizontalContentAlignment" Value="Left"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border Background="{TemplateBinding Background}"
-                                CornerRadius="8"
-                                Padding="{TemplateBinding Padding}">
-                            <ContentPresenter VerticalAlignment="Center"/>
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter Property="Background" Value="#FFF1F3F7"/>
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
+        <!-- Palette and shared control styles live in Themes/ (merged in App.xaml).
+             Only window-specific templates stay here. -->
 
         <!-- Shared chip template: used by the inline row and by the expanded wrap row below the name -->
         <DataTemplate DataType="{x:Type vm:SuffixChipViewModel}">
@@ -222,7 +37,7 @@
                     ToolTip="点击把该后缀加到文件名末尾；再次点击取消">
                 <Button.Style>
                     <Style TargetType="Button">
-                        <Setter Property="Background" Value="#FFF1F3F7"/>
+                        <Setter Property="Background" Value="{StaticResource SurfaceAltBrush}"/>
                         <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}"/>
                         <Setter Property="FontSize" Value="12"/>
                         <Setter Property="Padding" Value="12,4"/>
@@ -327,7 +142,7 @@
                                         </Border>
                                         <ControlTemplate.Triggers>
                                             <Trigger Property="IsMouseOver" Value="True">
-                                                <Setter TargetName="Root" Property="Background" Value="#FFF1F3F7"/>
+                                                <Setter TargetName="Root" Property="Background" Value="{StaticResource SurfaceAltBrush}"/>
                                             </Trigger>
                                             <Trigger Property="IsSelected" Value="True">
                                                 <Setter TargetName="Root" Property="Background" Value="{StaticResource AccentSoftBrush}"/>
@@ -527,7 +342,7 @@
                                                                     <Setter Property="Visibility" Value="Collapsed"/>
                                                                 </DataTrigger>
                                                                 <Trigger Property="IsMouseOver" Value="True">
-                                                                    <Setter Property="Background" Value="#FFEDF0F6"/>
+                                                                    <Setter Property="Background" Value="{StaticResource HoverSurfaceBrush}"/>
                                                                 </Trigger>
                                                             </Style.Triggers>
                                                         </Style>
@@ -590,7 +405,7 @@
                                                     Visibility="{Binding HasMoreChips, Converter={StaticResource BoolToVis}}">
                                                 <Button.Style>
                                                     <Style TargetType="Button">
-                                                        <Setter Property="Background" Value="#FFF1F3F7"/>
+                                                        <Setter Property="Background" Value="{StaticResource SurfaceAltBrush}"/>
                                                         <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}"/>
                                                         <Setter Property="Content" Value="▾"/>
                                                         <Setter Property="FontSize" Value="12"/>
@@ -703,13 +518,13 @@
                                                 Visibility="{Binding ShowStatusChip, Converter={StaticResource BoolToVis}}">
                                             <Border.Style>
                                                 <Style TargetType="Border">
-                                                    <Setter Property="Background" Value="#FFF1F3F7"/>
+                                                    <Setter Property="Background" Value="{StaticResource SurfaceAltBrush}"/>
                                                     <Style.Triggers>
                                                         <DataTrigger Binding="{Binding State}" Value="Succeeded">
-                                                            <Setter Property="Background" Value="#FFE7F8F1"/>
+                                                            <Setter Property="Background" Value="{StaticResource SuccessSurfaceBrush}"/>
                                                         </DataTrigger>
                                                         <DataTrigger Binding="{Binding State}" Value="Failed">
-                                                            <Setter Property="Background" Value="#FFFDECEC"/>
+                                                            <Setter Property="Background" Value="{StaticResource DangerSurfaceBrush}"/>
                                                         </DataTrigger>
                                                         <DataTrigger Binding="{Binding State}" Value="Processing">
                                                             <Setter Property="Background" Value="{StaticResource AccentSoftBrush}"/>

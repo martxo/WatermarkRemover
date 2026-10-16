@@ -82,4 +82,22 @@ public sealed class FeatureResult
     public static FeatureResult FailWithDetails(
         string inputPath, string error, string? details, string? featureName = null) =>
         new(FeatureStatus.Failed, inputPath, null, null, 0, error, details, featureName);
+
+    /// <summary>
+    /// Maps a pipeline outcome to the feature contract: succeeded results carry the mark count
+    /// and a summary, "no watermark" becomes <see cref="FeatureStatus.NoChange"/>, and failures
+    /// keep their diagnostic details.
+    /// </summary>
+    public static FeatureResult From(Processing.ProcessingResult result, string featureName, string successSummary)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        return result.Status switch
+        {
+            Processing.ProcessingStatus.Succeeded => Success(
+                result.InputPath, result.OutputPath!, successSummary, result.Marks.Count),
+            Processing.ProcessingStatus.NoWatermarkFound => NoChange(result.InputPath, "未检测到水印"),
+            _ => FailWithDetails(
+                result.InputPath, result.Error ?? "处理失败", result.ErrorDetails, featureName),
+        };
+    }
 }

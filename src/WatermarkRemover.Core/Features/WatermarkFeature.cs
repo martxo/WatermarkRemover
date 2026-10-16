@@ -56,14 +56,7 @@ public sealed class WatermarkFeature : IFeature
             context.Settings.AutoNameByContent ? TryAutoName : null);
         ProcessingResult result = processor.Process(inputPath);
 
-        return result.Status switch
-        {
-            ProcessingStatus.Succeeded => FeatureResult.Success(
-                inputPath, result.OutputPath!, $"已去除 {result.Marks.Count} 处水印", result.Marks.Count),
-            ProcessingStatus.NoWatermarkFound => FeatureResult.NoChange(inputPath, "未检测到水印"),
-            _ => FeatureResult.FailWithDetails(
-                inputPath, result.Error ?? "处理失败", result.ErrorDetails, DisplayName),
-        };
+        return FeatureResult.From(result, DisplayName, $"已去除 {result.Marks.Count} 处水印");
     }
 
     /// <summary>

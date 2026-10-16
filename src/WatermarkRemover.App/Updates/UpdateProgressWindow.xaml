@@ -6,7 +6,7 @@
         WindowStartupLocation="CenterOwner"
         ResizeMode="NoResize"
         WindowStyle="ToolWindow"
-        Background="#FFF6F7F9">
+        Background="{StaticResource PageBrush}">
 
     <Grid Margin="20">
         <Grid.RowDefinitions>
@@ -21,36 +21,36 @@
         <!-- stage label: 正在检查更新… / 正在下载 v1.8.0… / 正在校验更新包… / 更新完成，即将重启 -->
         <TextBlock Grid.Row="0" x:Name="TitleText"
                    Text="正在准备更新…"
-                   FontSize="14" FontWeight="SemiBold" Foreground="#FF1A1D26"
+                   FontSize="14" FontWeight="SemiBold" Foreground="{StaticResource TextPrimaryBrush}"
                    Margin="0,0,0,12"/>
 
         <ProgressBar Grid.Row="1" x:Name="Bar"
                      Height="8" Minimum="0" Maximum="100"
                      IsIndeterminate="True"
-                     Foreground="#FF4F6EF7" Background="#FFE4E7ED"/>
+                     Foreground="{StaticResource AccentBrush}" Background="{StaticResource BorderBrushLight}"/>
 
         <!-- live numbers: 已下载 45.2 MB / 122.0 MB · 3.1 MB/s · 约需 25 秒 -->
         <TextBlock Grid.Row="2" x:Name="DetailText"
                    Text=""
-                   FontSize="12" Foreground="#FF6B7280"
+                   FontSize="12" Foreground="{StaticResource TextSecondaryBrush}"
                    Margin="0,10,0,0"/>
 
         <!-- download channel: 来源：备用通道 ghfast.top -->
         <TextBlock Grid.Row="3" x:Name="SourceText"
                    Text=""
-                   FontSize="11" Foreground="#FF9AA1AC"
+                   FontSize="11" Foreground="{StaticResource TextTertiaryBrush}"
                    Margin="0,4,0,0"/>
 
         <StackPanel Grid.Row="5" Orientation="Horizontal">
             <TextBlock x:Name="PercentText" Text=""
-                       FontSize="12" Foreground="#FF6B7280" VerticalAlignment="Center"/>
+                       FontSize="12" Foreground="{StaticResource TextSecondaryBrush}" VerticalAlignment="Center"/>
             <Button x:Name="CancelButton" Content="取消更新" Margin="20,0,0,0" Padding="16,6"
                     FontSize="12" Cursor="Hand" Click="OnCancel">
                 <Button.Template>
                     <ControlTemplate TargetType="Button">
                         <Border Background="{TemplateBinding Background}" CornerRadius="6"
                                 Padding="{TemplateBinding Padding}"
-                                BorderBrush="#FFE4E7ED" BorderThickness="1">
+                                BorderBrush="{StaticResource BorderBrushLight}" BorderThickness="1">
                             <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
                         </Border>
                     </ControlTemplate>
