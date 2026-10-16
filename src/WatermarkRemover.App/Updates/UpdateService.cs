@@ -160,7 +160,8 @@ public sealed class UpdateService
         IProgress<double> progress,
         CancellationToken cancellationToken)
     {
-        string targetPath = Path.Combine(Path.GetTempPath(), $"WatermarkRemover-{info.Version}.exe");
+        string extension = Path.GetExtension(UpdateConfig.AssetName);
+        string targetPath = Path.Combine(Path.GetTempPath(), $"WatermarkRemover-{info.Version}{extension}");
         Exception? lastError = null;
 
         foreach (string url in DownloadCandidates(info.DownloadUrl))

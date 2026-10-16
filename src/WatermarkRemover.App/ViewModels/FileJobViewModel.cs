@@ -1,5 +1,9 @@
 using System.Collections.ObjectModel;
 using System.IO;
+using System.Text;
+using System.Windows;
+using WatermarkRemover.App.Ocr;
+using WatermarkRemover.App.Updates;
 using WatermarkRemover.Core.Features;
 using WatermarkRemover.Core.Settings;
 
@@ -23,6 +27,8 @@ public sealed class FileJobViewModel : ObservableObject
     private JobState _state = JobState.Queued;
     private string _detail = "等待处理";
     private string? _outputPath;
+    private string? _errorDetails;
+    private string? _featureName;
     private int _itemCount;
     private string _resultSummary = "已处理";
     private DateTime? _processedAt;
@@ -49,6 +55,7 @@ public sealed class FileJobViewModel : ObservableObject
         CancelEditCommand = new RelayCommand(CancelEdit, () => IsEditing);
         ToggleSuffixCommand = new RelayCommand(p => ToggleSuffix(p as SuffixChipViewModel), p => IsRenamable && !IsEditing);
         ToggleSuffixDropdownCommand = new RelayCommand(ToggleSuffixDropdown, () => IsRenamable);
+        CopyErrorCommand = new RelayCommand(CopyErrorReport, _ => State == JobState.Failed);
     }
 
     /// <summary>Raised when the user commits an edited name. The coordinator performs the move.</summary>
@@ -84,6 +91,7 @@ public sealed class FileJobViewModel : ObservableObject
             {
                 OnPropertyChanged(nameof(StateText));
                 OnPropertyChanged(nameof(ShowStatusChip));
+                OnPropertyChanged(nameof(ShowCopyError));
             }
         }
     }
@@ -103,6 +111,9 @@ public sealed class FileJobViewModel : ObservableObject
     /// (done / skipped) say nothing the user needs — the delete button takes that spot instead.
     /// </summary>
     public bool ShowStatusChip => State is JobState.Queued or JobState.Processing or JobState.Failed;
+
+    /// <summary>Only a failed job has a diagnostic worth copying.</summary>
+    public bool ShowCopyError => State == JobState.Failed;
 
     public string Detail
     {
@@ -201,6 +212,9 @@ public sealed class FileJobViewModel : ObservableObject
 
     public RelayCommand ToggleSuffixDropdownCommand { get; }
 
+    /// <summary>Copies a full diagnostic report of this failure to the clipboard for bug reports.</summary>
+    public RelayCommand CopyErrorCommand { get; }
+
     /// <summary>How many discrete items the feature acted on (watermarks removed, pages recognised…).</summary>
     public int ItemCount
     {
@@ -230,6 +244,8 @@ public sealed class FileJobViewModel : ObservableObject
     public void Apply(FeatureResult result)
     {
         ProcessedAt = DateTime.Now;
+        _errorDetails = result.ErrorDetails;
+        _featureName = result.FeatureName;
         switch (result.Status)
         {
             case FeatureStatus.Succeeded:
@@ -251,6 +267,38 @@ public sealed class FileJobViewModel : ObservableObject
                 State = JobState.Failed;
                 Detail = result.Error ?? "处理失败";
                 break;
+        }
+    }
+
+    /// <summary>
+    /// Puts a self-contained failure report on the clipboard: app/OS context, the file and feature
+    /// involved, and the full exception dump. A user pastes it straight into a bug report, which is
+    /// enough to diagnose the machine remotely (engine chain, HRESULTs, stack traces).
+    /// </summary>
+    private void CopyErrorReport(object? parameter)
+    {
+        var report = new StringBuilder();
+        report.AppendLine($"应用版本：v{UpdateService.CurrentVersion}");
+        report.AppendLine($"系统：{Environment.OSVersion.VersionString}");
+        report.AppendLine($"进程：{(Environment.Is64BitProcess ? "64" : "32")} 位（{(Environment.Is64BitOperatingSystem ? "64" : "32")} 位系统）");
+        report.AppendLine($"时间：{ProcessedAt:yyyy-MM-dd HH:mm:ss}");
+        report.AppendLine($"文件：{FileName}");
+        if (!string.IsNullOrEmpty(_featureName))
+            report.AppendLine($"功能：{_featureName}");
+        report.AppendLine($"错误：{Detail}");
+        report.AppendLine("---- 异常详情 ----");
+        report.AppendLine(string.IsNullOrEmpty(_errorDetails) ? "（无异常详情）" : _errorDetails);
+        report.AppendLine("---- OCR 引擎 ----");
+        report.AppendLine(OcrDiagnostics.Current);
+
+        try
+        {
+            Clipboard.SetText(report.ToString());
+            Detail = "报错信息已复制到剪贴板";
+        }
+        catch (Exception ex)
+        {
+            Detail = $"复制失败：{ex.Message}";
         }
     }
 

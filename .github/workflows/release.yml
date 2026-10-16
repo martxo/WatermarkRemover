@@ -32,6 +32,14 @@ jobs:
           Remove-Item publish/*.pdb -ErrorAction SilentlyContinue
           "Building version $version from tag $env:GITHUB_REF_NAME"
 
+      - name: Package exe + models as zip
+        shell: pwsh
+        run: |
+          # The app ships as exe + Models\ (PP-OCR models); the zip lets updates refresh both.
+          # The bare exe is still uploaded so pre-1.7 clients can keep upgrading.
+          Compress-Archive -Path publish/* -DestinationPath WatermarkRemover.zip -Force
+          Get-ChildItem publish | Select-Object Name, Length
+
       - name: Create release with exe
         uses: softprops/action-gh-release@v2
         with:
@@ -39,5 +47,8 @@ jobs:
           body: |
             自动构建版本 ${{ github.ref_name }}。
 
-            下载 `WatermarkRemover.exe` 双击即用，无需安装；老版本可在应用内一键升级。
-          files: publish/WatermarkRemover.exe
+            推荐下载 `WatermarkRemover.zip`，解压后双击 `WatermarkRemover.exe` 即用，无需安装；
+            `WatermarkRemover.exe`（单文件版）兼容老版本的自动升级通道。
+          files: |
+            WatermarkRemover.zip
+            publish/WatermarkRemover.exe

@@ -5,6 +5,15 @@
     <ProjectReference Include="..\WatermarkRemover.Pdf\WatermarkRemover.Pdf.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- PDF page rendering through pdfium: works where WinRT's Windows.Data.Pdf is missing
+         (Windows N / LTSC / stripped systems), which surfaced as REGDB_E_CLASSNOTREG 0x80040154. -->
+    <PackageReference Include="Docnet.Core" Version="2.6.0" />
+    <!-- PP-OCR (PaddleOCR ONNX) recognition for machines without WeChat. -->
+    <PackageReference Include="RapidOcrNet" Version="4.2.0" />
+    <PackageReference Include="SkiaSharp" Version="3.119.1" />
+  </ItemGroup>
+
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <!-- windows10.0.19041 brings WinRT projections (Windows.Media.Ocr, Windows.Data.Pdf). -->
@@ -15,19 +24,85 @@
     <AssemblyName>WatermarkRemover</AssemblyName>
     <RootNamespace>WatermarkRemover.App</RootNamespace>
     <ApplicationIcon Condition="Exists('app.ico')">app.ico</ApplicationIcon>
-    <Version>1.6.0</Version>
+    <Version>1.7.0</Version>
     <AssemblyVersion>$(Version)</AssemblyVersion>
     <FileVersion>$(Version)</FileVersion>
     <Product>Watermark Remover</Product>
     <Company>WatermarkRemover</Company>
   </PropertyGroup>
 
-  <!-- wcocr shim (github.com/swigger/wechat-ocr, x64 prebuilt): drives WeChat's offline OCR. -->
+  <!-- DEPLOY LAYOUT MANIFEST — the contract verified by VerifyPublishLayout below.
+       Every file that must sit beside the exe is listed here with its intended location. When a
+       feature needs a new sidecar asset, add its copy item below AND its expected path here; the
+       publish gate then fails loudly instead of shipping a broken layout. -->
   <ItemGroup>
-    <None Include="Native\wcocr.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest">
+    <SidecarAsset Include="wcocr.dll" />
+    <SidecarAsset Include="Models\ch_PP-OCRv5_det_mobile.onnx" />
+    <SidecarAsset Include="Models\ch_PP-LCNet_x0_25_textline_ori_cls_mobile.onnx" />
+    <SidecarAsset Include="Models\ch_PP-OCRv5_rec_mobile.onnx" />
+    <SidecarAsset Include="Models\ppocrv5_dict.txt" />
+  </ItemGroup>
+
+  <!-- wcocr shim (github.com/swigger/wechat-ocr, x64 prebuilt): drives WeChat's offline OCR.
+       ExcludeFromSingleFile keeps it beside the exe; bundled inside, P/Invoke probing depends on
+       the runtime extraction directory and breaks silently. -->
+  <ItemGroup>
+    <None Include="Native\wcocr.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true">
       <Link>wcocr.dll</Link>
     </None>
   </ItemGroup>
+
+  <!-- PP-OCRv5 mobile Chinese model set (det + cls + rec + dict, ~21.5 MB, RapidAI/PaddleOCR,
+       Apache-2.0). Kept next to the exe — not inside the single-file bundle — so a model file can
+       be replaced without rebuilding, and the updater can refresh it alongside the executable.
+       ExcludeFromSingleFile is required: without it the bundler pulls content files into the exe. -->
+  <ItemGroup>
+    <None Update="Models\**" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
+  </ItemGroup>
+
+  <!-- ONNX Runtime's package publishes its import-library files (*.lib); nothing links against
+       them at runtime — keep the shipped package free of dev artifacts. -->
+  <Target Name="DropDevArtifactsFromPublish" AfterTargets="Publish">
+    <ItemGroup>
+      <DevArtifacts Include="$(PublishDir)*.lib" />
+    </ItemGroup>
+    <Delete Files="@(DevArtifacts)" />
+  </Target>
+
+  <!-- RapidOcrNet's package targets copy its bundled PP-OCRv5 *latin* models into models\v5\ next
+       to the binary; this app uses its own Chinese set in Models\ (PpOcrEngine passes explicit
+       paths), so drop the unused latin bundle to keep the shipped payload lean. On Windows
+       models\v5 resolves to the same directory as Models\v5 — delete only that subdirectory, the
+       Chinese set lives directly in Models\. -->
+  <Target Name="DropBundledLatinModelsBuild" AfterTargets="CopyModelsBuild">
+    <RemoveDir Directories="$(TargetDir)Models\v5" />
+  </Target>
+
+  <Target Name="DropBundledLatinModelsPublish" AfterTargets="CopyModelsPublish">
+    <RemoveDir Directories="$(PublishDir)Models\v5" />
+  </Target>
+
+  <!-- PUBLISH GATE — turns "asset missing on the user's machine" (a runtime failure discovered on
+       some other PC) into a build failure here. Runs last, after every drop/cleanup target:
+       1. every SidecarAsset in the manifest exists next to the exe,
+       2. dev artifacts (*.lib) did not leak into the publish directory.
+       The manifest itself is what keeps assets out of the single-file bundle: each sidecar carries
+       ExcludeFromSingleFile, and a missing file here means that rule was lost.
+       Bypass with: dotnet publish -p:SkipPublishLayoutCheck=true -->
+  <Target Name="VerifyPublishLayout" AfterTargets="Publish" Condition="'$(SkipPublishLayoutCheck)' != 'true'">
+    <ItemGroup>
+      <_MissingAsset Include="@(SidecarAsset)" Condition="!Exists('$(PublishDir)%(Identity)')" />
+      <_LeakedArtifact Include="$(PublishDir)*.lib" />
+    </ItemGroup>
+
+    <Error Condition="'@(_MissingAsset)' != ''"
+           Text="发布布局校验失败：缺少旁挂资源 $(PublishDir)@(_MissingAsset)。请检查 csproj 的 SidecarAsset 清单与对应复制项。" />
+
+    <Error Condition="'@(_LeakedArtifact)' != ''"
+           Text="发布布局校验失败：开发文件泄露进发布目录 @(_LeakedArtifact)。" />
+
+    <Message Importance="high" Text="发布布局校验通过：@(SidecarAsset->Count()) 个旁挂资源就位，无开发文件泄露。" />
+  </Target>
 
   <!-- Single-file, self-contained publish: run on any Windows machine with no install. -->
   <PropertyGroup Condition="'$(Configuration)' == 'Release'">

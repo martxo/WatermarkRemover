@@ -129,6 +129,33 @@
             </Style.Triggers>
         </Style>
 
+        <!-- Copy-error pill shown on failed rows: puts the full diagnostic report on the clipboard -->
+        <Style x:Key="RowCopyErrorButton" TargetType="Button">
+            <Setter Property="Background" Value="#FFF1F3F7"/>
+            <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Padding" Value="10,4"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Content" Value="复制报错"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}"
+                                CornerRadius="12"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="{StaticResource AccentSoftBrush}"/>
+                    <Setter Property="Foreground" Value="{StaticResource AccentBrush}"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
         <!-- Compact per-row delete: quiet grey pill that turns red on hover — destructive affordance -->
         <Style x:Key="RowDeleteButton" TargetType="Button">
             <Setter Property="Background" Value="Transparent"/>
@@ -709,6 +736,13 @@
                                                 </TextBlock.Style>
                                             </TextBlock>
                                         </Border>
+
+                                        <!-- failed rows only: copy a full diagnostic report for bug reports -->
+                                        <Button Style="{StaticResource RowCopyErrorButton}"
+                                                Margin="0,0,8,0"
+                                                Visibility="{Binding ShowCopyError, Converter={StaticResource BoolToVis}}"
+                                                Command="{Binding CopyErrorCommand}"
+                                                ToolTip="复制完整报错信息（含系统环境与异常堆栈）用于反馈问题"/>
 
                                         <Button Style="{StaticResource RowDeleteButton}"
                                                 Command="{Binding DataContext.DeleteJobCommand, RelativeSource={RelativeSource AncestorType=Window}}"

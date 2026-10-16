@@ -28,9 +28,9 @@ public sealed class MainViewModel : ObservableObject
         new WatermarkFeature(
             new PdfDocumentSource(),
             new IWatermarkStrategy[] { new BottomRightBadgeStrategy() },
-            new WinRtPdfPageRenderer(),
+            new PdfiumPdfPageRenderer(),
             SharedOcrEngine),
-        new OcrFeature(new WinRtPdfPageRenderer(), SharedOcrEngine),
+        new OcrFeature(new PdfiumPdfPageRenderer(), SharedOcrEngine),
     });
 
     private IFeature _selectedFeature;
@@ -54,20 +54,55 @@ public sealed class MainViewModel : ObservableObject
     }
 
     /// <summary>
-    /// WeChat's local engine recognises Chinese documents far better than the system one, so it
-    /// is preferred whenever the machine has a WeChat install; otherwise fall back to the
-    /// zero-dependency Windows OCR.
+    /// Engine chain, best quality first: WeChat's local engine recognises Chinese documents best,
+    /// then the bundled offline PP-OCR models (for machines without WeChat), then the OCR built
+    /// into Windows. Each step degrades safely — a machine missing one engine simply falls through
+    /// to the next instead of failing the job.
     /// </summary>
     private static IOcrEngine CreateOcrEngine()
     {
-        if (WeChatOcrEngine.TryLocate(out WeChatOcrEngine? wechat, out string reason))
+        if (WeChatOcrEngine.TryLocate(out WeChatOcrEngine? wechat, out string wechatReason))
         {
             AppLog.Info("OCR 引擎：微信本地 OCR");
             return wechat!;
         }
 
-        AppLog.Info($"OCR 引擎：Windows 原生 OCR（未启用微信引擎：{reason}）");
-        return new WindowsMediaOcrEngine();
+        AppLog.Info($"未启用微信 OCR 引擎：{wechatReason}");
+
+        if (PpOcrEngine.TryLocate(out PpOcrEngine? ppocr, out string ppocrReason))
+        {
+            AppLog.Info("OCR 引擎：PP-OCR（内置离线模型）");
+            return ppocr!;
+        }
+
+        AppLog.Info($"未启用 PP-OCR 引擎：{ppocrReason}");
+
+        try
+        {
+            var windows = new WindowsMediaOcrEngine();
+            AppLog.Info($"OCR 引擎：Windows 原生 OCR（可用：{windows.IsAvailable}）");
+            return windows;
+        }
+        catch (Exception ex)
+        {
+            // The WinRT OCR stack itself is missing/broken on some systems (REGDB_E_CLASSNOTREG);
+            // keep the chain alive with a stub so the failure is reported per job, not at startup.
+            AppLog.Error("Windows 原生 OCR 初始化失败", ex);
+            return new UnavailableOcrEngine($"微信 OCR 不可用（{wechatReason}）；PP-OCR 不可用（{ppocrReason}）；Windows OCR 初始化失败：{ex.Message}");
+        }
+    }
+
+    /// <summary>Terminal fallback: every call fails with the full diagnosis of the chain above.</summary>
+    private sealed class UnavailableOcrEngine : IOcrEngine
+    {
+        private readonly string _reason;
+
+        public UnavailableOcrEngine(string reason) => _reason = reason;
+
+        public string DisplayName => "无可用OCR引擎";
+
+        public Task<IReadOnlyList<string>> RecognizeAsync(byte[] imageBytes) =>
+            throw new InvalidOperationException($"此电脑没有可用的 OCR 引擎。\n{_reason}");
     }
 
     public AppSettings Settings { get; }
@@ -242,7 +277,7 @@ public sealed class MainViewModel : ObservableObject
                 // Features never throw for expected failures; this guards the queue against
                 // unexpected defects so one bad file cannot stall the whole batch.
                 AppLog.Error($"处理意外异常：{job.InputPath}", ex);
-                job.Apply(FeatureResult.Fail(job.InputPath, $"意外错误：{ex.Message}"));
+                job.Apply(FeatureResult.Fail(job.InputPath, $"意外错误：{ex.Message}", ex, feature.DisplayName));
             }
             finally
             {

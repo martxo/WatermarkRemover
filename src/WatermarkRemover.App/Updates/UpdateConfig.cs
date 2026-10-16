@@ -10,8 +10,13 @@ public static class UpdateConfig
     /// <summary>GitHub repository hosting the releases, as "owner/repo".</summary>
     public const string Repository = "martxo/WatermarkRemover";
 
-    /// <summary>Name of the release asset that contains the app executable.</summary>
-    public const string AssetName = "WatermarkRemover.exe";
+    /// <summary>
+    /// Name of the release asset that contains the app. Since v1.7.0 the app ships as a zip
+    /// (executable + Models\ OCR models), so an update can refresh both. The bare
+    /// <c>WatermarkRemover.exe</c> is still published alongside it: releases keep both assets so
+    /// pre-1.7 clients — which only look for the exe — can still upgrade onto the new channel.
+    /// </summary>
+    public const string AssetName = "WatermarkRemover.zip";
 
     /// <summary>
     /// Fallback download accelerators for networks where github.com is unreliable. Each entry
