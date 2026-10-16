@@ -43,5 +43,5 @@
 ## 5. 测试 + 发布
 - [x] `dotnet test` 147 全过（基线 141 + 新增 6）。
 - [x] 真样张冒烟：PP-OCR 识别 + 自动命名「林孝明执照」正常。
-- [ ] commit（英文祈使句）→ push → tag `v1.7.0`。
-- [ ] 更新 `project_memory.md`：REGDB_E_CLASSNOTREG 根因、PP-OCR 引擎注册模式、部署布局契约、zip 更新资产策略。
+- [x] commit（英文祈使句）→ push → tag `v1.7.0`（CI 构建成功，Release 双资产已上传：exe 109.5MB + zip 122.3MB）。
+- [x] 更新 `project_memory.md`：REGDB_E_CLASSNOTREG 根因、PP-OCR 引擎注册模式、部署布局契约、zip 更新资产策略。

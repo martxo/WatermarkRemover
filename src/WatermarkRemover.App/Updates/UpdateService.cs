@@ -151,26 +151,36 @@ public sealed class UpdateService
     }
 
     /// <summary>
-    /// Downloads the update executable to a temp file, reporting progress in percent. Tries the
-    /// direct GitHub link first and falls back to accelerators; the downloaded bytes must match
-    /// the API-published SHA256 digest before the file is handed over.
+    /// Downloads the update package to a temp file, reporting phased progress: which channel is
+    /// being used, bytes received and transfer speed. Tries the direct GitHub link first and falls
+    /// back to accelerators; the downloaded bytes must match the API-published SHA256 digest
+    /// before the file is handed over.
     /// </summary>
     public static async Task<string> DownloadUpdateAsync(
         UpdateInfo info,
-        IProgress<double> progress,
+        IProgress<UpdateProgress> progress,
         CancellationToken cancellationToken)
     {
         string extension = Path.GetExtension(UpdateConfig.AssetName);
         string targetPath = Path.Combine(Path.GetTempPath(), $"WatermarkRemover-{info.Version}{extension}");
         Exception? lastError = null;
 
-        foreach (string url in DownloadCandidates(info.DownloadUrl))
+        foreach ((string url, string sourceName) in DownloadCandidates(info.DownloadUrl))
         {
             try
             {
-                progress.Report(0);
-                await DownloadToFileAsync(url, targetPath, info, progress, cancellationToken).ConfigureAwait(false);
+                progress.Report(new UpdateProgress(UpdateStage.Downloading, 0, 0, info.SizeBytes, null, sourceName));
+                await DownloadToFileAsync(url, targetPath, info, progress, sourceName, cancellationToken).ConfigureAwait(false);
+
+                // Byte-count unknown in advance can leave the last tick short of 100%; close the
+                // gap before the verification stage so the bar reads complete.
+                progress.Report(new UpdateProgress(
+                    UpdateStage.Downloading, 100, info.SizeBytes > 0 ? info.SizeBytes : new FileInfo(targetPath).Length,
+                    info.SizeBytes > 0 ? info.SizeBytes : null, null, sourceName));
+
+                progress.Report(new UpdateProgress(UpdateStage.Verifying, 100, 0, null, null, null));
                 VerifyIntegrity(targetPath, info);
+                progress.Report(new UpdateProgress(UpdateStage.ReadyToRestart, 100, 0, null, null, null));
                 return targetPath;
             }
             catch (OperationCanceledException)
@@ -180,6 +190,9 @@ public sealed class UpdateService
             catch (Exception ex)
             {
                 lastError = ex;
+                // The UI must not look stuck: say why the next channel is being tried.
+                progress.Report(new UpdateProgress(UpdateStage.Downloading, 0, 0, info.SizeBytes, null,
+                    $"{sourceName}失败，正在切换备用通道…"));
             }
         }
 
@@ -187,19 +200,23 @@ public sealed class UpdateService
         throw new IOException($"下载更新失败：{lastError?.Message ?? "未知错误"}", lastError);
     }
 
-    /// <summary>Direct link first, then accelerators for networks where github.com is unreliable.</summary>
-    private static IEnumerable<string> DownloadCandidates(string url)
+    /// <summary>
+    /// Direct link first, then accelerators for networks where github.com is unreliable. Each
+    /// candidate carries the name the progress UI shows.
+    /// </summary>
+    private static IEnumerable<(string Url, string SourceName)> DownloadCandidates(string url)
     {
-        yield return url;
+        yield return (url, "官方下载");
         foreach (string mirror in UpdateConfig.DownloadMirrors)
-            yield return mirror + url;
+            yield return (mirror + url, $"备用通道 {new Uri(mirror).Host}");
     }
 
     private static async Task DownloadToFileAsync(
         string url,
         string targetPath,
         UpdateInfo info,
-        IProgress<double> progress,
+        IProgress<UpdateProgress> progress,
+        string sourceName,
         CancellationToken cancellationToken)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -209,7 +226,7 @@ public sealed class UpdateService
             url, HttpCompletionOption.ResponseHeadersRead, timeout.Token).ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
 
-        long totalBytes = response.Content.Headers.ContentLength ?? info.SizeBytes;
+        long? totalBytes = response.Content.Headers.ContentLength ?? (info.SizeBytes > 0 ? info.SizeBytes : null);
         await using Stream source = await response.Content.ReadAsStreamAsync(timeout.Token).ConfigureAwait(false);
         await using var target = new FileStream(
             targetPath, FileMode.Create, FileAccess.Write, FileShare.None, 81920, useAsync: true);
@@ -217,12 +234,36 @@ public sealed class UpdateService
         var buffer = new byte[81920];
         long downloaded = 0;
         int read;
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        long lastReportedBytes = 0;
+        var lastReported = TimeSpan.Zero;
+        double speedBytesPerSecond = 0;
+        const double SpeedSmoothing = 0.2; // EMA weight for the transfer-speed estimate
+
         while ((read = await source.ReadAsync(buffer, timeout.Token).ConfigureAwait(false)) > 0)
         {
             await target.WriteAsync(buffer.AsMemory(0, read), timeout.Token).ConfigureAwait(false);
             downloaded += read;
-            if (totalBytes > 0)
-                progress.Report(Math.Min(100.0, downloaded * 100.0 / totalBytes));
+
+            // Throttle the reports: an 80 KB chunk per tick would flood the dispatcher and make
+            // the UI less responsive, not more.
+            TimeSpan elapsed = stopwatch.Elapsed;
+            if (elapsed - lastReported < TimeSpan.FromMilliseconds(200) && lastReported != TimeSpan.Zero)
+                continue;
+
+            double instantSpeed = downloaded > lastReportedBytes && elapsed > TimeSpan.Zero
+                ? (downloaded - lastReportedBytes) / (elapsed - lastReported).TotalSeconds
+                : speedBytesPerSecond;
+            speedBytesPerSecond = speedBytesPerSecond <= 0
+                ? instantSpeed
+                : speedBytesPerSecond + SpeedSmoothing * (instantSpeed - speedBytesPerSecond);
+            lastReportedBytes = downloaded;
+            lastReported = elapsed;
+
+            double? percent = totalBytes is > 0 ? Math.Min(100.0, downloaded * 100.0 / totalBytes.Value) : null;
+            progress.Report(new UpdateProgress(
+                UpdateStage.Downloading, percent, downloaded, totalBytes,
+                speedBytesPerSecond > 0 ? speedBytesPerSecond : null, sourceName));
         }
     }
 

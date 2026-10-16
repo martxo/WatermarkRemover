@@ -173,12 +173,14 @@ public partial class SettingsWindow : Window
     private async void OnCheckUpdate(object sender, RoutedEventArgs e)
     {
         CheckUpdateButton.IsEnabled = false;
+        CheckUpdateButton.Content = "检查中…";
         try
         {
             await UpdateCoordinator.RunCheckAsync(this, _settings, silent: false);
         }
         finally
         {
+            CheckUpdateButton.Content = "检查更新";
             CheckUpdateButton.IsEnabled = true;
         }
     }
