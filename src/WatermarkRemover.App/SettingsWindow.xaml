@@ -206,6 +206,36 @@
                     </Button.Template>
                 </Button>
             </Grid>
+
+            <!-- Log & diagnostics -->
+            <TextBlock Text="日志与排障" Style="{StaticResource SectionLabel}" Margin="0,10,0,4"/>
+            <TextBlock Text="查看最近一段时间的执行记录，可导出后发回用于分析问题（如自动命名未生效）。日志仅保存在本机，保留 7 天。"
+                       FontSize="11" Foreground="{StaticResource TextSecondaryBrush}"
+                       TextWrapping="Wrap" Margin="0,0,0,8"/>
+            <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                <TextBlock Text="时间范围：" FontSize="13" VerticalAlignment="Center"
+                           Foreground="{StaticResource TextPrimaryBrush}"/>
+                <ComboBox x:Name="LogRangeBox" Width="110" FontSize="13" Padding="8,6"
+                          VerticalContentAlignment="Center" SelectionChanged="OnLogRangeChanged">
+                    <ComboBoxItem Content="最近 1 小时"/>
+                    <ComboBoxItem Content="最近 24 小时"/>
+                    <ComboBoxItem Content="最近 7 天"/>
+                </ComboBox>
+                <TextBlock x:Name="LogCountText" Text=""
+                           FontSize="11" Foreground="{StaticResource TextSecondaryBrush}"
+                           VerticalAlignment="Center" Margin="10,0,0,0"/>
+            </StackPanel>
+            <TextBox x:Name="LogPreviewBox" IsReadOnly="True" FontFamily="Consolas" FontSize="11"
+                     Height="150" TextWrapping="NoWrap" AcceptsReturn="True"
+                     VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
+                     Background="#FFFFFFFF" BorderBrush="{StaticResource BorderBrushLight}"
+                     Padding="8,6" Margin="0,0,0,8"/>
+            <StackPanel Orientation="Horizontal" Margin="0,0,0,18">
+                <Button Content="刷新" Style="{StaticResource SmallButton}" Click="OnRefreshLog"/>
+                <Button Content="复制日志" Style="{StaticResource SmallButton}" Margin="8,0,0,0" Click="OnCopyLog"/>
+                <Button Content="导出日志文件…" Style="{StaticResource SmallButton}" Margin="8,0,0,0" Click="OnExportLog"/>
+                <Button Content="打开日志文件夹" Style="{StaticResource SmallButton}" Margin="8,0,0,0" Click="OnOpenLogFolder"/>
+            </StackPanel>
         </StackPanel>
         </ScrollViewer>
 

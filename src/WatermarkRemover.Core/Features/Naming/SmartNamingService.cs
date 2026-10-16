@@ -7,17 +7,35 @@ namespace WatermarkRemover.Core.Features.Naming;
 /// </summary>
 public static class SmartNamingService
 {
-    /// <summary>Returns null when the type is unrecognised or the name cannot be extracted.</summary>
-    public static AutoNameResult? TryBuildName(IReadOnlyList<string> ocrLines)
+    /// <summary>
+    /// Returns null when the type is unrecognised or the name cannot be extracted. Each decision
+    /// point reports through <paramref name="trace"/> so a failing machine's log tells which step
+    /// gave up ("识别后不能自动重命名" is otherwise invisible).
+    /// </summary>
+    public static AutoNameResult? TryBuildName(IReadOnlyList<string> ocrLines, Action<string, Exception?>? trace = null)
     {
-        if (ocrLines is null || ocrLines.Count == 0) return null;
+        if (ocrLines is null || ocrLines.Count == 0)
+        {
+            trace?.Invoke("命名：OCR 未识别到任何文字，跳过自动命名", null);
+            return null;
+        }
 
         var profile = DocumentClassifier.Classify(string.Join("\n", ocrLines));
-        if (profile is null) return null;
+        if (profile is null)
+        {
+            trace?.Invoke($"命名：分类未识别（OCR {ocrLines.Count} 行），跳过自动命名", null);
+            return null;
+        }
 
         string? personName = NameExtractor.Extract(ocrLines, profile);
-        return personName is null
-            ? null
-            : AutoNameResult.Create(personName, profile.TypeShortName);
+        if (personName is null)
+        {
+            trace?.Invoke($"命名：姓名提取失败（类型={profile.TypeShortName}），跳过自动命名", null);
+            return null;
+        }
+
+        var result = AutoNameResult.Create(personName, profile.TypeShortName);
+        trace?.Invoke($"命名：自动命名成功 → {result.SuggestedStem}", null);
+        return result;
     }
 }

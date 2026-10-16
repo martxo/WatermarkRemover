@@ -21,12 +21,14 @@ public sealed class WatermarkFeature : IFeature
     private readonly IReadOnlyList<IWatermarkStrategy> _strategies;
     private readonly IPdfPageRenderer? _namingRenderer;
     private readonly IOcrEngine? _namingEngine;
+    private readonly Action<string, Exception?>? _trace;
 
     public WatermarkFeature(
         IDocumentSource source,
         IEnumerable<IWatermarkStrategy> strategies,
         IPdfPageRenderer? namingRenderer = null,
-        IOcrEngine? namingEngine = null)
+        IOcrEngine? namingEngine = null,
+        Action<string, Exception?>? trace = null)
     {
         _source = source ?? throw new ArgumentNullException(nameof(source));
         _strategies = strategies?.ToList() ?? throw new ArgumentNullException(nameof(strategies));
@@ -34,6 +36,7 @@ public sealed class WatermarkFeature : IFeature
             throw new ArgumentException("At least one watermark strategy is required.", nameof(strategies));
         _namingRenderer = namingRenderer;
         _namingEngine = namingEngine;
+        _trace = trace;
     }
 
     public string Id => "watermark.badge";
@@ -66,21 +69,28 @@ public sealed class WatermarkFeature : IFeature
     /// <summary>
     /// Content-based name for the output file. Renders only the first page, recognises it and
     /// classifies it. Returns null whenever anything goes wrong — removal must never fail
-    /// because of naming.
+    /// because of naming — but every skip is reported through the trace callback so a
+    /// non-renaming machine leaves evidence in the log.
     /// </summary>
     private AutoNameResult? TryAutoName(string pdfPath)
     {
-        if (_namingRenderer is null || _namingEngine is null) return null;
+        if (_namingRenderer is null || _namingEngine is null)
+        {
+            _trace?.Invoke("命名：未配置识别能力（渲染器或 OCR 引擎缺失），跳过自动命名", null);
+            return null;
+        }
 
         try
         {
             byte[] page = _namingRenderer.RenderFirstPageAsync(pdfPath, NamingRenderDpi)
                 .GetAwaiter().GetResult();
             var lines = _namingEngine.RecognizeAsync(page).GetAwaiter().GetResult();
-            return SmartNamingService.TryBuildName(lines);
+            _trace?.Invoke($"命名：首页渲染 {page.Length / 1024} KB，OCR 识别 {lines.Count} 行", null);
+            return SmartNamingService.TryBuildName(lines, _trace);
         }
-        catch
+        catch (Exception ex)
         {
+            _trace?.Invoke("命名：识别过程异常，跳过自动命名", ex);
             return null;
         }
     }

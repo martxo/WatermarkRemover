@@ -29,7 +29,12 @@ public sealed class MainViewModel : ObservableObject
             new PdfDocumentSource(),
             new IWatermarkStrategy[] { new BottomRightBadgeStrategy() },
             new PdfiumPdfPageRenderer(),
-            SharedOcrEngine),
+            SharedOcrEngine,
+            trace: (message, ex) =>
+            {
+                if (ex is null) AppLog.Info(message);
+                else AppLog.Error(message, ex);
+            }),
         new OcrFeature(new PdfiumPdfPageRenderer(), SharedOcrEngine),
     });
 

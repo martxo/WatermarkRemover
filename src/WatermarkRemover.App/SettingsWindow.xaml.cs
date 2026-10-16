@@ -1,6 +1,10 @@
+using System.Diagnostics;
 using System.IO;
 using System.Windows;
+using System.Windows.Controls;
+using WatermarkRemover.App.Logging;
 using WatermarkRemover.App.Updates;
+using WatermarkRemover.Core.Logging;
 using WatermarkRemover.Core.Settings;
 
 namespace WatermarkRemover.App;
@@ -39,6 +43,9 @@ public partial class SettingsWindow : Window
         }
 
         UpdateSuffixPreview();
+
+        LogRangeBox.SelectedIndex = 0;
+        RefreshLogPreview();
     }
 
     private void RefreshSuffixList()
@@ -169,6 +176,94 @@ public partial class SettingsWindow : Window
     }
 
     private void OnCancel(object sender, RoutedEventArgs e) => Close();
+
+    /// <summary>Range selected in the combo box; the default matches "最近 1 小时".</summary>
+    private TimeSpan SelectedLogRange() => LogRangeBox.SelectedIndex switch
+    {
+        1 => TimeSpan.FromHours(24),
+        2 => TimeSpan.FromDays(7),
+        _ => TimeSpan.FromHours(1),
+    };
+
+    private void RefreshLogPreview()
+    {
+        try
+        {
+            IReadOnlyList<LogEntry> entries = LogExportService.Collect(SelectedLogRange());
+            LogPreviewBox.Text = entries.Count == 0
+                ? "（该时间段暂无执行记录）"
+                : string.Join(Environment.NewLine, entries.Select(LogFilter.Format));
+            LogPreviewBox.ScrollToEnd();
+            LogCountText.Text = $"共 {entries.Count} 条";
+        }
+        catch (Exception ex)
+        {
+            LogPreviewBox.Text = $"读取日志失败：{ex.Message}";
+            LogCountText.Text = string.Empty;
+        }
+    }
+
+    private void OnLogRangeChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (LogPreviewBox == null) return; // not built yet during InitializeComponent
+        RefreshLogPreview();
+    }
+
+    private void OnRefreshLog(object sender, RoutedEventArgs e) => RefreshLogPreview();
+
+    private void OnCopyLog(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            Clipboard.SetText(LogExportService.BuildReport(LogExportService.Collect(SelectedLogRange()), SelectedLogRange()));
+            LogCountText.Text = "完整诊断日志已复制到剪贴板";
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"复制失败：{ex.Message}", "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    private void OnExportLog(object sender, RoutedEventArgs e)
+    {
+        var dialog = new Microsoft.Win32.SaveFileDialog
+        {
+            Title = "导出日志文件",
+            Filter = "日志文件|*.txt",
+            FileName = $"WatermarkRemover-log-{DateTime.Now:yyyyMMdd-HHmmss}.txt",
+        };
+
+        if (dialog.ShowDialog(this) != true) return;
+
+        try
+        {
+            LogExportService.Export(
+                dialog.FileName,
+                LogExportService.BuildReport(LogExportService.Collect(SelectedLogRange()), SelectedLogRange()));
+            LogCountText.Text = $"已导出：{Path.GetFileName(dialog.FileName)}";
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"导出失败：{ex.Message}", "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    private void OnOpenLogFolder(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            Directory.CreateDirectory(AppFolders.LogDirectory);
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = AppFolders.LogDirectory,
+                UseShellExecute = true,
+            });
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"打开失败：{ex.Message}", "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
 
     private async void OnCheckUpdate(object sender, RoutedEventArgs e)
     {
