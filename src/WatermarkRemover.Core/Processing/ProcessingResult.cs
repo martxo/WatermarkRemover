@@ -17,13 +17,15 @@ public sealed class ProcessingResult
         string inputPath,
         string? outputPath,
         IReadOnlyList<WatermarkMark> marks,
-        string? error = null)
+        string? error = null,
+        string? errorDetails = null)
     {
         Status = status;
         InputPath = inputPath;
         OutputPath = outputPath;
         Marks = marks;
         Error = error;
+        ErrorDetails = errorDetails;
     }
 
     public ProcessingStatus Status { get; }
@@ -36,6 +38,9 @@ public sealed class ProcessingResult
 
     public string? Error { get; }
 
+    /// <summary>Full diagnostic text (exception dump) for a failure; null when not exception-driven.</summary>
+    public string? ErrorDetails { get; }
+
     public bool IsSuccess => Status == ProcessingStatus.Succeeded;
 
     public static ProcessingResult Succeeded(string inputPath, string outputPath, IReadOnlyList<WatermarkMark> marks) =>
@@ -44,6 +49,6 @@ public sealed class ProcessingResult
     public static ProcessingResult NoWatermarkFound(string inputPath) =>
         new(ProcessingStatus.NoWatermarkFound, inputPath, null, Array.Empty<WatermarkMark>());
 
-    public static ProcessingResult Failed(string inputPath, string error) =>
-        new(ProcessingStatus.Failed, inputPath, null, Array.Empty<WatermarkMark>(), error);
+    public static ProcessingResult Failed(string inputPath, string error, string? errorDetails = null) =>
+        new(ProcessingStatus.Failed, inputPath, null, Array.Empty<WatermarkMark>(), error, errorDetails);
 }

@@ -66,7 +66,7 @@ public sealed class OcrFeature : IFeature
         }
         catch (Exception ex)
         {
-            return FeatureResult.Fail(inputPath, ex.Message);
+            return FeatureResult.Fail(inputPath, ex.Message, ex, DisplayName);
         }
     }
 }

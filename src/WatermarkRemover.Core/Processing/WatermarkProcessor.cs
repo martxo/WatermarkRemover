@@ -59,7 +59,7 @@ public sealed class WatermarkProcessor
         }
         catch (Exception ex)
         {
-            return ProcessingResult.Failed(inputPath, ex.Message);
+            return ProcessingResult.Failed(inputPath, ex.Message, ex.ToString());
         }
     }
 
