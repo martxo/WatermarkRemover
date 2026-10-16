@@ -185,7 +185,10 @@ public sealed class UpdateService
             }
             catch (OperationCanceledException)
             {
-                throw; // user cancelled — never retry behind their back
+                // User cancelled — never retry behind their back, and never leave the partial
+                // download behind either.
+                TryDelete(targetPath);
+                throw;
             }
             catch (Exception ex)
             {
