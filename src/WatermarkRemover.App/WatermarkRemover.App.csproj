@@ -2,7 +2,12 @@
 
   <ItemGroup>
     <ProjectReference Include="..\WatermarkRemover.Core\WatermarkRemover.Core.csproj" />
+    <!-- Netdisk feature (网盘): product providers (Aliyun Drive first), discovered at runtime. -->
+    <ProjectReference Include="..\WatermarkRemover.Netdisk\WatermarkRemover.Netdisk.csproj" />
     <ProjectReference Include="..\WatermarkRemover.Pdf\WatermarkRemover.Pdf.csproj" />
+    <!-- Scan feature (扫描): engine channel (Brother bridge + WIA fallback) and PDF assembly. -->
+    <ProjectReference Include="..\WatermarkRemover.Scan.Engine\WatermarkRemover.Scan.Engine.csproj" />
+    <ProjectReference Include="..\WatermarkRemover.Scan.Pdf\WatermarkRemover.Scan.Pdf.csproj" />
   </ItemGroup>
 
   <ItemGroup>
@@ -24,7 +29,7 @@
     <AssemblyName>WatermarkRemover</AssemblyName>
     <RootNamespace>WatermarkRemover.App</RootNamespace>
     <ApplicationIcon Condition="Exists('app.ico')">app.ico</ApplicationIcon>
-    <Version>1.9.0</Version>
+    <Version>1.14.8</Version>
     <AssemblyVersion>$(Version)</AssemblyVersion>
     <FileVersion>$(Version)</FileVersion>
     <Product>Watermark Remover</Product>
@@ -41,6 +46,17 @@
     <SidecarAsset Include="Models\ch_PP-LCNet_x0_25_textline_ori_cls_mobile.onnx" />
     <SidecarAsset Include="Models\ch_PP-OCRv5_rec_mobile.onnx" />
     <SidecarAsset Include="Models\ppocrv5_dict.txt" />
+    <!-- Layout blocks (积木式识别管线). Sources verified on hf-mirror, Apache-2.0:
+         wybxc/DocLayout-YOLO-DocStructBench-onnx — 75,324,598 bytes,
+           sha256 FECE9AF02F618B603FF7921CCEC6861D13E7E1F9830E091DFB7E8AD9311E5B21
+         stefanj0/PP-DocLayout-S-ONNX — 4,917,852 bytes,
+           sha256 33688DBEE1C23E34B81777E97CB428EB40F24B242C02B5F623484959E830AEC8 -->
+    <SidecarAsset Include="Models\doclayout_yolo_docstructbench_imgsz1024.onnx" />
+    <SidecarAsset Include="Models\pp_doclayout_s.onnx" />
+    <!-- Scan feature (扫描): x86 bridge into Brother's official engine. ScanCoreApi.dll ships as
+         32-bit only, so the bridge is a separate self-contained x86 exe in its own folder beside
+         the x64 app; published by PublishBrotherBridge below. -->
+    <SidecarAsset Include="BrotherEngine\WatermarkRemover.Scan.Bridge.exe" />
   </ItemGroup>
 
   <!-- wcocr shim (github.com/swigger/wechat-ocr, x64 prebuilt): drives WeChat's offline OCR.
@@ -82,6 +98,26 @@
     <RemoveDir Directories="$(PublishDir)Models\v5" />
   </Target>
 
+  <!-- Brother x86 bridge publish: ScanCoreApi.dll is 32-bit only, so the bridge is a separate
+       self-contained x86 exe. Published once into obj\BridgePublish, then copied into the
+       BrotherEngine\ folder beside the app — both the publish tree (shipped) and the build tree
+       (local probes). Runs before the layout gate so a missing bridge fails the build. -->
+  <Target Name="PublishBrotherBridge" BeforeTargets="VerifyPublishLayout">
+    <PropertyGroup>
+      <_BridgeProject>..\WatermarkRemover.Scan.Bridge\WatermarkRemover.Scan.Bridge.csproj</_BridgeProject>
+      <_BridgePublishDir>$(MSBuildThisFileDirectory)$(IntermediateOutputPath)BridgePublish\</_BridgePublishDir>
+    </PropertyGroup>
+    <MSBuild Projects="$(_BridgeProject)" Targets="Restore"
+             Properties="RuntimeIdentifier=win-x86;SelfContained=true" />
+    <MSBuild Projects="$(_BridgeProject)" Targets="Publish"
+             Properties="Configuration=$(Configuration);RuntimeIdentifier=win-x86;SelfContained=true;PublishSingleFile=true;PublishDir=$(_BridgePublishDir)" />
+    <ItemGroup>
+      <_BridgeExe Include="$(_BridgePublishDir)WatermarkRemover.Scan.Bridge.exe" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_BridgeExe)" DestinationFolder="$(PublishDir)BrotherEngine\" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(_BridgeExe)" DestinationFolder="$(TargetDir)BrotherEngine\" SkipUnchangedFiles="true" />
+  </Target>
+
   <!-- PUBLISH GATE — turns "asset missing on the user's machine" (a runtime failure discovered on
        some other PC) into a build failure here. Runs last, after every drop/cleanup target:
        1. every SidecarAsset in the manifest exists next to the exe,
@@ -104,14 +140,17 @@
     <Message Importance="high" Text="发布布局校验通过：@(SidecarAsset->Count()) 个旁挂资源就位，无开发文件泄露。" />
   </Target>
 
-  <!-- Single-file, self-contained publish: run on any Windows machine with no install. -->
+  <!-- Single-file, self-contained publish: run on any Windows machine with no install.
+       ReadyToRun is deliberately OFF: PDFsharp 6.5's AGPL licence check inspects the calling
+       assembly, and R2R pre-JITting breaks that probe ("Initialize has to be called from the
+       PDFsharp assembly") only in the shipped build — debug runs and tests pass. -->
   <PropertyGroup Condition="'$(Configuration)' == 'Release'">
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>true</SelfContained>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
-    <PublishReadyToRun>true</PublishReadyToRun>
+    <PublishReadyToRun>false</PublishReadyToRun>
   </PropertyGroup>
 
 </Project>

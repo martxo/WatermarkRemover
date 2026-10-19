@@ -45,6 +45,58 @@ public class SmartNamingServiceTests
         "住址 广西玉林市茂林镇车垌村大塘100号",
     };
 
+    /// <summary>Real WeChat OCR output of a landscape licence scanned rotated 90°:「经营者」
+    /// comes back as two one-char rows with the name as its own row elsewhere, so no label
+    /// association survives — only the standalone-row fallback can name this document.</summary>
+    private static readonly string[] RotatedLicenseLines =
+    {
+        "营业执照",
+        "统一社会信用代码",
+        "维码登录‘",
+        "企业信用信息公示",
+        "92450903MAK04HH77R",
+        "了解更多登记",
+        "备案、许可、监管信息。",
+        "称 玉林市福绵区三层楼便利店(个体工商户)",
+        "组成形式个人经营",
+        "型",
+        "个体工商户",
+        "日 期2025年11月07日",
+        "营",
+        "者",
+        "经营场所玉林市福绵区成均镇百石村分界坡66号",
+        "梁桂",
+        "活动)",
+        "登记机关",
+        "月日",
+        "2025",
+        "名",
+        "注册",
+        "类经",
+        "经营范围",
+        "企业信用信息公",
+        "国家市场监督管理总局监制",
+    };
+
+    /// <summary>Real WeChat OCR output of a bank statement's first page.</summary>
+    private static readonly string[] BankStatementLines =
+    {
+        "存款账户明细查询",
+        "打印机构:5058",
+        "操作柜员:510951",
+        "机构名称:玉林市区农村信用合作联杜玉东信用社",
+        "打印日期:20250926",
+        "卡号/账号:6231330500012349382",
+        "款项账号:505811010110225598",
+        "客户名称:廖丹",
+        "查询起止日期:20240901 -",
+        "币种:人民币",
+        "账号/卡号",
+        "对方账号",
+        "对方户名",
+        "摘要码及描述",
+    };
+
     [Fact]
     public void Business_license_is_classified_and_name_extracted_despite_truncated_label()
     {
@@ -86,6 +138,28 @@ public class SmartNamingServiceTests
     }
 
     [Fact]
+    public void Rotated_license_with_shredded_label_is_named_via_the_standalone_row()
+    {
+        var result = SmartNamingService.TryBuildName(RotatedLicenseLines);
+
+        Assert.NotNull(result);
+        Assert.Equal("梁桂", result!.PersonName);
+        Assert.Equal("执照", result.TypeShortName);
+        Assert.Equal("梁桂执照", result.SuggestedStem);
+    }
+
+    [Fact]
+    public void Bank_statement_is_classified_and_named_from_the_customer_field()
+    {
+        var result = SmartNamingService.TryBuildName(BankStatementLines);
+
+        Assert.NotNull(result);
+        Assert.Equal("廖丹", result!.PersonName);
+        Assert.Equal("流水", result.TypeShortName);
+        Assert.Equal("廖丹流水", result.SuggestedStem);
+    }
+
+    [Fact]
     public void Unknown_text_stays_unclassified()
     {
         var result = SmartNamingService.TryBuildName(new[] { "随便一段没有特征的文字", "这里也是" });
@@ -111,6 +185,87 @@ public class SmartNamingServiceTests
         };
 
         Assert.Null(SmartNamingService.TryBuildName(lines));
+    }
+}
+
+/// <summary>
+/// The personal credit report (detailed / self-query edition, 人民银行征信中心). Its layout is
+/// fixed: the「被查询者姓名」header table sits in the top band of page 1 and the subject's name
+/// is the cell directly below the label. Naming therefore never guesses from OCR text order
+/// (FixedRegion strategy — the App-side CreditReportNameLocator crops that cell); the text
+/// pipeline only classifies the type. Shredded full-page OCR once produced 高级领导征信.
+/// </summary>
+public class CreditReportNamingTests
+{
+    /// <summary>OCR reading order of the report's first page (header table → value row →
+    /// identity section → spouse table).</summary>
+    private static readonly string[] CreditReportLines =
+    {
+        "个人信用报告",
+        "(本人版)",
+        "报告编号:2026101700001234567890 报告时间:2026.10.19 11:40:53",
+        "被查询者姓名 证件类型 证件号码 查询机构 查询原因",
+        "陈圣诈 身份证 452501198406021254 本人 本人查询(自查/异议)",
+        "异议信息提示",
+        "信息主体对信用报告内容提出了0项异议且正在处理中",
+        "一个人基本信息",
+        "(一)身份信息",
+        "性别 出生日期 婚姻状况 就业状况",
+        "男 1984.09.02 已婚 已就业",
+        "(二)配偶信息",
+        "姓名 证件类型 证件号码 工作单位 职务电话",
+        "宁开珍 身份证 452501198702145520 玉林市玉州区名山家具 15207795450",
+    };
+
+    private static readonly DocumentProfile CreditReport =
+        DocumentProfileCatalog.All.First(p => p.TypeId == "credit-report");
+
+    [Fact]
+    public void Credit_report_is_classified_but_never_named_from_text_order()
+    {
+        // Even the clean, correctly ordered fixture must not yield a name here: fixed-region
+        // types are named geometrically from the page image, never from OCR text order.
+        Assert.Equal("credit-report", DocumentClassifier.Classify(string.Join("\n", CreditReportLines))?.TypeId);
+        Assert.Equal(NameExtractionStrategy.FixedRegion, CreditReport.NameStrategy);
+        Assert.Null(SmartNamingService.TryBuildName(CreditReportLines));
+    }
+
+    [Fact]
+    public void A_bank_statement_is_never_misread_as_a_credit_report()
+    {
+        var bankLines = new[]
+        {
+            "存款账户明细查询", "客户名称:廖丹", "卡号/账号:6231330500012349382", "币种:人民币",
+        };
+
+        Assert.Equal("bank-statement", DocumentClassifier.Classify(string.Join("\n", bankLines))?.TypeId);
+    }
+
+    /// <summary>Real OCR line order of the 2026-10-19 field scan (landscape, watermark-pressed):
+    /// WeChat OCR shredded the header row into per-cell lines and the value cells came back as
+    /// garbled address fragments — the subject's name is simply absent from the OCR output.
+    /// Text-order guessing on such input produced 高级领导征信; the FixedRegion strategy makes
+    /// the text pipeline refuse to name it (the region locator owns the name instead).</summary>
+    private static readonly string[] ShreddedHeaderRealScanLines =
+    {
+        "个人信用报告",
+        "(本人版)",
+        "被查询者姓名",
+        "被查询者证件类型",
+        "被查询者证件号码",
+        "查询机构",
+        "查询原因",
+        "西杜族台治区玉林市广咀牌台县",
+        "顿谷镇顿谷村门楼坡队",
+        "本人查询(自助查询机)",
+    };
+
+    [Fact]
+    public void A_shredded_per_cell_header_never_yields_a_label_fragment_as_name()
+    {
+        // Regression for v1.14.0 naming every credit report 被查询者征信 / 高级领导征信: the
+        // text channel must return null (timestamp name kept); the region locator finds the name.
+        Assert.Null(SmartNamingService.TryBuildName(ShreddedHeaderRealScanLines));
     }
 }
 
@@ -170,10 +325,10 @@ public class NameExtractorTests
     }
 
     [Fact]
-    public void The_best_candidate_wins_over_weaker_ones()
+    public void The_first_confident_candidate_wins_over_later_tail_noise()
     {
-        // "者" tail (1-char label match) sees 子分信息 which starts with a common surname-ish char,
-        // but the full 法定代表人 label with a proper 3-char name must score higher.
+        // The 法定代表人 label yields a proper name; the later 1-char tail match ("者" +
+        // 子分信息) must not override it.
         var lines = new[]
         {
             "者子分信息",
@@ -189,6 +344,17 @@ public class NameExtractorTests
         // "人" + a name must not be harvested by tail matching (人 is too generic to anchor on);
         // without the skip this line would yield 李家明.
         var lines = new[] { "共 4 人李家明参加" };
+
+        Assert.Null(NameExtractor.Extract(lines, License));
+    }
+
+    [Fact]
+    public void Standalone_fallback_keeps_out_titles_and_page_furniture()
+    {
+        // Every row here is 2-4 CJK chars, but none is a name: 营业执照 is a profile anchor,
+        // 登记机关 carries field words, 月日 is calendar page furniture — none of them may
+        // pass the standalone-row fallback.
+        var lines = new[] { "营业执照", "登记机关", "月日", "组成形式个人经营" };
 
         Assert.Null(NameExtractor.Extract(lines, License));
     }

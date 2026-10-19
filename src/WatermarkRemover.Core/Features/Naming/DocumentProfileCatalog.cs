@@ -56,5 +56,43 @@ public static class DocumentProfileCatalog
             },
             NameLabels = new[] { "户主", "姓名" },
         },
+
+        // 银行流水：账户交易明细单。客户名称可能是个人或企业名（对公账户），均作为命名主体。
+        new DocumentProfile
+        {
+            TypeId = "bank-statement",
+            TypeShortName = "流水",
+            Anchors = new[]
+            {
+                new ProfileAnchor(@"存款账户明细查询|交易明细|账户明细", 5),
+                new ProfileAnchor(@"客户名称", 2),
+                new ProfileAnchor(@"打印机构|操作柜员", 2),
+                new ProfileAnchor(@"卡号/账号|账号/卡号|款项账号", 1),
+                new ProfileAnchor(@"币种", 1),
+            },
+            NameLabels = new[] { "客户名称" },
+        },
+
+        // 个人信用报告（详细版/本人版）：人行征信中心出品，版式固定——「被查询者姓名」表
+        // 恒在首页顶部条带，名字就是标签正下方那一格。命名走固定区域几何定位
+        // （App 侧 CreditReportNameLocator），文本通道刻意不猜名：水印压格与拼版扫描会把
+        // 全页 OCR 行序打碎，从碎行猜名字必然出错（高级领导征信）。
+        new DocumentProfile
+        {
+            TypeId = "credit-report",
+            TypeShortName = "征信",
+            Anchors = new[]
+            {
+                new ProfileAnchor(@"个人信用报告", 5),
+                new ProfileAnchor(@"被查询者姓名", 5),
+                new ProfileAnchor(@"征信中心", 4),
+                new ProfileAnchor(@"异议信息提示", 4),
+                new ProfileAnchor(@"信息概要", 2),
+                new ProfileAnchor(@"查询机构|查询原因", 2),
+                new ProfileAnchor(@"报告编号", 1),
+            },
+            NameLabels = new[] { "被查询者姓名" },
+            NameStrategy = NameExtractionStrategy.FixedRegion,
+        },
     };
 }

@@ -15,6 +15,16 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{364EB618
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "WatermarkRemover.Tests", "tests\WatermarkRemover.Tests\WatermarkRemover.Tests.csproj", "{7D780215-3ECA-4E97-A777-C811AB440E56}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "WatermarkRemover.Scan.Core", "src\WatermarkRemover.Scan.Core\WatermarkRemover.Scan.Core.csproj", "{96CF6EC4-6AF8-42FD-9BD9-32A37EEAC581}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "WatermarkRemover.Scan.Engine", "src\WatermarkRemover.Scan.Engine\WatermarkRemover.Scan.Engine.csproj", "{FBA2F18E-05F6-4B95-AE88-C70663129682}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "WatermarkRemover.Scan.Pdf", "src\WatermarkRemover.Scan.Pdf\WatermarkRemover.Scan.Pdf.csproj", "{07D3D553-33F9-48E2-88F1-453DCC76114E}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "WatermarkRemover.Scan.Bridge", "src\WatermarkRemover.Scan.Bridge\WatermarkRemover.Scan.Bridge.csproj", "{CE472E2C-1A8C-422B-9FE4-326E30496529}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "WatermarkRemover.Netdisk", "src\WatermarkRemover.Netdisk\WatermarkRemover.Netdisk.csproj", "{3F6A2C81-5E4D-4B7A-9C12-7D8E0A6B4F35}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -40,11 +50,36 @@ Global
 		{7D780215-3ECA-4E97-A777-C811AB440E56}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{7D780215-3ECA-4E97-A777-C811AB440E56}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{7D780215-3ECA-4E97-A777-C811AB440E56}.Release|Any CPU.Build.0 = Release|Any CPU
-	EndGlobalSection
+		{96CF6EC4-6AF8-42FD-9BD9-32A37EEAC581}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{96CF6EC4-6AF8-42FD-9BD9-32A37EEAC581}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{96CF6EC4-6AF8-42FD-9BD9-32A37EEAC581}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{96CF6EC4-6AF8-42FD-9BD9-32A37EEAC581}.Release|Any CPU.Build.0 = Release|Any CPU
+		{FBA2F18E-05F6-4B95-AE88-C70663129682}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{FBA2F18E-05F6-4B95-AE88-C70663129682}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{FBA2F18E-05F6-4B95-AE88-C70663129682}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{FBA2F18E-05F6-4B95-AE88-C70663129682}.Release|Any CPU.Build.0 = Release|Any CPU
+		{07D3D553-33F9-48E2-88F1-453DCC76114E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{07D3D553-33F9-48E2-88F1-453DCC76114E}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{07D3D553-33F9-48E2-88F1-453DCC76114E}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{07D3D553-33F9-48E2-88F1-453DCC76114E}.Release|Any CPU.Build.0 = Release|Any CPU
+		{CE472E2C-1A8C-422B-9FE4-326E30496529}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{CE472E2C-1A8C-422B-9FE4-326E30496529}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{CE472E2C-1A8C-422B-9FE4-326E30496529}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{CE472E2C-1A8C-422B-9FE4-326E30496529}.Release|Any CPU.Build.0 = Release|Any CPU
+                {3F6A2C81-5E4D-4B7A-9C12-7D8E0A6B4F35}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+                {3F6A2C81-5E4D-4B7A-9C12-7D8E0A6B4F35}.Debug|Any CPU.Build.0 = Debug|Any CPU
+                {3F6A2C81-5E4D-4B7A-9C12-7D8E0A6B4F35}.Release|Any CPU.ActiveCfg = Release|Any CPU
+                {3F6A2C81-5E4D-4B7A-9C12-7D8E0A6B4F35}.Release|Any CPU.Build.0 = Release|Any CPU
+        EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{FA625EA8-477F-474F-B1DE-7DA667FE451E} = {4B314BD7-D56C-4EF5-9736-DDCC32843AB4}
 		{91EEB373-CA9D-433A-8E6E-ABA2C435901C} = {4B314BD7-D56C-4EF5-9736-DDCC32843AB4}
 		{B2FEED0B-3407-4107-AA68-64284F6D5B10} = {4B314BD7-D56C-4EF5-9736-DDCC32843AB4}
 		{7D780215-3ECA-4E97-A777-C811AB440E56} = {364EB618-12A3-4B2F-A7D8-756960CAFF70}
+		{96CF6EC4-6AF8-42FD-9BD9-32A37EEAC581} = {4B314BD7-D56C-4EF5-9736-DDCC32843AB4}
+		{FBA2F18E-05F6-4B95-AE88-C70663129682} = {4B314BD7-D56C-4EF5-9736-DDCC32843AB4}
+		{07D3D553-33F9-48E2-88F1-453DCC76114E} = {4B314BD7-D56C-4EF5-9736-DDCC32843AB4}
+		{CE472E2C-1A8C-422B-9FE4-326E30496529} = {4B314BD7-D56C-4EF5-9736-DDCC32843AB4}
+                {3F6A2C81-5E4D-4B7A-9C12-7D8E0A6B4F35} = {4B314BD7-D56C-4EF5-9736-DDCC32843AB4}
 	EndGlobalSection
 EndGlobal

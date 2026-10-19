@@ -20,6 +20,21 @@ public sealed class ProfileAnchor
     public int Weight { get; }
 }
 
+/// <summary>How the customer's name is located for this document type.</summary>
+public enum NameExtractionStrategy
+{
+    /// <summary>Label-anchored text shapes over the OCR line stream (default).</summary>
+    LabelShapes,
+
+    /// <summary>
+    /// Fixed-layout document: the name sits at a fixed position relative to a label anchor.
+    /// Extraction is geometric, from the page image (e.g. the credit report's「被查询者姓名」
+    /// header cell) — never guessed from OCR text order, which watermark-pressed and multi-up
+    /// sheets scramble.
+    /// </summary>
+    FixedRegion,
+}
+
 /// <summary>
 /// Declarative description of one document type: what makes it recognisable and which labels
 /// introduce the customer's name. Adding a new document type to the system means adding one
@@ -40,4 +55,7 @@ public sealed class DocumentProfile
     /// The extractor tolerates OCR truncation of these labels.
     /// </summary>
     public required IReadOnlyList<string> NameLabels { get; init; }
+
+    /// <summary>How the name is extracted; drives which pipeline stage owns naming.</summary>
+    public NameExtractionStrategy NameStrategy { get; init; } = NameExtractionStrategy.LabelShapes;
 }

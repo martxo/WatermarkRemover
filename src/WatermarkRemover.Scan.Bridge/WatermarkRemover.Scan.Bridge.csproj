@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>WatermarkRemover.Scan.Bridge</RootNamespace>
+    <AssemblyName>WatermarkRemover.Scan.Bridge</AssemblyName>
+    <!-- Brother ships ScanCoreApi.dll as 32-bit only; the main app stays x64 (Skia/ONNX/pdfium),
+         so the engine is reached through this x86 child process over a NDJSON pipe. -->
+    <PlatformTarget>x86</PlatformTarget>
+    <RollForward>Major</RollForward>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+</Project>

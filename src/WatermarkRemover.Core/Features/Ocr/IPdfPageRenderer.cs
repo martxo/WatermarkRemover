@@ -14,4 +14,10 @@ public interface IPdfPageRenderer
     /// rendering a whole document.
     /// </summary>
     Task<byte[]> RenderFirstPageAsync(string pdfPath, int dpi);
+
+    /// <summary>Total page count — the preview needs it before rendering any single page.</summary>
+    Task<int> GetPageCountAsync(string pdfPath);
+
+    /// <summary>Renders one page (0-based) — the preview shows a single page at a time.</summary>
+    Task<byte[]> RenderPageAsync(string pdfPath, int pageIndex, int dpi);
 }

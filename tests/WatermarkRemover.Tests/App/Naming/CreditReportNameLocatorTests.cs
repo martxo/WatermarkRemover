@@ -1,0 +1,218 @@
+using SkiaSharp;
+using WatermarkRemover.App.Naming;
+using WatermarkRemover.Core.Features.Layout;
+using WatermarkRemover.Core.Features.Ocr;
+using WatermarkRemover.Core.Geometry;
+using Xunit;
+
+namespace WatermarkRemover.Tests.App.Naming;
+
+/// <summary>
+/// Fixed-region credit report naming: the「被查询者姓名」label box is found in the top band
+/// and the subject's name is read from the cell directly below it — never from full-page
+/// OCR text order. Geometry constants are derived from a real report's recognition report
+/// (label X=0.0716 Y=0.2728 W=0.0427 H=0.0125; name 庞结 X=0.0851 Y=0.3015; next column
+/// 身份证 X=0.1477).
+/// </summary>
+public class CreditReportNameLocatorTests
+{
+    // --- anchor matching ---
+
+    [Theory]
+    [InlineData("被查询者姓名", true)]
+    [InlineData("被查询者姓名 证件类型", true)] // merged next cell
+    [InlineData("被 查询者姓名", true)]          // OCR-inserted spaces
+    [InlineData("被查询者证件类型", false)]
+    [InlineData("查询机构", false)]
+    [InlineData("", false)]
+    [InlineData(null, false)]
+    public void Anchor_label_matching_tolerates_ocr_noise(string? text, bool expected) =>
+        Assert.Equal(expected, CreditReportNameLocator.IsAnchorLabel(text));
+
+    [Fact]
+    public void The_topmost_leftmost_anchor_wins_on_a_multi_up_sheet()
+    {
+        var lines = new[]
+        {
+            new RecognizedLine("被查询者姓名", new RectD(0.5, 0.6, 0.1, 0.02)),
+            new RecognizedLine("被查询者姓名", new RectD(0.07, 0.6, 0.1, 0.02)),
+            new RecognizedLine("被查询者姓名", new RectD(0.08, 0.3, 0.1, 0.02)),
+        };
+
+        Assert.Equal(0.08, CreditReportNameLocator.FindAnchor(lines)!.Bounds!.Value.X);
+    }
+
+    // --- geometry ---
+
+    [Fact]
+    public void The_cell_rect_covers_the_real_name_cell_but_not_the_next_column()
+    {
+        // Band-normalized coordinates (band = top 45% of the page → Y page / 0.45).
+        var label = new RectD(0.0716, 0.2728 / 0.45, 0.0427, 0.0125 / 0.45);
+        var name = new RectD(0.0851, 0.3015 / 0.45, 0.0157, 0.0101 / 0.45);
+        var nextColumn = new RectD(0.1477, 0.3015 / 0.45, 0.0207, 0.0125 / 0.45);
+
+        RectD cell = CreditReportNameLocator.CellRect(label);
+
+        Assert.True(name.X >= cell.X && name.Right <= cell.Right, "name inside horizontally");
+        Assert.True(name.Y >= cell.Y && name.Top <= cell.Top, "name inside vertically");
+        Assert.True(nextColumn.X >= cell.Right, "next column (证件类型值) outside the crop");
+    }
+
+    // --- value cell text cleanup ---
+
+    [Fact]
+    public void Cell_text_yields_the_first_name_run() =>
+        Assert.Equal("庞结", CreditReportNameLocator.CleanCellValue(new[] { "庞结" }));
+
+    [Fact]
+    public void A_leaked_neighbour_cell_is_skipped() =>
+        Assert.Equal("庞结", CreditReportNameLocator.CleanCellValue(new[] { "庞结", "身份证" }));
+
+    [Fact]
+    public void Spaced_out_names_are_joined() =>
+        Assert.Equal("陈圣诈", CreditReportNameLocator.CleanCellValue(new[] { "陈 圣 诈" }));
+
+    [Fact]
+    public void Digits_and_label_words_yield_null()
+    {
+        Assert.Null(CreditReportNameLocator.CleanCellValue(new[] { "450923199007295" }));
+        Assert.Null(CreditReportNameLocator.CleanCellValue(new[] { "身份证" }));
+        Assert.Null(CreditReportNameLocator.CleanCellValue(new[] { "被查询者" }));
+        Assert.Null(CreditReportNameLocator.CleanCellValue(Array.Empty<string>()));
+    }
+
+    // --- orchestration ---
+
+    [Fact]
+    public async Task Locates_the_name_from_the_cell_below_the_label()
+    {
+        var engine = new FakeBoundedEngine
+        {
+            // Real-report geometry (band-normalized: page Y / 0.45).
+            BoundedResult = new[]
+            {
+                new RecognizedLine("个人信用报告", new RectD(0.2208, 0.3584, 0.0705, 0.0407)),
+                new RecognizedLine("被查询者姓名", new RectD(0.0716, 0.6062, 0.0427, 0.0278)),
+                new RecognizedLine("被查询者证件类型", new RectD(0.1291, 0.6116, 0.0563, 0.0278)),
+            },
+            CellResult = new[] { "庞结" },
+        };
+
+        string? name = await CreditReportNameLocator.TryLocateNameAsync(WhitePng(400, 600), engine);
+
+        Assert.Equal("庞结", name);
+        Assert.Equal(1, engine.WithBoundsCalls); // one small band probe — never a full-page pass
+        Assert.Equal(1, engine.RecognizeCalls);  // one tiny cell crop
+    }
+
+    [Fact]
+    public async Task Falls_back_to_null_when_the_label_is_absent()
+    {
+        var engine = new FakeBoundedEngine
+        {
+            BoundedResult = new[] { new RecognizedLine("营业执照", new RectD(0.1, 0.1, 0.2, 0.05)) },
+        };
+
+        Assert.Null(await CreditReportNameLocator.TryLocateNameAsync(WhitePng(400, 600), engine));
+        Assert.Equal(3, engine.WithBoundsCalls); // portrait canvas: 0°/90°/270° probes, bounded cost
+        Assert.Equal(0, engine.RecognizeCalls); // no cell OCR without an anchor
+    }
+
+    [Fact]
+    public async Task A_sideways_page_is_probed_at_90_and_still_locates_the_name()
+    {
+        // Real failure (v1.14.2 field scan): the ADF presented the landscape report sideways,
+        // so the 0° band had no label; the 90° probe (the auto-orient direction) must find it.
+        var engine = new FakeBoundedEngine
+        {
+            BoundedSequence = new[]
+            {
+                Array.Empty<RecognizedLine>(),
+                new[] { new RecognizedLine("被查询者姓名", new RectD(0.0716, 0.6062, 0.0427, 0.0278)) },
+            },
+            CellResult = new[] { "庞结" },
+        };
+
+        string? name = await CreditReportNameLocator.TryLocateNameAsync(WhitePng(400, 600), engine);
+
+        Assert.Equal("庞结", name);
+        Assert.Equal(2, engine.WithBoundsCalls);
+        Assert.Equal(1, engine.RecognizeCalls);
+    }
+
+    [Fact]
+    public async Task An_upside_down_landscape_page_is_probed_at_180()
+    {
+        var engine = new FakeBoundedEngine
+        {
+            BoundedSequence = new[]
+            {
+                Array.Empty<RecognizedLine>(),
+                new[] { new RecognizedLine("被查询者姓名", new RectD(0.0716, 0.6062, 0.0427, 0.0278)) },
+            },
+            CellResult = new[] { "庞结" },
+        };
+
+        string? name = await CreditReportNameLocator.TryLocateNameAsync(WhitePng(600, 400), engine);
+
+        Assert.Equal("庞结", name);
+        Assert.Equal(2, engine.WithBoundsCalls); // landscape canvas: 0°/180° only — no 90/270
+        Assert.Equal(1, engine.RecognizeCalls);
+    }
+
+    [Fact]
+    public async Task Skips_gracefully_without_a_bounded_engine()
+    {
+        var engine = new PlainEngine();
+
+        Assert.Null(await CreditReportNameLocator.TryLocateNameAsync(WhitePng(400, 600), engine));
+    }
+
+    private static byte[] WhitePng(int width, int height)
+    {
+        using var bitmap = new SKBitmap(width, height);
+        using (var canvas = new SKCanvas(bitmap))
+            canvas.Clear(SKColors.White);
+        using var image = SKImage.FromBitmap(bitmap);
+        using var data = image.Encode(SKEncodedImageFormat.Png, 100);
+        return data.ToArray();
+    }
+
+    private sealed class FakeBoundedEngine : IBoundedOcrEngine
+    {
+        public string DisplayName => "Fake";
+        public IReadOnlyList<RecognizedLine>? BoundedResult { get; init; }
+
+        /// <summary>Per-call responses for orientation probing (index = probe attempt); calls
+        /// beyond the sequence return an empty list.</summary>
+        public IReadOnlyList<IReadOnlyList<RecognizedLine>>? BoundedSequence { get; init; }
+        public IReadOnlyList<string> CellResult { get; init; } = Array.Empty<string>();
+        public int WithBoundsCalls;
+        public int RecognizeCalls;
+
+        public Task<IReadOnlyList<string>> RecognizeAsync(byte[] imageBytes)
+        {
+            Interlocked.Increment(ref RecognizeCalls);
+            return Task.FromResult(CellResult);
+        }
+
+        public Task<IReadOnlyList<RecognizedLine>> RecognizeWithBoundsAsync(byte[] imageBytes)
+        {
+            int call = Interlocked.Increment(ref WithBoundsCalls) - 1;
+            IReadOnlyList<RecognizedLine> result =
+                BoundedSequence is { } sequence
+                    ? call < sequence.Count ? sequence[call] : Array.Empty<RecognizedLine>()
+                    : BoundedResult ?? Array.Empty<RecognizedLine>();
+            return Task.FromResult(result);
+        }
+    }
+
+    private sealed class PlainEngine : IOcrEngine
+    {
+        public string DisplayName => "Plain";
+
+        public Task<IReadOnlyList<string>> RecognizeAsync(byte[] imageBytes) =>
+            Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
+    }
+}

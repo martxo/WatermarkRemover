@@ -1,0 +1,18 @@
+<Window x:Class="WatermarkRemover.App.FullscreenViewerWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:app="clr-namespace:WatermarkRemover.App"
+        Title="看图"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="#C8000000"
+        WindowState="Maximized"
+        ResizeMode="NoResize"
+        ShowInTaskbar="False"
+        PreviewKeyDown="OnPreviewKeyDown">
+
+    <!-- Screen-level image viewer: a dark veil over the entire screen (not just the app
+         window), the page in the middle, the film rail on the left — reached by clicking a
+         thumbnail tile, like every desktop image browser. -->
+    <app:PdfPreviewPage/>
+</Window>

@@ -27,8 +27,14 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\WatermarkRemover.Core\WatermarkRemover.Core.csproj" />
+    <!-- Netdisk feature (网盘): provider extension point / persistence / Aliyun token flow. -->
+    <ProjectReference Include="..\..\src\WatermarkRemover.Netdisk\WatermarkRemover.Netdisk.csproj" />
     <ProjectReference Include="..\..\src\WatermarkRemover.Pdf\WatermarkRemover.Pdf.csproj" />
     <ProjectReference Include="..\..\src\WatermarkRemover.App\WatermarkRemover.App.csproj" />
+    <!-- Scan feature (扫描): naming / output directory / page order / PDF assembly. -->
+    <ProjectReference Include="..\..\src\WatermarkRemover.Scan.Core\WatermarkRemover.Scan.Core.csproj" />
+    <ProjectReference Include="..\..\src\WatermarkRemover.Scan.Engine\WatermarkRemover.Scan.Engine.csproj" />
+    <ProjectReference Include="..\..\src\WatermarkRemover.Scan.Pdf\WatermarkRemover.Scan.Pdf.csproj" />
   </ItemGroup>
 
 </Project>

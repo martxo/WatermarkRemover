@@ -30,6 +30,11 @@ public class OcrFeatureTests : IDisposable
 
         public Task<byte[]> RenderFirstPageAsync(string pdfPath, int dpi) =>
             Task.FromResult(new byte[] { 0x89, (byte)'P' });
+
+        public Task<int> GetPageCountAsync(string pdfPath) => Task.FromResult(pageCount);
+
+        public Task<byte[]> RenderPageAsync(string pdfPath, int pageIndex, int dpi) =>
+            Task.FromResult(new byte[] { 0x89, (byte)'P' });
     }
 
     private sealed class FakeEngine(IReadOnlyList<string> lines) : IOcrEngine
@@ -47,6 +52,12 @@ public class OcrFeatureTests : IDisposable
 
         public Task<byte[]> RenderFirstPageAsync(string pdfPath, int dpi) =>
             throw new InvalidOperationException("渲染失败");
+
+        public Task<int> GetPageCountAsync(string pdfPath) =>
+            throw new InvalidOperationException("渲染失败");
+
+        public Task<byte[]> RenderPageAsync(string pdfPath, int pageIndex, int dpi) =>
+            throw new InvalidOperationException("渲染失败");
     }
 
     private string WriteInput(string name = "scan.pdf")
@@ -63,6 +74,50 @@ public class OcrFeatureTests : IDisposable
 
         Assert.True(feature.CanHandle("C:\\a\\doc.PDF"));
         Assert.False(feature.CanHandle("C:\\a\\doc.jpg"));
+    }
+
+    [Fact]
+    public void ProcessingText_describes_recognition_not_watermark_removal()
+    {
+        var feature = new OcrFeature(new FakeRenderer(1), new FakeEngine(Array.Empty<string>()));
+
+        Assert.Contains("识别", feature.ProcessingText);
+        Assert.DoesNotContain("水印", feature.ProcessingText);
+    }
+
+    [Fact]
+    public void Trace_emits_stage_lines_including_total()
+    {
+        var lines = new List<string>();
+        var feature = new OcrFeature(
+            new FakeRenderer(2), new FakeEngine(new[] { "第一页内容" }), (message, _) => lines.Add(message));
+        string input = WriteInput("trace.pdf");
+
+        var result = feature.Run(input, FeatureContext.Capture(new AppSettings()));
+
+        Assert.Equal(FeatureStatus.Succeeded, result.Status);
+        Assert.Contains(lines, l => l.Contains("环节耗时[trace.pdf]：渲染页面") && l.Contains("2 页 200dpi"));
+        Assert.Contains(lines, l => l.Contains("：第1页识别"));
+        Assert.Contains(lines, l => l.Contains("：第2页识别"));
+        Assert.Contains(lines, l => l.Contains("：写出文本"));
+        Assert.Contains(lines, l => l.Contains("：总计") && l.Contains("2 页"));
+        // Every stage line carries its cumulative timing so logs are analysable standalone
+        // (the free-form 总计 line is the only exception).
+        Assert.All(lines.Where(l => !l.Contains("：总计")), l => Assert.Contains(" ms（累计", l));
+    }
+
+    [Fact]
+    public void Throwing_renderer_still_emits_elapsed_line()
+    {
+        var lines = new List<string>();
+        var feature = new OcrFeature(
+            new ThrowingRenderer(), new FakeEngine(Array.Empty<string>()), (message, _) => lines.Add(message));
+        string input = WriteInput("boom.pdf");
+
+        var result = feature.Run(input, FeatureContext.Capture(new AppSettings()));
+
+        Assert.Equal(FeatureStatus.Failed, result.Status);
+        Assert.Contains(lines, l => l.Contains("中断（已耗时") && l.Contains("渲染失败"));
     }
 
     [Fact]

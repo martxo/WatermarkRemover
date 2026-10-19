@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Text;
 using Windows.Storage.Streams;
+using WatermarkRemover.App.Layout;
 
 namespace WatermarkRemover.App.Ocr;
 
@@ -24,9 +25,17 @@ public static class OcrDiagnostics
     {
         var sb = new StringBuilder();
 
+        // The composed pipeline the jobs actually use (layout block × text engine).
+        sb.AppendLine($"当前管线：{AppOcrEngineChain.Current.DisplayName}");
+
         // The engine chain was already probed at startup — read the cached result instead of
         // re-probing, so the report always matches what the job actually used.
         sb.AppendLine(AppOcrEngineChain.Instance.Describe());
+
+        // Layout blocks probe on demand: the report is only built for bug reports, so loading
+        // the model files here to show every block's availability is acceptable.
+        AppLayoutStageChain.Instance.EnsureAllProbed();
+        sb.AppendLine(AppLayoutStageChain.Instance.Describe());
 
         // The PDF renderer used to go through WinRT too; record whether the OS PDF stack still
         // answers — that activation is what threw REGDB_E_CLASSNOTREG before the pdfium switch.

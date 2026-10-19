@@ -2,7 +2,9 @@ using Windows.Globalization;
 using Windows.Graphics.Imaging;
 using Windows.Media.Ocr;
 using Windows.Storage.Streams;
+using WatermarkRemover.Core.Features.Layout;
 using WatermarkRemover.Core.Features.Ocr;
+using WatermarkRemover.Core.Geometry;
 
 namespace WatermarkRemover.App.Ocr;
 
@@ -11,7 +13,7 @@ namespace WatermarkRemover.App.Ocr;
 /// dependencies, fully offline. Recognition quality depends on the language packs installed on
 /// the machine; Simplified Chinese is preferred when available.
 /// </summary>
-public sealed class WindowsMediaOcrEngine : IOcrEngine
+public sealed class WindowsMediaOcrEngine : IOcrEngine, IBoundedOcrEngine
 {
     private readonly OcrEngine? _engine;
 
@@ -23,6 +25,22 @@ public sealed class WindowsMediaOcrEngine : IOcrEngine
     public bool IsAvailable => _engine is not null;
 
     public async Task<IReadOnlyList<string>> RecognizeAsync(byte[] imageBytes)
+    {
+        (OcrResult result, _, _) = await RunAsync(imageBytes).ConfigureAwait(false);
+        return result.Lines.Select(l => l.Text).ToList();
+    }
+
+    /// <summary>Line bounds are the union of the line's word rectangles, normalized to the
+    /// decoded bitmap — this is what drives the anchor-based layout blocks.</summary>
+    public async Task<IReadOnlyList<RecognizedLine>> RecognizeWithBoundsAsync(byte[] imageBytes)
+    {
+        (OcrResult result, int width, int height) = await RunAsync(imageBytes).ConfigureAwait(false);
+        return result.Lines
+            .Select(line => new RecognizedLine(line.Text, LineBounds(line, width, height)))
+            .ToList();
+    }
+
+    private async Task<(OcrResult Result, int Width, int Height)> RunAsync(byte[] imageBytes)
     {
         ArgumentNullException.ThrowIfNull(imageBytes);
         if (_engine is null)
@@ -41,7 +59,23 @@ public sealed class WindowsMediaOcrEngine : IOcrEngine
         using var bitmap = await decoder.GetSoftwareBitmapAsync(
             BitmapPixelFormat.Bgra8, BitmapAlphaMode.Premultiplied);
         OcrResult result = await _engine.RecognizeAsync(bitmap);
-        return result.Lines.Select(l => l.Text).ToList();
+        return (result, (int)decoder.PixelWidth, (int)decoder.PixelHeight);
+    }
+
+    private static RectD? LineBounds(OcrLine line, int width, int height)
+    {
+        if (line.Words.Count == 0 || width <= 0 || height <= 0) return null;
+
+        double minX = line.Words.Min(w => w.BoundingRect.X);
+        double minY = line.Words.Min(w => w.BoundingRect.Y);
+        double maxX = line.Words.Max(w => w.BoundingRect.X + w.BoundingRect.Width);
+        double maxY = line.Words.Max(w => w.BoundingRect.Y + w.BoundingRect.Height);
+
+        double x = Math.Clamp(minX / width, 0, 1);
+        double y = Math.Clamp(minY / height, 0, 1);
+        double w = Math.Clamp((maxX - minX) / width, 0, 1 - x);
+        double h = Math.Clamp((maxY - minY) / height, 0, 1 - y);
+        return w <= 0 || h <= 0 ? null : new RectD(x, y, w, h);
     }
 
     private static OcrEngine? TryCreateEngine()

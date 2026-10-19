@@ -33,3 +33,30 @@ public sealed class RelayCommand : ICommand
 
     public void RaiseCanExecuteChanged() => CommandManager.InvalidateRequerySuggested();
 }
+
+/// <summary>Typed variant for commands whose parameter has a real type (list rows, nav items …).</summary>
+public sealed class RelayCommand<T> : ICommand
+{
+    private readonly Action<T?> _execute;
+    private readonly Predicate<T?>? _canExecute;
+
+    public RelayCommand(Action<T?> execute, Predicate<T?>? canExecute = null)
+    {
+        _execute = execute ?? throw new ArgumentNullException(nameof(execute));
+        _canExecute = canExecute;
+    }
+
+    public event EventHandler? CanExecuteChanged
+    {
+        add => CommandManager.RequerySuggested += value;
+        remove => CommandManager.RequerySuggested -= value;
+    }
+
+    public bool CanExecute(object? parameter) => _canExecute?.Invoke(Cast(parameter)) ?? true;
+
+    public void Execute(object? parameter) => _execute(Cast(parameter));
+
+    public void RaiseCanExecuteChanged() => CommandManager.InvalidateRequerySuggested();
+
+    private static T? Cast(object? parameter) => parameter is T value ? value : default;
+}

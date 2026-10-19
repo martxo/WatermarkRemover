@@ -43,6 +43,12 @@ public class WatermarkFeatureTests : IDisposable
     }
 
     [Fact]
+    public void ProcessingText_keeps_the_watermark_wording()
+    {
+        Assert.Equal("正在分析并去除水印…", CreateFeature().ProcessingText);
+    }
+
+    [Fact]
     public void Run_removes_the_badge_and_reports_a_succeeded_result()
     {
         string input = WriteInput(PdfFixture.CamScannerLike().Build());

@@ -1,7 +1,9 @@
 using System.IO;
 using RapidOcrNet;
 using SkiaSharp;
+using WatermarkRemover.Core.Features.Layout;
 using WatermarkRemover.Core.Features.Ocr;
+using WatermarkRemover.Core.Geometry;
 
 namespace WatermarkRemover.App.Ocr;
 
@@ -11,7 +13,7 @@ namespace WatermarkRemover.App.Ocr;
 /// (det + cls + rec + dict, ~21.5 MB) ships in <c>Models\</c> next to the executable; nothing is
 /// downloaded at runtime and no OS OCR component is required.
 /// </summary>
-public sealed class PpOcrEngine : IOcrEngine, IDisposable
+public sealed class PpOcrEngine : IOcrEngine, IBoundedOcrEngine, IDisposable
 {
     private const string DetModelFile = "ch_PP-OCRv5_det_mobile.onnx";
     private const string ClsModelFile = "ch_PP-LCNet_x0_25_textline_ori_cls_mobile.onnx";
@@ -64,7 +66,15 @@ public sealed class PpOcrEngine : IOcrEngine, IDisposable
         }
     }
 
-    public async Task<IReadOnlyList<string>> RecognizeAsync(byte[] imageBytes)
+    public async Task<IReadOnlyList<string>> RecognizeAsync(byte[] imageBytes) =>
+        (await RecognizeCoreAsync(imageBytes).ConfigureAwait(false)).Select(l => l.Text).ToList();
+
+    /// <summary>Line bounds come from each block's detection quad (<c>BoxPoints</c>), normalized
+    /// to the source image — this is what drives the anchor-based layout blocks.</summary>
+    public Task<IReadOnlyList<RecognizedLine>> RecognizeWithBoundsAsync(byte[] imageBytes) =>
+        RecognizeCoreAsync(imageBytes);
+
+    private async Task<IReadOnlyList<RecognizedLine>> RecognizeCoreAsync(byte[] imageBytes)
     {
         ArgumentNullException.ThrowIfNull(imageBytes);
 
@@ -73,20 +83,39 @@ public sealed class PpOcrEngine : IOcrEngine, IDisposable
         {
             using var bitmap = SKBitmap.Decode(imageBytes)
                 ?? throw new InvalidOperationException("无法解码输入图像。");
+            double imgW = bitmap.Width, imgH = bitmap.Height;
 
             OcrResult result = await _ocr
                 .DetectAsync(bitmap, RapidOcrOptions.Default, CancellationToken.None)
                 .ConfigureAwait(false);
 
-            return result.TextBlocks
-                .Select(block => block.Text)
-                .Where(text => !string.IsNullOrWhiteSpace(text))
-                .ToList();
+            var lines = new List<RecognizedLine>();
+            foreach (var block in result.TextBlocks)
+            {
+                if (string.IsNullOrWhiteSpace(block.Text)) continue;
+                lines.Add(new RecognizedLine(block.Text, NormalizeQuad(block.BoxPoints, imgW, imgH)));
+            }
+
+            return lines;
         }
         finally
         {
             _gate.Release();
         }
+    }
+
+    /// <summary>Bounding box of the detection quad in normalized (0–1) image coordinates.</summary>
+    private static RectD? NormalizeQuad(SKPointI[]? quad, double imgW, double imgH)
+    {
+        if (quad is null || quad.Length == 0 || imgW <= 0 || imgH <= 0) return null;
+
+        double minX = quad.Min(p => p.X), maxX = quad.Max(p => p.X);
+        double minY = quad.Min(p => p.Y), maxY = quad.Max(p => p.Y);
+        double x = Math.Clamp(minX / imgW, 0, 1);
+        double y = Math.Clamp(minY / imgH, 0, 1);
+        double w = Math.Clamp((maxX - minX) / imgW, 0, 1 - x);
+        double h = Math.Clamp((maxY - minY) / imgH, 0, 1 - y);
+        return w <= 0 || h <= 0 ? null : new RectD(x, y, w, h);
     }
 
     public void Dispose()

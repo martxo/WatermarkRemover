@@ -94,4 +94,65 @@ public class OcrEngineChainTests
             () => chain.Engine.RecognizeAsync(Array.Empty<byte>()));
         Assert.Contains("未注册任何 OCR 引擎", ex.Message);
     }
+
+    [Fact]
+    public void SelectReturnsPinnedEngineAndProbesRemainingFactories()
+    {
+        var chain = new OcrEngineChain(new IOcrEngineFactory[]
+        {
+            new FakeFactory("first", available: true),
+            new FakeFactory("second", available: true),
+        });
+
+        // Startup still stops at the first usable engine — the extra probe only happens on demand.
+        Assert.Equal("first", chain.Engine.DisplayName);
+        Assert.Equal(new[] { "first" }, chain.Links.Select(l => l.Name));
+
+        Assert.Equal("second", chain.Select("second").DisplayName);
+        Assert.Equal(new[] { "first", "second" }, chain.Links.Select(l => l.Name));
+    }
+
+    [Fact]
+    public void SelectFallsBackToAutomaticChainWhenPreferenceIsUnusable()
+    {
+        var chain = new OcrEngineChain(new IOcrEngineFactory[]
+        {
+            new FakeFactory("first", available: true),
+            new FakeFactory("second", available: false),
+        });
+
+        // Unavailable, unknown, empty and null preferences all degrade to the priority head.
+        Assert.Equal("first", chain.Select("second").DisplayName);
+        Assert.Equal("first", chain.Select("removed-engine").DisplayName);
+        Assert.Equal("first", chain.Select(string.Empty).DisplayName);
+        Assert.Equal("first", chain.Select(null).DisplayName);
+    }
+
+    [Fact]
+    public void EnsureAllProbedProbesEveryFactoryExactlyOnce()
+    {
+        int probes = 0;
+        var chain = new OcrEngineChain(new IOcrEngineFactory[]
+        {
+            new DelegateOcrEngineFactory("usable", () =>
+            {
+                probes++;
+                return (true, new FakeEngine("usable"), string.Empty);
+            }),
+            new DelegateOcrEngineFactory("missing", () =>
+            {
+                probes++;
+                return (false, null, "not on this machine");
+            }),
+        });
+
+        Assert.Equal(1, probes); // constructor stopped at the first usable engine
+
+        chain.EnsureAllProbed();
+        chain.EnsureAllProbed(); // idempotent — never re-probes a factory
+
+        Assert.Equal(2, probes);
+        Assert.Equal(new[] { "usable", "missing" }, chain.Links.Select(l => l.Name));
+        Assert.Equal("not on this machine", chain.Links[1].Reason);
+    }
 }

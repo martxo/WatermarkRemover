@@ -49,7 +49,7 @@ public partial class App : Application
             "程序遇到意外错误，已自动记录日志，您可以继续使用。\n\n" +
             $"{ex.Message}\n\n" +
             $"日志位置：{AppFolders.LogDirectory}",
-            "去水印工具",
+            "办公助理",
             MessageBoxButton.OK,
             MessageBoxImage.Warning);
     }

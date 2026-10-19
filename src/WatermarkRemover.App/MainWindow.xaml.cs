@@ -1,5 +1,6 @@
-﻿using System.IO;
 using System.Windows;
+using System.Windows.Controls;
+using System.Runtime.InteropServices;
 using Microsoft.Win32;
 using WatermarkRemover.App.Logging;
 using WatermarkRemover.App.Updates;
@@ -9,18 +10,68 @@ namespace WatermarkRemover.App;
 
 public partial class MainWindow : Window
 {
+    /// <summary>DWMWA_WINDOW_CORNER_PREFERENCE — Windows 11 attribute that rounds the window.</summary>
+    private const int DwmwaWindowCornerPreference = 33;
+
+    /// <summary>DWMWCP_ROUND — the standard (8px) window corner, same as reference-style apps.</summary>
+    private const int DwmwcpRound = 2;
+
+    [DllImport("dwmapi.dll", PreserveSig = true)]
+    private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
+
     private readonly MainViewModel _viewModel = new();
     private readonly Services.IDialogService _dialogs = new Services.DialogService();
+
+    /// <summary>
+    /// Drag-exit watchdog. DragLeave is unreliable in WPF: it bubbles from every child element,
+    /// and the leave caused by dragging out of the window is often swallowed entirely. Instead
+    /// of trusting it, every drag heartbeat (DragEnter/DragOver) re-arms this timer; if no
+    /// heartbeat arrives the cursor position is verified before resetting the drop zone.
+    /// </summary>
+    private readonly System.Windows.Threading.DispatcherTimer _dragWatchdog;
 
     public MainWindow()
     {
         InitializeComponent();
         DataContext = _viewModel;
+        // Tile clicks open the screen-level viewer (dark veil over the whole screen, film rail
+        // on the left) — a real window, so the host wires it here, outside the view model.
+        _viewModel.PreviewViewerOpener = strip => FullscreenViewerWindow.ShowFor(strip);
+        _dragWatchdog = new System.Windows.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(180),
+        };
+        _dragWatchdog.Tick += OnDragWatchdogTick;
         _viewModel.Jobs.CollectionChanged += (_, _) => SyncListVisibility();
+        // Section switches don't touch the Jobs collection — follow the count property instead.
+        _viewModel.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(MainViewModel.VisibleJobCount)) SyncListVisibility();
+        };
         Loaded += OnWindowLoaded;
+
+        // Reflect the persisted scan layout on the scan panel. The Checked handler no-ops when
+        // the value matches what is already stored.
+        int initial = Math.Clamp(_viewModel.Settings.ScanDuplex, 0, 2);
+        RadioButton radio = initial switch
+        {
+            1 => ScanDuplexLongEdge,
+            2 => ScanDuplexShortEdge,
+            _ => ScanDuplexSimplex,
+        };
+        radio.IsChecked = true;
     }
 
-    /// <summary>Quiet update check on startup; never disturbs normal work.</summary>
+    /// <summary>Persists the scan layout choice the moment a radio is checked (no save button).</summary>
+    private void OnScanDuplexChecked(object sender, RoutedEventArgs e)
+    {
+        if (sender is RadioButton radio && int.TryParse(radio.Tag as string, out int duplex))
+            _viewModel.ApplyScanDuplex(duplex);
+    }
+
+    /// <summary>
+    /// Quiet update check on startup; never disturbs normal work.
+    /// </summary>
     private async void OnWindowLoaded(object sender, RoutedEventArgs e)
     {
         try
@@ -33,47 +84,98 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// Rounds the four window corners through DWM (Windows 11 native), matching the reference
+    /// UI's curved corners. The custom chrome (GlassFrameThickness=0) leaves the frame square
+    /// otherwise. On Windows 10 the attribute is rejected by DwmSetWindowAttribute — we ignore
+    /// the result and keep square corners, everything else is unaffected.
+    /// </summary>
+    protected override void OnSourceInitialized(EventArgs e)
+    {
+        base.OnSourceInitialized(e);
+
+        IntPtr hwnd = new System.Windows.Interop.WindowInteropHelper(this).Handle;
+        int preference = DwmwcpRound;
+        _ = DwmSetWindowAttribute(hwnd, DwmwaWindowCornerPreference, ref preference, sizeof(int));
+    }
+
     private void SyncListVisibility()
     {
-        bool hasJobs = _viewModel.Jobs.Count > 0;
+        // Per-section visibility: a full scan history must not hide 去水印's empty state.
+        bool hasJobs = _viewModel.VisibleJobCount > 0;
         JobList.Visibility = hasJobs ? Visibility.Visible : Visibility.Collapsed;
         EmptyStateText.Visibility = hasJobs ? Visibility.Collapsed : Visibility.Visible;
     }
 
-    private void OnDragOver(object sender, DragEventArgs e)
+    private void OnDragEnter(object sender, DragEventArgs e) => UpdateDragState(e);
+
+    private void OnDragOver(object sender, DragEventArgs e) => UpdateDragState(e);
+
+    /// <summary>
+    /// Every drag heartbeat: evaluate the payload against the selected feature and re-arm the
+    /// exit watchdog. The visual state lives in the view model; this code never touches the tree.
+    /// </summary>
+    private void UpdateDragState(DragEventArgs e)
     {
-        if (e.Data.GetDataPresent(DataFormats.FileDrop))
+        if (e.Data.GetDataPresent(DataFormats.FileDrop) &&
+            e.Data.GetData(DataFormats.FileDrop) is string[] files)
         {
-            e.Effects = DragDropEffects.Copy;
-            DropHintText.Text = "松开鼠标，立即开始去水印";
+            bool accepted = files.Any(_viewModel.SelectedFeature.CanHandle);
+            e.Effects = accepted ? DragDropEffects.Copy : DragDropEffects.None;
+            _viewModel.NotifyDragOver(files);
         }
         else
         {
             e.Effects = DragDropEffects.None;
-            DropHintText.Text = "只支持 PDF 文件";
+            _viewModel.NotifyDragOver(null);
         }
 
         e.Handled = true;
+        _dragWatchdog.Stop();
+        _dragWatchdog.Start();
+    }
+
+    /// <summary>A DragLeave bubbled up (child boundary crossed, or a real exit) — don't reset
+    /// immediately, just start the clock and let the heartbeat / cursor check decide.</summary>
+    private void OnDragLeave(object sender, DragEventArgs e)
+    {
+        _dragWatchdog.Stop();
+        _dragWatchdog.Start();
+    }
+
+    private void OnDragWatchdogTick(object? sender, EventArgs e)
+    {
+        _dragWatchdog.Stop();
+
+        // Only reset when the cursor is genuinely outside the window: a bubbled child
+        // DragLeave with the cursor still inside keeps the current state until the next
+        // heartbeat re-syncs it.
+        var p = System.Windows.Input.Mouse.GetPosition(this);
+        bool inside = p.X >= 0 && p.Y >= 0 && p.X <= ActualWidth && p.Y <= ActualHeight;
+        if (inside) return;
+
+        _viewModel.NotifyDragLeave();
     }
 
     private async void OnDrop(object sender, DragEventArgs e)
     {
-        DropHintText.Text = "把 PDF 文件拖到这里，松手即开始去水印";
+        _dragWatchdog.Stop();
+        _viewModel.NotifyDragLeave();
 
         if (!e.Data.GetDataPresent(DataFormats.FileDrop)) return;
         if (e.Data.GetData(DataFormats.FileDrop) is not string[] dropped) return;
 
-        string[] pdfs = dropped
-            .Where(p => string.Equals(Path.GetExtension(p), ".pdf", StringComparison.OrdinalIgnoreCase))
+        string[] accepted = dropped
+            .Where(p => _viewModel.SelectedFeature.CanHandle(p))
             .ToArray();
 
-        if (pdfs.Length == 0)
+        if (accepted.Length == 0)
         {
-            _dialogs.Info("只支持 PDF 文件。", "提示");
+            _dialogs.Info($"「{_viewModel.SelectedFeature.DisplayName}」不支持所拖入的文件。", "提示");
             return;
         }
 
-        await _viewModel.AddFilesAsync(pdfs);
+        await _viewModel.AddFilesAsync(accepted);
     }
 
     private async void OnPickFiles(object sender, RoutedEventArgs e)
@@ -89,13 +191,21 @@ public partial class MainWindow : Window
         await _viewModel.AddFilesAsync(dialog.FileNames);
     }
 
-    private void OnSettingsClick(object sender, RoutedEventArgs e)
-    {
-        var window = new SettingsWindow(_viewModel.Settings) { Owner = this };
-        window.ShowDialog();
+    /// <summary>First step of the account flow: clicking the user entry toggles the menu.</summary>
+    private void OnUserEntryClick(object sender, RoutedEventArgs e) =>
+        UserMenuPopup.IsOpen = !UserMenuPopup.IsOpen;
 
-        // Settings are edited in place on the shared object; persist whatever changed.
-        _viewModel.SaveSettingsCommand.Execute(null);
+    /// <summary>Second step: the "设置" row enters the settings second-level page.</summary>
+    private void OnOpenSettingsClick(object sender, RoutedEventArgs e)
+    {
+        UserMenuPopup.IsOpen = false;
+        _viewModel.OpenSettings();
+    }
+
+    private void OnExitAppClick(object sender, RoutedEventArgs e)
+    {
+        UserMenuPopup.IsOpen = false;
+        Close();
     }
 
     // Self-drawn caption buttons — with GlassFrameThickness=0 the system ones no longer exist.
@@ -132,7 +242,11 @@ public partial class MainWindow : Window
     /// Clicking anywhere outside the app (another window, the desktop) deactivates this window —
     /// no WPF mouse event reaches us, so Deactivated is the only reliable "clicked away" signal.
     /// </summary>
-    private void OnWindowDeactivated(object? sender, EventArgs e) => CommitActiveRenames();
+    private void OnWindowDeactivated(object? sender, EventArgs e)
+    {
+        UserMenuPopup.IsOpen = false;
+        CommitActiveRenames();
+    }
 
     /// <summary>
     /// Clicking outside the rename box but inside the window commits it. WPF only moves keyboard
@@ -141,12 +255,33 @@ public partial class MainWindow : Window
     /// </summary>
     private void OnWindowPreviewMouseDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
     {
+        // A real mouse-down can't happen mid-drag (the OLE drag loop owns the mouse), so any
+        // click also clears a drop zone left stale by a cancelled drag (e.g. pressing Esc).
+        _viewModel.NotifyDragLeave();
+
+        // Close the account menu on any press inside the main window — except the press on
+        // the entry itself, whose Click handler stays a deterministic open/close toggle.
+        if (UserMenuPopup.IsOpen &&
+            !IsWithin(e.OriginalSource as DependencyObject, UserEntryButton))
+            UserMenuPopup.IsOpen = false;
+
         if (!_viewModel.Jobs.Any(j => j.IsEditing)) return;
 
         // A click inside the edit box (text area, selection, caret) must not commit.
         if (IsWithinRenameBox(e.OriginalSource as DependencyObject)) return;
 
         CommitActiveRenames();
+    }
+
+    /// <summary>Walks the visual tree up from <paramref name="source"/> looking for <paramref name="target"/>.</summary>
+    private static bool IsWithin(DependencyObject? source, DependencyObject target)
+    {
+        while (source is not null)
+        {
+            if (ReferenceEquals(source, target)) return true;
+            source = System.Windows.Media.VisualTreeHelper.GetParent(source);
+        }
+        return false;
     }
 
     private void CommitActiveRenames()

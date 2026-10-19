@@ -30,6 +30,17 @@ public static class AppLog
     public static void Error(string message, Exception? exception = null) =>
         Write("ERROR", message, exception);
 
+    /// <summary>
+    /// Adapter for Core trace callbacks (<c>Action&lt;string, Exception?&gt;</c>): non-exception
+    /// lines land at INFO, failures at ERROR with their details — wired as one shared lambda by
+    /// every feature and pipeline that records execution traces.
+    /// </summary>
+    public static void Trace(string message, Exception? exception = null)
+    {
+        if (exception is null) Info(message);
+        else Error(message, exception);
+    }
+
     private static void Write(string level, string message, Exception? exception)
     {
         try

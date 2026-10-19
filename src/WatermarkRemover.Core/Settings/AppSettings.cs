@@ -1,3 +1,5 @@
+using WatermarkRemover.Core.Netdisk;
+
 namespace WatermarkRemover.Core.Settings;
 
 /// <summary>Where the cleaned file is written.</summary>
@@ -43,6 +45,37 @@ public sealed class AppSettings
     /// </summary>
     public bool AutoNameByContent { get; set; } = true;
 
+    /// <summary>
+    /// Name of the OCR engine the user pinned in the settings OCR section (a factory name from
+    /// the engine chain). Empty = pick the best available engine automatically. A preference
+    /// whose engine is unavailable falls back to the automatic chain at runtime.
+    /// </summary>
+    public string PreferredOcrEngine { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Name of the layout block (first pipeline stage) the user pinned in the settings OCR
+    /// section (a factory name from the layout stage chain). Empty = full-image passthrough,
+    /// i.e. the pre-pipeline behaviour. A preference whose block is unavailable falls back to
+    /// the automatic chain at runtime.
+    /// </summary>
+    public string PreferredLayoutStage { get; set; } = string.Empty;
+
+    /// <summary>Scan page layout (扫描页): 0 = 单面, 1 = 双面长边, 2 = 双面短边.</summary>
+    public int ScanDuplex { get; set; }
+
+    /// <summary>Scan colour mode (扫描色彩): 0 = 自动, 1 = 彩色, 2 = 灰度, 3 = 黑白. Defaults to
+    /// 黑白 — text documents scan ~2x faster and produce far smaller, crisper PDFs.</summary>
+    public int ScanColor { get; set; } = 3;
+
+    /// <summary>Where scanned PDFs are written (扫描设置 → 输出目录). Empty = the Pictures
+    /// folder, which stays the default so an upgrade never moves existing scans elsewhere.
+    /// Independent of the watermark feature's OutputDirectory — scans have no source file.</summary>
+    public string ScanOutputDirectory { get; set; } = string.Empty;
+
+    /// <summary>Configured 网盘 accounts (网盘设置); secret values carry the <c>dpapi:</c> prefix
+    /// at rest — see <see cref="NetdiskAccountPersistence"/>.</summary>
+    public List<PersistedNetdiskAccount> NetdiskAccounts { get; set; } = new();
+
     /// <summary>Deep copy: safe to hand to background work while the original keeps being edited.</summary>
     public AppSettings Clone() => new()
     {
@@ -54,5 +87,11 @@ public sealed class AppSettings
         CheckUpdatesOnStartup = CheckUpdatesOnStartup,
         QuickSuffixes = new List<string>(QuickSuffixes),
         AutoNameByContent = AutoNameByContent,
+        PreferredOcrEngine = PreferredOcrEngine,
+        PreferredLayoutStage = PreferredLayoutStage,
+        ScanDuplex = ScanDuplex,
+        ScanColor = ScanColor,
+        ScanOutputDirectory = ScanOutputDirectory,
+        NetdiskAccounts = NetdiskAccounts.ToList(),
     };
 }

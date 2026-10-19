@@ -1,0 +1,184 @@
+using SkiaSharp;
+using WatermarkRemover.App.Ocr;
+using WatermarkRemover.Core.Features.Layout;
+using WatermarkRemover.Core.Features.Ocr;
+using WatermarkRemover.Core.Geometry;
+
+namespace WatermarkRemover.Tests.App;
+
+public class PdfOrientationDetectorTests
+{
+    private static byte[] Png(int width, int height)
+    {
+        var info = new SKImageInfo(width, height, SKColorType.Bgra8888, SKAlphaType.Premul);
+        using var bitmap = new SKBitmap(info);
+        using var image = SKImage.FromBitmap(bitmap);
+        using var data = image.Encode(SKEncodedImageFormat.Png, 100);
+        return data.ToArray();
+    }
+
+    /// <summary>Returns a scripted line per call — the detector queries turns 0..3 in order,
+    /// so the Nth call is the Nth candidate orientation.</summary>
+    private sealed class ScriptedOcr(params int[] charsPerTurn) : IOcrEngine
+    {
+        public string DisplayName => "Scripted";
+
+        public int Calls { get; private set; }
+
+        public Task<IReadOnlyList<string>> RecognizeAsync(byte[] imageBytes)
+        {
+            int turn = Calls++;
+            string text = new('字', turn < charsPerTurn.Length ? charsPerTurn[turn] : 0);
+            IReadOnlyList<string> lines = text.Length == 0
+                ? Array.Empty<string>()
+                : new[] { text };
+            return Task.FromResult(lines);
+        }
+    }
+
+    private sealed class UnusableOcr : IOcrEngine
+    {
+        public string DisplayName => "Unusable";
+
+        public Task<IReadOnlyList<string>> RecognizeAsync(byte[] imageBytes) =>
+            throw new InvalidOperationException("本机没有可用的 OCR 引擎");
+    }
+
+    // ---------- the voting rule (pure, no OCR / image work) ----------
+
+    [Fact]
+    public void Upright_page_with_clear_majority_reports_no_turn()
+    {
+        var scores = new Dictionary<int, double> { [0] = 500, [1] = 12, [2] = 8, [3] = 10 };
+        Assert.Equal(0, PdfOrientationDetector.PickBestTurn(scores, minWinningScore: 20));
+    }
+
+    [Fact]
+    public void Upside_down_page_votes_for_two_turns()
+    {
+        var scores = new Dictionary<int, double> { [0] = 9, [1] = 11, [2] = 480, [3] = 14 };
+        Assert.Equal(2, PdfOrientationDetector.PickBestTurn(scores, minWinningScore: 20));
+    }
+
+    [Fact]
+    public void Sideways_page_votes_for_the_quarter_turn_that_reads()
+    {
+        var scores = new Dictionary<int, double> { [0] = 7, [1] = 12, [2] = 10, [3] = 390 };
+        Assert.Equal(3, PdfOrientationDetector.PickBestTurn(scores, minWinningScore: 20));
+    }
+
+    [Fact]
+    public void A_marginal_difference_never_turns_the_file()
+    {
+        // 580 vs 500 is inside the 1.25 win factor — OCR noise on an upright page.
+        var scores = new Dictionary<int, double> { [0] = 500, [1] = 8, [2] = 580, [3] = 9 };
+        Assert.Equal(0, PdfOrientationDetector.PickBestTurn(scores, minWinningScore: 20));
+    }
+
+    [Fact]
+    public void Blank_pages_stay_put_even_when_a_turn_scores_higher()
+    {
+        // 15 characters everywhere: nothing decisive — never rotate on whispers.
+        var scores = new Dictionary<int, double> { [0] = 2, [1] = 15, [2] = 3, [3] = 1 };
+        Assert.Equal(0, PdfOrientationDetector.PickBestTurn(scores, minWinningScore: 20));
+    }
+
+    // ---------- the geometric rule (line boxes, immune to rotation-robust engines) ----------
+
+    /// <summary>Horizontal text lines, tops descending in reading order (an upright page).</summary>
+    private static IReadOnlyList<RecognizedLine> UprightLines(int count) =>
+        Enumerable.Range(0, count)
+            .Select(i => new RecognizedLine($"第{i}行", new RectD(0.1, 0.1 + i * 0.08, 0.8, 0.04)))
+            .ToList();
+
+    [Fact]
+    public void Geometry_reads_an_upright_page_high()
+    {
+        Assert.True(PdfOrientationDetector.GeometryScore(UprightLines(10)) >= 0.9);
+    }
+
+    [Fact]
+    public void Geometry_reads_an_upside_down_page_low()
+    {
+        // Same boxes, but the reading order now runs bottom-up: 180°.
+        var flipped = UprightLines(10).Reverse().ToList();
+        Assert.True(PdfOrientationDetector.GeometryScore(flipped) <= 0.1);
+    }
+
+    [Fact]
+    public void Geometry_reads_a_sideways_page_low()
+    {
+        // Tall narrow boxes stacked left-to-right: the page was turned a quarter way.
+        var sideways = Enumerable.Range(0, 10)
+            .Select(i => new RecognizedLine($"第{i}行", new RectD(0.05 + i * 0.09, 0.1, 0.03, 0.8)))
+            .ToList();
+        Assert.True(PdfOrientationDetector.GeometryScore(sideways) <= 0.1);
+    }
+
+    [Fact]
+    public void Geometry_needs_enough_lines_to_speak()
+    {
+        Assert.Equal(0, PdfOrientationDetector.GeometryScore(UprightLines(2)));
+    }
+
+    [Fact]
+    public async Task Bounded_engine_detection_uses_geometry_and_finds_the_upside_down_page()
+    {
+        // The engine reads every rotation equally well (WeChat-like) but always reports
+        // upright-style boxes for the candidate it was given — the detector rotates the IMAGE,
+        // so the true turn is where the returned layout looks upright.
+        var ocr = new LayoutScriptedOcr();
+        var detector = new PdfOrientationDetector(ocr);
+
+        int steps = await detector.DetectClockwiseStepsAsync(Png(40, 30));
+
+        Assert.Equal(4, ocr.Calls);
+        Assert.Equal(2, steps);
+    }
+
+    /// <summary>Always answers with an upright-looking layout for turn 2 and nothing usable
+    /// for the others — geometry must pick turn 2 despite identical text volume everywhere.</summary>
+    private sealed class LayoutScriptedOcr : IBoundedOcrEngine
+    {
+        public string DisplayName => "LayoutScripted";
+
+        public int Calls { get; private set; }
+
+        public Task<IReadOnlyList<string>> RecognizeAsync(byte[] imageBytes) =>
+            RecognizeWithBoundsAsync(imageBytes).ContinueWith(t =>
+                (IReadOnlyList<string>)t.Result.Select(l => l.Text).ToList());
+
+        public Task<IReadOnlyList<RecognizedLine>> RecognizeWithBoundsAsync(byte[] imageBytes)
+        {
+            int turn = Calls++;
+            IReadOnlyList<RecognizedLine> lines = turn == 2
+                ? UprightLines(8)
+                : Array.Empty<RecognizedLine>();
+            return Task.FromResult(lines);
+        }
+    }
+
+    // ---------- the orchestration (real image rotation, scripted OCR) ----------
+
+    [Fact]
+    public async Task Detection_runs_all_four_turns_and_rotates_the_candidate_images()
+    {
+        var ocr = new ScriptedOcr(3, 2, 30, 2);
+        var detector = new PdfOrientationDetector(ocr);
+
+        int steps = await detector.DetectClockwiseStepsAsync(Png(40, 30));
+
+        Assert.Equal(4, ocr.Calls); // every candidate got a reading
+        Assert.Equal(2, steps); // 180° was the decisive reading
+    }
+
+    [Fact]
+    public async Task An_unusable_engine_reads_as_already_upright()
+    {
+        var detector = new PdfOrientationDetector(new UnusableOcr());
+
+        int steps = await detector.DetectClockwiseStepsAsync(Png(40, 30));
+
+        Assert.Equal(0, steps); // convenience feature degrades to silence, never an error
+    }
+}

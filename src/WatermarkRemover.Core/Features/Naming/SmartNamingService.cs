@@ -27,6 +27,15 @@ public static class SmartNamingService
             return null;
         }
 
+        if (profile.NameStrategy == NameExtractionStrategy.FixedRegion)
+        {
+            // Fixed-layout type: the name is read geometrically from the page image (the
+            // App-side region locator). Guessing from shredded full-page OCR text produced
+            // garbage names (高级领导征信) — disabled on purpose for these types.
+            trace?.Invoke($"命名：类型={profile.TypeShortName} 为固定版式，文本通道不猜名（走区域定位）", null);
+            return null;
+        }
+
         string? personName = NameExtractor.Extract(ocrLines, profile);
         if (personName is null)
         {

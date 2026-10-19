@@ -20,4 +20,14 @@ public static class AppAssets
 
     /// <summary>Resolves one file inside <see cref="ModelsDirectory"/>.</summary>
     public static string Model(string fileName) => Path.Combine(ModelsDirectory, fileName);
+
+    /// <summary>Folder beside the exe that holds the x86 bridge into Brother's engine.</summary>
+    public const string BrotherEngineFolderName = "BrotherEngine";
+
+    /// <summary>The bridge exe: x86 self-contained, published by the csproj bridge target.</summary>
+    public const string ScanBridgeExecutableName = "WatermarkRemover.Scan.Bridge.exe";
+
+    public static string ScanBridgeDirectory => Path.Combine(AppContext.BaseDirectory, BrotherEngineFolderName);
+
+    public static string ScanBridgeExecutable => Path.Combine(ScanBridgeDirectory, ScanBridgeExecutableName);
 }

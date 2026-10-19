@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>WatermarkRemover.Scan.Pdf</RootNamespace>
+    <AssemblyName>WatermarkRemover.Scan.Pdf</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- PDFsharp 6.x ships under AGPL-3.0; PdfDocumentBuilder acknowledges the licence at runtime. -->
+    <PackageReference Include="PDFsharp" Version="6.5.0" />
+    <!-- Pure-managed CCITT G4 (fax T.6) codec, BSD-licensed: compresses bilevel scan frames
+         for the official-style raw image XObject path (see CcittG4Image). -->
+    <PackageReference Include="BitMiracle.LibTiff.NET" Version="2.4.660" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\WatermarkRemover.Scan.Core\WatermarkRemover.Scan.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="WatermarkRemover.Tests" />
+  </ItemGroup>
+
+</Project>

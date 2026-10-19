@@ -43,6 +43,8 @@ public sealed class WatermarkFeature : IFeature
 
     public string DisplayName => "去水印";
 
+    public string ProcessingText => "正在分析并去除水印…";
+
     public bool CanHandle(string filePath) =>
         string.Equals(Path.GetExtension(filePath), ".pdf", StringComparison.OrdinalIgnoreCase);
 

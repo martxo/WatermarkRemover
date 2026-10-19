@@ -41,6 +41,12 @@ public sealed class FileJobViewModel : ObservableObject
     private long _closedByOutsideClickTick;
     private bool _closedByOutsideClickArmed;
     private bool _suppressCloseStamp;
+    private PdfPreviewViewModel? _strip;
+    private bool _stripOpen;
+
+    /// <summary>Which navigation section this record belongs to (scan / watermark / ocr…);
+    /// the list is filtered per section so records never mix across pages.</summary>
+    public string? OwnerFeatureId { get; internal set; }
 
     public FileJobViewModel(string inputPath, IReadOnlyList<string> quickSuffixes)
     {
@@ -48,7 +54,6 @@ public sealed class FileJobViewModel : ObservableObject
         FileName = Path.GetFileName(inputPath);
         _displayName = FileName;
         RefreshSuffixChips(quickSuffixes);
-
         BeginEditCommand = new RelayCommand(BeginEdit, () => IsRenamable && !IsEditing);
         CommitEditCommand = new RelayCommand(CommitEdit, () => IsEditing);
         CancelEditCommand = new RelayCommand(CancelEdit, () => IsEditing);
@@ -114,6 +119,49 @@ public sealed class FileJobViewModel : ObservableObject
     /// <summary>Only a failed job has a diagnostic worth copying.</summary>
     public bool ShowCopyError => State == JobState.Failed;
 
+    /// <summary>A PDF output exists on disk, so the in-app preview can be offered for this row.</summary>
+    public bool ShowPreview =>
+        OutputPath is { } path &&
+        string.Equals(Path.GetExtension(path), ".pdf", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Scans unfold their strip automatically — no button (the user asked for
+    /// zero-click previews); every other section keeps the click-to-expand button.</summary>
+    public Visibility PreviewButtonVisibility =>
+        OwnerFeatureId == "scan.page" ? Visibility.Collapsed :
+        ShowPreview ? Visibility.Visible : Visibility.Collapsed;
+
+    /// <summary>
+    /// The row's own thumbnail strip: the same preview view model the enlarge overlay later shows,
+    /// created once on first expand and kept for the row's lifetime so renders, the rotation lock
+    /// and the tile states stay identical in both surfaces.
+    /// </summary>
+    public PdfPreviewViewModel? Strip
+    {
+        get => _strip;
+        private set => SetProperty(ref _strip, value);
+    }
+
+    /// <summary>Whether the strip under this row is expanded (the toggle the preview button drives).</summary>
+    public bool StripOpen
+    {
+        get => _stripOpen;
+        internal set
+        {
+            if (SetProperty(ref _stripOpen, value))
+                OnPropertyChanged(nameof(PreviewToggleText));
+        }
+    }
+
+    /// <summary>Preview button wording follows the strip: open it, or fold it away.</summary>
+    public string PreviewToggleText => StripOpen ? "收起" : "预览";
+
+    /// <summary>Owner side (coordinator): attach a freshly built strip and expand it.</summary>
+    internal void AttachStrip(PdfPreviewViewModel strip)
+    {
+        Strip = strip;
+        StripOpen = true;
+    }
+
     public string Detail
     {
         get => _detail;
@@ -129,6 +177,8 @@ public sealed class FileJobViewModel : ObservableObject
             {
                 OnPropertyChanged(nameof(IsRenamable));
                 OnPropertyChanged(nameof(ChipsVisible));
+                OnPropertyChanged(nameof(ShowPreview));
+                OnPropertyChanged(nameof(PreviewButtonVisibility));
             }
         }
     }
@@ -234,10 +284,10 @@ public sealed class FileJobViewModel : ObservableObject
 
     public string ProcessedAtText => ProcessedAt?.ToString("yyyy-MM-dd HH:mm:ss") ?? string.Empty;
 
-    public void MarkProcessing()
+    public void MarkProcessing(string processingText)
     {
         State = JobState.Processing;
-        Detail = "正在分析并去除水印…";
+        Detail = processingText;
     }
 
     public void Apply(FeatureResult result)

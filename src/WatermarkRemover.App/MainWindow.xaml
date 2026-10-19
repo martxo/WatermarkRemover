@@ -3,16 +3,19 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:behaviors="clr-namespace:WatermarkRemover.App.Behaviors"
         xmlns:vm="clr-namespace:WatermarkRemover.App.ViewModels"
+        xmlns:app="clr-namespace:WatermarkRemover.App"
         Title="办公助理"
-        Width="960" Height="680"
+        Width="960" Height="760"
         MinWidth="760" MinHeight="520"
         WindowStartupLocation="CenterScreen"
-        Background="{StaticResource PageBrush}"
+        Background="{StaticResource ShellBrush}"
         AllowDrop="True"
         PreviewMouseDown="OnWindowPreviewMouseDown"
         Deactivated="OnWindowDeactivated"
         Drop="OnDrop"
+        DragEnter="OnDragEnter"
         DragOver="OnDragOver"
+        DragLeave="OnDragLeave"
         StateChanged="OnWindowStateChanged">
     <WindowChrome.WindowChrome>
         <!-- Flat, integrated title bar: the top 44px belongs to our layout (brand on the left),
@@ -65,6 +68,36 @@
                 </Button.Style>
             </Button>
         </DataTemplate>
+
+        <!-- Row of the account popup menu: transparent by default, light gray on hover
+             (sampled from the reference menu) -->
+        <Style x:Key="UserMenuItemStyle" TargetType="Button">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="HorizontalContentAlignment" Value="Left"/>
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Padding" Value="10,8"/>
+            <Setter Property="Margin" Value="0,1"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Root"
+                                Background="{TemplateBinding Background}"
+                                CornerRadius="6"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Root" Property="Background" Value="{StaticResource ShellMenuHoverBrush}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
     </Window.Resources>
 
     <Grid>
@@ -77,44 +110,33 @@
             <ColumnDefinition Width="*"/>
         </Grid.ColumnDefinitions>
 
-        <!-- Flat title bar: sidebar toggle + brand on the left, caption buttons on the right -->
+        <!-- Flat title bar (main shell only — the settings page provides its own top strip):
+             gray like the reference UI, with the sidebar toggle + brand on the left.
+             The caption buttons live in their own top-most layer below so they stay
+             clickable in both modes. -->
         <Border Grid.Row="0" Grid.ColumnSpan="2"
-                Background="White"
-                BorderBrush="{StaticResource BorderBrushLight}"
-                BorderThickness="0,0,0,1">
-            <Grid>
-                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="6,0,0,0">
-                    <Button x:Name="SidebarToggleButton"
-                            Content="&#xE700;"
-                            Style="{StaticResource CaptionButton}"
-                            Width="40"
-                            Click="OnToggleSidebarClick"
-                            ToolTip="折叠 / 展开侧边栏"/>
-                    <Border Width="24" Height="24" CornerRadius="7" Background="{StaticResource AccentSoftBrush}" Margin="6,0,0,0">
-                        <TextBlock Text="◆" FontSize="11" Foreground="{StaticResource AccentBrush}"
-                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                    </Border>
-                    <TextBlock Text="办公助理" FontSize="13" FontWeight="SemiBold"
-                               Foreground="{StaticResource TextPrimaryBrush}"
-                               VerticalAlignment="Center" Margin="9,0,0,0"/>
-                </StackPanel>
-
-                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                    <Button x:Name="MinimizeButton" Content="&#xE921;" Style="{StaticResource CaptionButton}"
-                            Click="OnMinimizeClick" ToolTip="最小化"/>
-                    <Button x:Name="MaximizeButton" Content="&#xE922;" Style="{StaticResource CaptionButton}"
-                            Click="OnMaximizeClick" ToolTip="最大化"/>
-                    <Button Content="&#xE8BB;" Style="{StaticResource CloseCaptionButton}"
-                            Click="OnCloseClick" ToolTip="关闭"/>
-                </StackPanel>
-            </Grid>
+                Background="{StaticResource ShellBrush}"
+                Visibility="{Binding IsMainPage, Converter={StaticResource BoolToVis}}">
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="6,0,0,0">
+                <Button x:Name="SidebarToggleButton"
+                        Content="&#xE700;"
+                        Style="{StaticResource CaptionButton}"
+                        Width="40"
+                        Click="OnToggleSidebarClick"
+                        ToolTip="折叠 / 展开侧边栏"/>
+                <Border Width="24" Height="24" CornerRadius="7" Background="{StaticResource AccentSoftBrush}" Margin="6,0,0,0">
+                    <TextBlock Text="◆" FontSize="11" Foreground="{StaticResource AccentBrush}"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                </Border>
+                <TextBlock Text="办公助理" FontSize="13" FontWeight="SemiBold"
+                           Foreground="{StaticResource TextPrimaryBrush}"
+                           VerticalAlignment="Center" Margin="9,0,0,0"/>
+            </StackPanel>
         </Border>
 
-        <!-- Sidebar: feature navigation, settings & version -->
+        <!-- Sidebar: gray shell (reference UI), feature navigation, user entry & menu -->
         <Border x:Name="SidebarBorder" Grid.Row="1" Grid.Column="0"
-                Background="White"
-                BorderBrush="{StaticResource BorderBrushLight}"
-                BorderThickness="0,0,1,0">
+                Background="{StaticResource ShellBrush}">
             <Grid Margin="12,14,12,14">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
@@ -142,10 +164,10 @@
                                         </Border>
                                         <ControlTemplate.Triggers>
                                             <Trigger Property="IsMouseOver" Value="True">
-                                                <Setter TargetName="Root" Property="Background" Value="{StaticResource SurfaceAltBrush}"/>
+                                                <Setter TargetName="Root" Property="Background" Value="{StaticResource ShellMenuHoverBrush}"/>
                                             </Trigger>
                                             <Trigger Property="IsSelected" Value="True">
-                                                <Setter TargetName="Root" Property="Background" Value="{StaticResource AccentSoftBrush}"/>
+                                                <Setter TargetName="Root" Property="Background" Value="{StaticResource ShellNavSelectedBrush}"/>
                                             </Trigger>
                                         </ControlTemplate.Triggers>
                                     </ControlTemplate>
@@ -164,7 +186,7 @@
                                             <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}"/>
                                             <Style.Triggers>
                                                 <DataTrigger Binding="{Binding IsSelected}" Value="True">
-                                                    <Setter Property="Foreground" Value="{StaticResource AccentBrush}"/>
+                                                    <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
                                                 </DataTrigger>
                                             </Style.Triggers>
                                         </Style>
@@ -176,7 +198,6 @@
                                             <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
                                             <Style.Triggers>
                                                 <DataTrigger Binding="{Binding IsSelected}" Value="True">
-                                                    <Setter Property="Foreground" Value="{StaticResource AccentBrush}"/>
                                                     <Setter Property="FontWeight" Value="SemiBold"/>
                                                 </DataTrigger>
                                             </Style.Triggers>
@@ -188,35 +209,117 @@
                     </ListBox.ItemTemplate>
                 </ListBox>
 
-                <!-- Bottom section, pinned like a profile area: separator, settings row, version -->
+                <!-- Bottom section, pinned like a profile area: separator, user entry, menu -->
                 <StackPanel Grid.Row="2">
-                    <Border BorderBrush="{StaticResource BorderBrushLight}"
+                    <Border BorderBrush="{StaticResource ShellCardStrokeBrush}"
                             BorderThickness="0,1,0,0"
                             Padding="0,10,0,0"
                             Margin="0,8,0,0">
-                        <Button Click="OnSettingsClick"
+                        <Grid>
+                        <!-- User entry (reference UI pattern): first click opens the account
+                             menu, only the "设置" row inside it enters the settings page. -->
+                        <Button x:Name="UserEntryButton"
+                                Click="OnUserEntryClick"
                                 Style="{StaticResource SidebarRowButton}"
-                                ToolTip="打开设置">
-                            <StackPanel Orientation="Horizontal">
-                                <TextBlock Text="&#xE713;"
-                                           FontFamily="Segoe MDL2 Assets" FontSize="14"
+                                ToolTip="账户与设置菜单">
+                            <Grid>
+                                <StackPanel Orientation="Horizontal">
+                                    <Border Width="26" Height="26" CornerRadius="8"
+                                            Background="{StaticResource AvatarBrush}">
+                                        <TextBlock Text="A" FontSize="12" FontWeight="SemiBold"
+                                                   Foreground="{StaticResource TextPrimaryBrush}"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    </Border>
+                                    <TextBlock Text="用户A" FontSize="13"
+                                               VerticalAlignment="Center" Margin="10,0,0,0"/>
+                                </StackPanel>
+                                <TextBlock Text="&#xE70D;"
+                                           FontFamily="Segoe MDL2 Assets" FontSize="10"
                                            Foreground="{StaticResource TextSecondaryBrush}"
-                                           VerticalAlignment="Center" Margin="0,0,10,0"/>
-                                <TextBlock Text="设置" VerticalAlignment="Center"/>
-                            </StackPanel>
+                                           HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                            </Grid>
                         </Button>
+
+                        <!-- Account menu: white card with hover rows, anchored above the entry.
+                             StaysOpen=true: the menu closes itself from the window's
+                             PreviewMouseDown / Deactivated handlers, which makes the
+                             entry button a deterministic open/close toggle. -->
+                        <Popup x:Name="UserMenuPopup"
+                               PlacementTarget="{Binding ElementName=UserEntryButton}"
+                               Placement="Top"
+                               AllowsTransparency="True"
+                               PopupAnimation="Fade"
+                               Margin="0,6,0,0">
+                            <Border Background="White"
+                                    BorderBrush="{StaticResource ShellCardStrokeBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="10"
+                                    Padding="6"
+                                    MinWidth="196">
+                                <Border.Effect>
+                                    <DropShadowEffect Color="#FF000000" BlurRadius="16"
+                                                      ShadowDepth="2" Opacity="0.14"/>
+                                </Border.Effect>
+                                <StackPanel>
+                                    <StackPanel Orientation="Horizontal" Margin="8,8,8,6">
+                                        <Border Width="26" Height="26" CornerRadius="8"
+                                                Background="{StaticResource AvatarBrush}">
+                                            <TextBlock Text="A" FontSize="12" FontWeight="SemiBold"
+                                                       Foreground="{StaticResource TextPrimaryBrush}"
+                                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                        </Border>
+                                        <StackPanel Margin="9,0,0,0" VerticalAlignment="Center">
+                                            <TextBlock Text="用户A" FontSize="13" FontWeight="SemiBold"
+                                                       Foreground="{StaticResource TextPrimaryBrush}"/>
+                                            <TextBlock Text="{Binding AppVersion}" FontSize="11"
+                                                       Foreground="{StaticResource TextSecondaryBrush}"
+                                                       Margin="0,1,0,0"/>
+                                        </StackPanel>
+                                    </StackPanel>
+
+                                    <Border Background="{StaticResource ShellCardStrokeBrush}"
+                                            Height="1" Margin="4,2,4,6"/>
+
+                                    <Button Style="{StaticResource UserMenuItemStyle}"
+                                            Click="OnOpenSettingsClick"
+                                            ToolTip="打开设置页面">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="&#xE713;"
+                                                       FontFamily="Segoe MDL2 Assets" FontSize="14"
+                                                       Foreground="{StaticResource TextSecondaryBrush}"
+                                                       VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                            <TextBlock Text="设置" VerticalAlignment="Center"/>
+                                        </StackPanel>
+                                    </Button>
+
+                                    <Button Style="{StaticResource UserMenuItemStyle}"
+                                            Click="OnExitAppClick"
+                                            ToolTip="退出办公助理">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="&#xE77C;"
+                                                       FontFamily="Segoe MDL2 Assets" FontSize="14"
+                                                       Foreground="{StaticResource TextSecondaryBrush}"
+                                                       VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                            <TextBlock Text="退出应用" VerticalAlignment="Center"/>
+                                        </StackPanel>
+                                    </Button>
+                                </StackPanel>
+                            </Border>
+                        </Popup>
+                        </Grid>
                     </Border>
-                    <TextBlock Text="{Binding AppVersion}"
-                               FontSize="11"
-                               Foreground="{StaticResource TextSecondaryBrush}"
-                               HorizontalAlignment="Center"
-                               Margin="0,8,0,0"/>
                 </StackPanel>
             </Grid>
         </Border>
 
-        <!-- Work area -->
-        <Grid Grid.Row="1" Grid.Column="1" Margin="24,20">
+        <!-- Work area: white content card floating on the gray shell (reference UI) -->
+        <Border Grid.Row="1" Grid.Column="1"
+                Margin="10,0,10,10"
+                Background="{StaticResource SurfaceBrush}"
+                BorderBrush="{StaticResource ShellCardStrokeBrush}"
+                BorderThickness="1"
+                CornerRadius="10">
+            <Grid Margin="24,20,24,14">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="Auto"/>
@@ -235,26 +338,188 @@
                         <TextBlock Text="PDF" FontSize="11" FontWeight="SemiBold"
                                    Foreground="{StaticResource AccentBrush}"/>
                     </Border>
+                    <!-- One-line capability note for the current feature page. -->
+                    <Border Width="1" Height="15" Background="{StaticResource BorderBrushLight}"
+                            Margin="14,0,0,0" VerticalAlignment="Center"/>
+                    <TextBlock Text="{Binding FeatureTagline}"
+                               FontSize="12"
+                               Foreground="{StaticResource TextSecondaryBrush}"
+                               VerticalAlignment="Center" Margin="10,0,0,0"/>
                 </StackPanel>
             </Grid>
 
-        <!-- Drop zone -->
-        <Border Grid.Row="1"
+        <!-- Drop zone: three-state interaction modelled after mainstream upload components
+             (Ant Design Dragger / react-dropzone). Idle = white fill + dashed neutral outline;
+             accept = accent tint + solid accent outline fading in over 150ms with the icon
+             scaling up; reject = red tint/outline + cancel glyph. All driven by DropZoneState
+             bindings — code-behind never touches this visual tree. -->
+        <!-- Border has no ControlTemplate of its own, so the layered shell/tint/outline that
+             carries the three-state visuals lives in a ContentControl template instead. -->
+        <ContentControl Grid.Row="1"
                 x:Name="DropZone"
-                Background="{StaticResource AccentSoftBrush}"
-                BorderBrush="{StaticResource AccentBrush}"
-                BorderThickness="2"
-                CornerRadius="14"
                 Margin="0,0,0,16"
-                Padding="28">
+                Padding="28"
+                Focusable="False"
+                IsTabStop="False">
+            <ContentControl.Style>
+                <Style TargetType="ContentControl">
+                    <Setter Property="Template">
+                        <Setter.Value>
+                            <ControlTemplate TargetType="ContentControl">
+                                <Grid>
+                                    <!-- Idle shell: white fill, dashed neutral outline -->
+                                    <Rectangle x:Name="IdleShell"
+                                               RadiusX="14" RadiusY="14"
+                                               Fill="White"
+                                               Stroke="{StaticResource BorderBrushLight}"
+                                               StrokeThickness="2"
+                                               StrokeDashArray="7 5"/>
+                                    <!-- State tint: fades in on accept/reject (color swaps in
+                                         instantly while opacity is still 0, so no flash) -->
+                                    <Rectangle x:Name="StateTint"
+                                               RadiusX="14" RadiusY="14"
+                                               Fill="{StaticResource AccentSoftBrush}"
+                                               Opacity="0"/>
+                                    <!-- State outline: solid line fading in over the dashes -->
+                                    <Rectangle x:Name="StateOutline"
+                                               RadiusX="14" RadiusY="14"
+                                               Stroke="{StaticResource AccentBrush}"
+                                               StrokeThickness="2"
+                                               Opacity="0"/>
+                                    <ContentPresenter Margin="{TemplateBinding Padding}"/>
+                                </Grid>
+                                <ControlTemplate.Triggers>
+                                    <DataTrigger Binding="{Binding DropZoneState}" Value="Accept">
+                                        <DataTrigger.EnterActions>
+                                            <BeginStoryboard>
+                                                <Storyboard>
+                                                    <DoubleAnimation Storyboard.TargetName="StateTint"
+                                                                     Storyboard.TargetProperty="Opacity"
+                                                                     To="1" Duration="0:0:0.15"/>
+                                                    <DoubleAnimation Storyboard.TargetName="StateOutline"
+                                                                     Storyboard.TargetProperty="Opacity"
+                                                                     To="1" Duration="0:0:0.15"/>
+                                                </Storyboard>
+                                            </BeginStoryboard>
+                                        </DataTrigger.EnterActions>
+                                        <DataTrigger.ExitActions>
+                                            <BeginStoryboard>
+                                                <Storyboard>
+                                                    <DoubleAnimation Storyboard.TargetName="StateTint"
+                                                                     Storyboard.TargetProperty="Opacity"
+                                                                     To="0" Duration="0:0:0.15"/>
+                                                    <DoubleAnimation Storyboard.TargetName="StateOutline"
+                                                                     Storyboard.TargetProperty="Opacity"
+                                                                     To="0" Duration="0:0:0.15"/>
+                                                </Storyboard>
+                                            </BeginStoryboard>
+                                        </DataTrigger.ExitActions>
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding DropZoneState}" Value="Reject">
+                                        <Setter TargetName="StateTint" Property="Fill" Value="{StaticResource DangerSurfaceBrush}"/>
+                                        <Setter TargetName="StateOutline" Property="Stroke" Value="{StaticResource DangerBrush}"/>
+                                        <DataTrigger.EnterActions>
+                                            <BeginStoryboard>
+                                                <Storyboard>
+                                                    <DoubleAnimation Storyboard.TargetName="StateTint"
+                                                                     Storyboard.TargetProperty="Opacity"
+                                                                     To="1" Duration="0:0:0.15"/>
+                                                    <DoubleAnimation Storyboard.TargetName="StateOutline"
+                                                                     Storyboard.TargetProperty="Opacity"
+                                                                     To="1" Duration="0:0:0.15"/>
+                                                </Storyboard>
+                                            </BeginStoryboard>
+                                        </DataTrigger.EnterActions>
+                                        <DataTrigger.ExitActions>
+                                            <BeginStoryboard>
+                                                <Storyboard>
+                                                    <DoubleAnimation Storyboard.TargetName="StateTint"
+                                                                     Storyboard.TargetProperty="Opacity"
+                                                                     To="0" Duration="0:0:0.15"/>
+                                                    <DoubleAnimation Storyboard.TargetName="StateOutline"
+                                                                     Storyboard.TargetProperty="Opacity"
+                                                                     To="0" Duration="0:0:0.15"/>
+                                                </Storyboard>
+                                            </BeginStoryboard>
+                                        </DataTrigger.ExitActions>
+                                    </DataTrigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </Setter.Value>
+                    </Setter>
+                    <Style.Triggers>
+                        <!-- The scan page has no drop zone: files come from the scanner. -->
+                        <DataTrigger Binding="{Binding SelectedFeature.Id}" Value="scan.page">
+                            <Setter Property="Visibility" Value="Collapsed"/>
+                        </DataTrigger>
+                        <!-- The netdisk page is an entry hub: transfers happen in its window. -->
+                        <DataTrigger Binding="{Binding SelectedFeature.Id}" Value="netdisk.page">
+                            <Setter Property="Visibility" Value="Collapsed"/>
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </ContentControl.Style>
             <StackPanel HorizontalAlignment="Center">
-                <TextBlock Text="📄" FontSize="34" HorizontalAlignment="Center"/>
-                <TextBlock x:Name="DropHintText"
-                           Text="把 PDF 文件拖到这里，松手即开始"
-                           FontSize="15" FontWeight="SemiBold"
-                           Foreground="{StaticResource TextPrimaryBrush}"
+                <!-- Upload glyph scales up while files hover (react-dropzone style) and flips
+                     to the cancel glyph with a red tint when the payload is rejected. -->
+                <TextBlock Text="{Binding DropZoneIcon}"
+                           FontFamily="Segoe MDL2 Assets"
+                           FontSize="34"
                            HorizontalAlignment="Center"
-                           Margin="0,10,0,0"/>
+                           RenderTransformOrigin="0.5,0.5">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="Foreground" Value="{StaticResource AccentBrush}"/>
+                            <Setter Property="RenderTransform">
+                                <Setter.Value>
+                                    <ScaleTransform ScaleX="1" ScaleY="1"/>
+                                </Setter.Value>
+                            </Setter>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding DropZoneState}" Value="Accept">
+                                    <DataTrigger.EnterActions>
+                                        <BeginStoryboard>
+                                            <Storyboard>
+                                                <DoubleAnimation Storyboard.TargetProperty="RenderTransform.(ScaleTransform.ScaleX)"
+                                                                 To="1.15" Duration="0:0:0.15"/>
+                                                <DoubleAnimation Storyboard.TargetProperty="RenderTransform.(ScaleTransform.ScaleY)"
+                                                                 To="1.15" Duration="0:0:0.15"/>
+                                            </Storyboard>
+                                        </BeginStoryboard>
+                                    </DataTrigger.EnterActions>
+                                    <DataTrigger.ExitActions>
+                                        <BeginStoryboard>
+                                            <Storyboard>
+                                                <DoubleAnimation Storyboard.TargetProperty="RenderTransform.(ScaleTransform.ScaleX)"
+                                                                 To="1" Duration="0:0:0.15"/>
+                                                <DoubleAnimation Storyboard.TargetProperty="RenderTransform.(ScaleTransform.ScaleY)"
+                                                                 To="1" Duration="0:0:0.15"/>
+                                            </Storyboard>
+                                        </BeginStoryboard>
+                                    </DataTrigger.ExitActions>
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding DropZoneState}" Value="Reject">
+                                    <Setter Property="Foreground" Value="{StaticResource DangerBrush}"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
+                <TextBlock Text="{Binding DropHint}"
+                           FontSize="15" FontWeight="SemiBold"
+                           HorizontalAlignment="Center"
+                           Margin="0,10,0,0">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="Foreground" Value="{StaticResource TextPrimaryBrush}"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding DropZoneState}" Value="Reject">
+                                    <Setter Property="Foreground" Value="{StaticResource DangerBrush}"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
                 <TextBlock Text="在左侧选择功能 · 支持多个文件同时拖入 · 完成后保存在下方设置的目录"
                            FontSize="12"
                            Foreground="{StaticResource TextSecondaryBrush}"
@@ -262,6 +527,93 @@
                            Margin="0,5,0,14"/>
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
                     <Button Content="选择文件…" Style="{StaticResource PrimaryButton}" Click="OnPickFiles"/>
+                </StackPanel>
+            </StackPanel>
+        </ContentControl>
+
+        <!-- Scan panel (扫描): layout choice + scan button. Files come from the scanner, so this
+             replaces the drop zone on the scan page (which hides itself via its style trigger). -->
+        <Border Grid.Row="1" x:Name="ScanPanel" Margin="0,0,0,16">
+            <Border.Style>
+                <Style TargetType="Border" BasedOn="{StaticResource CardBorder}">
+                    <!-- Tighter card than the default: this is a one-line control strip, not a
+                         form — halve the padding so it stops eating vertical space. -->
+                    <Setter Property="Padding" Value="16,12"/>
+                    <Setter Property="Visibility" Value="Collapsed"/>
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding SelectedFeature.Id}" Value="scan.page">
+                            <Setter Property="Visibility" Value="Visible"/>
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </Border.Style>
+            <!-- One row: label, layout radios, start button, status. Scan colour lives in
+                 设置 → 扫描设置 so this stays a single-line "load and go" strip. -->
+            <StackPanel Orientation="Horizontal">
+                <TextBlock Text="扫描版面"
+                           FontSize="14" FontWeight="SemiBold"
+                           Foreground="{StaticResource TextPrimaryBrush}"
+                           VerticalAlignment="Center"
+                           Margin="0,0,20,0"/>
+                <RadioButton x:Name="ScanDuplexSimplex" GroupName="ScanDuplex"
+                             Content="单面" Tag="0" Margin="0,0,18,0"
+                             VerticalContentAlignment="Center"
+                             Checked="OnScanDuplexChecked"/>
+                <RadioButton x:Name="ScanDuplexLongEdge" GroupName="ScanDuplex"
+                             Content="双面长边" Tag="1" Margin="0,0,18,0"
+                             VerticalContentAlignment="Center"
+                             Checked="OnScanDuplexChecked"/>
+                <RadioButton x:Name="ScanDuplexShortEdge" GroupName="ScanDuplex"
+                             Content="双面短边" Tag="2" Margin="0,0,0,0"
+                             VerticalContentAlignment="Center"
+                             Checked="OnScanDuplexChecked"/>
+                <Button Content="开始扫描"
+                        Style="{StaticResource PrimaryButton}"
+                        Command="{Binding ScanCommand}"
+                        MinWidth="110" Margin="24,0,0,0"/>
+                <TextBlock Text="{Binding ScanStatus}"
+                           Margin="14,0,0,0"
+                           VerticalAlignment="Center"
+                           FontSize="13"
+                           Foreground="{StaticResource TextSecondaryBrush}"/>
+            </StackPanel>
+        </Border>
+
+        <!-- Netdisk panel (网盘): entry hub — open the management window or quick-upload. Replaces
+             the drop zone on the netdisk page (which hides itself via its style trigger). -->
+        <Border Grid.Row="1" x:Name="NetdiskPanel" Margin="0,0,0,16">
+            <Border.Style>
+                <Style TargetType="Border" BasedOn="{StaticResource CardBorder}">
+                    <Setter Property="Visibility" Value="Collapsed"/>
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding SelectedFeature.Id}" Value="netdisk.page">
+                            <Setter Property="Visibility" Value="Visible"/>
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </Border.Style>
+            <StackPanel Margin="20,16">
+                <TextBlock Text="网盘"
+                           FontSize="14" FontWeight="SemiBold"
+                           Foreground="{StaticResource TextPrimaryBrush}"/>
+                <TextBlock Text="管理已接入的网盘产品（阿里云盘等）：浏览、上传、下载、删除。账号与 API 密钥在「设置 → 网盘设置」中配置。"
+                           FontSize="12"
+                           Foreground="{StaticResource TextSecondaryBrush}"
+                           Margin="0,4,0,0"/>
+                <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                    <Button Content="打开网盘管理"
+                            Style="{StaticResource PrimaryButton}"
+                            Command="{Binding OpenNetdiskCommand}"
+                            MinWidth="120"/>
+                    <Button Content="快速上传…"
+                            Style="{StaticResource SmallButton}"
+                            Command="{Binding QuickUploadCommand}"
+                            Margin="12,0,0,0" VerticalAlignment="Center"/>
+                    <TextBlock Text="{Binding NetdiskSummaryText}"
+                               Margin="16,0,0,0"
+                               VerticalAlignment="Center"
+                               FontSize="13"
+                               Foreground="{StaticResource TextSecondaryBrush}"/>
                 </StackPanel>
             </StackPanel>
         </Border>
@@ -285,10 +637,11 @@
 
                 <ListView Grid.Row="1"
                           x:Name="JobList"
-                          ItemsSource="{Binding Jobs}"
+                          ItemsSource="{Binding JobsView}"
                           Visibility="Collapsed"
                           BorderThickness="0"
                           Background="Transparent"
+                          ScrollViewer.CanContentScroll="False"
                           ScrollViewer.HorizontalScrollBarVisibility="Disabled">
                     <ListView.ItemContainerStyle>
                         <Style TargetType="ListViewItem">
@@ -311,6 +664,7 @@
                                     BorderThickness="1"
                                     CornerRadius="10"
                                     Padding="16,12">
+                                <StackPanel>
                                 <Grid>
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*"/>
@@ -559,12 +913,150 @@
                                                 Command="{Binding CopyErrorCommand}"
                                                 ToolTip="复制完整报错信息（含系统环境与异常堆栈）用于反馈问题"/>
 
+                                        <!-- finished rows: expand the inline thumbnail strip (again = fold).
+                                             Scan rows hide the button entirely — their strip unfolds itself. -->
+                                        <Button Style="{StaticResource RowPreviewButton}"
+                                                Margin="0,0,8,0"
+                                                Visibility="{Binding PreviewButtonVisibility}"
+                                                Content="{Binding PreviewToggleText}"
+                                                Command="{Binding DataContext.PreviewCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                CommandParameter="{Binding}"
+                                                ToolTip="在记录下方展开缩略图，点击缩略图可放大；右上角旋转即存"/>
+
                                         <Button Style="{StaticResource RowDeleteButton}"
                                                 Command="{Binding DataContext.DeleteJobCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                                 CommandParameter="{Binding}"
                                                 ToolTip="删除这条记录，已生成的文件移入回收站（源文件保留）"/>
                                     </StackPanel>
                                 </Grid>
+
+                                <!-- Inline thumbnail grid, browser-style: one small tile per
+                                     page on white, flowing in a wrap layout (no canvas, no
+                                     dark backdrop). A tile click opens the screen-level image
+                                     viewer; the rail inside stays driven by the same strip view
+                                     model — one render cache, one rotation lock. The rail on the
+                                     right zooms every tile (buttons step, slider drags). -->
+                                <Border Margin="0,12,0,0"
+                                        Padding="0,12,0,0"
+                                        BorderBrush="{StaticResource BorderBrushLight}"
+                                        BorderThickness="0,1,0,0"
+                                        Visibility="{Binding StripOpen, Converter={StaticResource BoolToVis}}">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+
+                                        <!-- The grid is capped at ~two tile rows and scrolls
+                                             inside: a long document must not stretch the
+                                             whole job list, and the zoom rail stays fixed. -->
+                                        <ScrollViewer Grid.Column="0"
+                                                      MaxHeight="{Binding Strip.ThumbAreaMaxHeight}"
+                                                      VerticalScrollBarVisibility="Auto"
+                                                      HorizontalScrollBarVisibility="Disabled">
+                                            <ItemsControl DataContext="{Binding Strip}"
+                                                          ItemsSource="{Binding Thumbnails}"
+                                                          ItemTemplate="{StaticResource PdfThumbnailTileTemplate}"
+                                                          Visibility="{Binding HasThumbnails, Converter={StaticResource BoolToVis}}">
+                                                <ItemsControl.ItemsPanel>
+                                                    <ItemsPanelTemplate>
+                                                        <WrapPanel/>
+                                                    </ItemsPanelTemplate>
+                                                </ItemsControl.ItemsPanel>
+                                            </ItemsControl>
+                                        </ScrollViewer>
+
+                                        <!-- Anchored to the area's top edge, not centered: the
+                                             grid's height follows the zoom, and a centred rail
+                                             would slide under the pointer while it is being
+                                             used. Top anchor = the buttons never move. -->
+                                        <StackPanel Grid.Column="1"
+                                                    Orientation="Vertical"
+                                                    VerticalAlignment="Top"
+                                                    Margin="10,0,4,0">
+                                            <Button Command="{Binding Strip.ZoomInCommand}"
+                                                    ToolTip="放大缩略图"
+                                                    FontSize="11"
+                                                    Padding="4,2"
+                                                    Focusable="False">
+                                                <Button.Style>
+                                                    <Style TargetType="Button" BasedOn="{StaticResource SmallButton}">
+                                                        <Setter Property="Content">
+                                                            <Setter.Value>
+                                                                <TextBlock Text="&#xE710;" FontFamily="Segoe MDL2 Assets"/>
+                                                            </Setter.Value>
+                                                        </Setter>
+                                                        <Style.Triggers>
+                                                            <Trigger Property="IsEnabled" Value="False">
+                                                                <Setter Property="Opacity" Value="0.35"/>
+                                                            </Trigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Button.Style>
+                                            </Button>
+
+                                            <Slider Minimum="{x:Static vm:PdfPreviewViewModel.MinThumbScale}"
+                                                    Maximum="{x:Static vm:PdfPreviewViewModel.MaxThumbScale}"
+                                                    Value="{Binding Strip.ThumbnailScale}"
+                                                    Orientation="Vertical"
+                                                    Height="120"
+                                                    Width="22"
+                                                    HorizontalAlignment="Center"
+                                                    Margin="0,6"
+                                                    TickPlacement="None"
+                                                    Focusable="False"
+                                                    ToolTip="拖动调整缩略图大小"/>
+
+                                            <Button Command="{Binding Strip.ZoomOutCommand}"
+                                                    ToolTip="缩小缩略图"
+                                                    FontSize="11"
+                                                    Padding="4,2"
+                                                    Focusable="False">
+                                                <Button.Style>
+                                                    <Style TargetType="Button" BasedOn="{StaticResource SmallButton}">
+                                                        <Setter Property="Content">
+                                                            <Setter.Value>
+                                                                <TextBlock Text="&#xE921;" FontFamily="Segoe MDL2 Assets"/>
+                                                            </Setter.Value>
+                                                        </Setter>
+                                                        <Style.Triggers>
+                                                            <Trigger Property="IsEnabled" Value="False">
+                                                                <Setter Property="Opacity" Value="0.35"/>
+                                                            </Trigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Button.Style>
+                                            </Button>
+
+                                            <!-- OCR votes on the four quarter turns and rights the
+                                                 whole document in one save; scan rows run it by
+                                                 themselves, this is the manual entry / retry. -->
+                                            <Button Command="{Binding Strip.AutoOrientCommand}"
+                                                    ToolTipService.ShowOnDisabled="True"
+                                                    ToolTip="自动摆正：检测页面方向并整份修正"
+                                                    FontSize="11"
+                                                    Padding="4,2"
+                                                    Margin="0,6,0,0"
+                                                    Focusable="False">
+                                                <Button.Style>
+                                                    <Style TargetType="Button" BasedOn="{StaticResource SmallButton}">
+                                                        <Setter Property="Content">
+                                                            <Setter.Value>
+                                                                <TextBlock Text="&#xE7AD;" FontFamily="Segoe MDL2 Assets"/>
+                                                            </Setter.Value>
+                                                        </Setter>
+                                                        <Style.Triggers>
+                                                            <Trigger Property="IsEnabled" Value="False">
+                                                                <Setter Property="Opacity" Value="0.35"/>
+                                                            </Trigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Button.Style>
+                                            </Button>
+                                        </StackPanel>
+                                    </Grid>
+                                </Border>
+                                </StackPanel>
                             </Border>
                         </DataTemplate>
                     </ListView.ItemTemplate>
@@ -583,6 +1075,29 @@
                     HorizontalAlignment="Right"
                     Command="{Binding ClearCommand}"/>
         </Grid>
+            </Grid>
+        </Border>
+
+        <!-- Settings second-level page: covers the entire window (title bar included) —
+             the app *switches page*, it does not open a new window. Opaque by design:
+             its left column is the gray shell, its right pane is white. -->
+        <Grid Grid.Row="0" Grid.RowSpan="2" Grid.ColumnSpan="2"
+              Visibility="{Binding IsSettingsOpen, Converter={StaticResource BoolToVis}}">
+            <app:SettingsPage DataContext="{Binding SettingsPage}"/>
         </Grid>
+
+        <!-- Caption buttons ride in the top-most layer so minimize/maximize/close keep
+             working over both the main shell and the settings page. -->
+        <StackPanel Grid.Row="0" Grid.ColumnSpan="2"
+                    Orientation="Horizontal"
+                    HorizontalAlignment="Right"
+                    VerticalAlignment="Top">
+            <Button x:Name="MinimizeButton" Content="&#xE921;" Style="{StaticResource CaptionButton}"
+                    Click="OnMinimizeClick" ToolTip="最小化"/>
+            <Button x:Name="MaximizeButton" Content="&#xE922;" Style="{StaticResource CaptionButton}"
+                    Click="OnMaximizeClick" ToolTip="最大化"/>
+            <Button Content="&#xE8BB;" Style="{StaticResource CloseCaptionButton}"
+                    Click="OnCloseClick" ToolTip="关闭"/>
+        </StackPanel>
     </Grid>
 </Window>

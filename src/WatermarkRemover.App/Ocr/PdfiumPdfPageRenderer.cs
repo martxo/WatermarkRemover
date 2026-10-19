@@ -26,6 +26,9 @@ public sealed class PdfiumPdfPageRenderer : IPdfPageRenderer
     /// <summary>PDF points per inch; converting a requested DPI to a PDFium scale factor.</summary>
     private const double PointsPerInch = 72.0;
 
+    /// <summary>Reading the page count needs a document reader, not an image — any valid scale works.</summary>
+    private const int MetadataDpi = 96;
+
     /// <summary>White background for transparent page areas — OCR must see black text on white.</summary>
     private static readonly IImageBytesConverter WhiteBackground = new NaiveTransparencyRemover(255, 255, 255);
 
@@ -62,6 +65,43 @@ public sealed class PdfiumPdfPageRenderer : IPdfPageRenderer
                 return RenderPage(reader.GetPageReader(0));
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                throw Wrap(pdfPath, ex);
+            }
+        });
+    }
+
+    public Task<int> GetPageCountAsync(string pdfPath)
+    {
+        return Task.Run(() =>
+        {
+            try
+            {
+                using IDocReader reader = Open(pdfPath, MetadataDpi);
+                return reader.GetPageCount();
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                throw Wrap(pdfPath, ex);
+            }
+        });
+    }
+
+    public Task<byte[]> RenderPageAsync(string pdfPath, int pageIndex, int dpi)
+    {
+        ValidateDpi(dpi);
+        return Task.Run(() =>
+        {
+            try
+            {
+                using IDocReader reader = Open(pdfPath, dpi);
+                int pageCount = reader.GetPageCount();
+                if (pageIndex < 0 || pageIndex >= pageCount)
+                    throw new ArgumentOutOfRangeException(nameof(pageIndex),
+                        $"页码超出范围：第 {pageIndex + 1} 页（共 {pageCount} 页）。");
+                return RenderPage(reader.GetPageReader(pageIndex));
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException and not ArgumentOutOfRangeException)
             {
                 throw Wrap(pdfPath, ex);
             }

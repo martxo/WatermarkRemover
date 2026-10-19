@@ -131,6 +131,36 @@
         </Style.Triggers>
     </Style>
 
+    <!-- Floating round nav button on the inline preview canvas (image-viewer convention:
+         translucent disc, white glyph, brightens on hover, dims when disabled) -->
+    <Style x:Key="CanvasNavButton" TargetType="Button">
+        <Setter Property="Width" Value="34"/>
+        <Setter Property="Height" Value="34"/>
+        <Setter Property="Background" Value="#66202020"/>
+        <Setter Property="Foreground" Value="White"/>
+        <Setter Property="FontFamily" Value="Segoe MDL2 Assets"/>
+        <Setter Property="FontSize" Value="14"/>
+        <Setter Property="Focusable" Value="False"/>
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border Background="{TemplateBinding Background}" CornerRadius="17">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+        <Style.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+                <Setter Property="Background" Value="#A6202020"/>
+            </Trigger>
+            <Trigger Property="IsEnabled" Value="False">
+                <Setter Property="Opacity" Value="0.3"/>
+            </Trigger>
+        </Style.Triggers>
+    </Style>
+
     <!-- Copy-error pill shown on failed rows: puts the full diagnostic report on the clipboard -->
     <Style x:Key="RowCopyErrorButton" TargetType="Button">
         <Setter Property="Background" Value="{StaticResource SurfaceAltBrush}"/>
@@ -139,6 +169,33 @@
         <Setter Property="Padding" Value="10,4"/>
         <Setter Property="Cursor" Value="Hand"/>
         <Setter Property="Content" Value="复制报错"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border Background="{TemplateBinding Background}"
+                            CornerRadius="12"
+                            Padding="{TemplateBinding Padding}">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+        <Style.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+                <Setter Property="Background" Value="{StaticResource AccentSoftBrush}"/>
+                <Setter Property="Foreground" Value="{StaticResource AccentBrush}"/>
+            </Trigger>
+        </Style.Triggers>
+    </Style>
+
+    <!-- Preview pill on finished rows: opens the in-app PDF preview overlay -->
+    <Style x:Key="RowPreviewButton" TargetType="Button">
+        <Setter Property="Background" Value="{StaticResource SurfaceAltBrush}"/>
+        <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}"/>
+        <Setter Property="FontSize" Value="12"/>
+        <Setter Property="Padding" Value="10,4"/>
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="Content" Value="预览"/>
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="Button">
@@ -206,11 +263,121 @@
                     </Border>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
-                            <Setter Property="Background" Value="{StaticResource SurfaceAltBrush}"/>
+                            <Setter Property="Background" Value="{StaticResource ShellMenuHoverBrush}"/>
                         </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
             </Setter.Value>
         </Setter>
     </Style>
+
+    <!-- One PDF thumbnail tile, shared by both strip surfaces: the row-inline thumbnail grid
+         under a job card and the film rail of the screen-level viewer. Single template, single
+         click/rotate wiring — the two surfaces render the same view model collection anyway. -->
+    <DataTemplate x:Key="PdfThumbnailTileTemplate">
+        <Grid Width="{Binding DataContext.TileWidth, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+              Height="{Binding DataContext.TileHeight, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+              Margin="0,0,8,0">
+            <!-- click surface: opens the screen-level viewer on this page -->
+            <Button Command="{Binding SelectCommand}"
+                    ToolTip="点击放大该页"
+                    Padding="0"
+                    BorderThickness="0"
+                    Focusable="False"
+                    Cursor="Hand">
+                <Grid>
+                    <Border Background="White"
+                            BorderBrush="{StaticResource BorderBrushLight}"
+                            BorderThickness="1">
+                        <Image Source="{Binding Image}"
+                               Stretch="Uniform"
+                               RenderOptions.BitmapScalingMode="HighQuality"
+                               Margin="3"/>
+                    </Border>
+                    <Border Background="#99000000"
+                            HorizontalAlignment="Right"
+                            VerticalAlignment="Bottom"
+                            Margin="0,0,4,4"
+                            Padding="5,1"
+                            CornerRadius="2">
+                        <TextBlock Text="{Binding PageLabel}"
+                                   FontSize="10"
+                                   Foreground="White"/>
+                    </Border>
+                </Grid>
+            </Button>
+
+            <!-- accent ring on the page currently on screen -->
+            <Border BorderBrush="{StaticResource AccentBrush}"
+                    BorderThickness="2"
+                    IsHitTestVisible="False">
+                <Border.Style>
+                    <Style TargetType="Border">
+                        <Setter Property="Opacity" Value="0"/>
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                                <Setter Property="Opacity" Value="1"/>
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </Border.Style>
+            </Border>
+
+            <!-- corner edit buttons: rotate top-left, delete top-right; siblings above the
+                 click surface so they win hit-testing on their own little area; both save
+                 into the PDF at once -->
+            <Button Panel.ZIndex="2"
+                    HorizontalAlignment="Left"
+                    VerticalAlignment="Top"
+                    Margin="4,4,0,0"
+                    Command="{Binding RotateCommand}"
+                    ToolTip="顺时针旋转 90°，并立即保存到 PDF"
+                    FontSize="12"
+                    Padding="5,3"
+                    Focusable="False">
+                <Button.Style>
+                    <Style TargetType="Button" BasedOn="{StaticResource SmallButton}">
+                        <Setter Property="Content">
+                            <Setter.Value>
+                                <TextBlock Text="&#xE7AD;" FontFamily="Segoe MDL2 Assets"/>
+                            </Setter.Value>
+                        </Setter>
+                        <Style.Triggers>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.35"/>
+                            </Trigger>
+                        </Style.Triggers>
+                    </Style>
+                </Button.Style>
+            </Button>
+            <Button Panel.ZIndex="2"
+                    HorizontalAlignment="Right"
+                    VerticalAlignment="Top"
+                    Margin="0,4,4,0"
+                    Command="{Binding DeleteCommand}"
+                    ToolTipService.ShowOnDisabled="True"
+                    FontSize="12"
+                    Padding="5,3"
+                    Focusable="False">
+                <Button.Style>
+                    <Style TargetType="Button" BasedOn="{StaticResource SmallButton}">
+                        <Setter Property="Content">
+                            <Setter.Value>
+                                <TextBlock Text="&#xE74D;" FontFamily="Segoe MDL2 Assets" Foreground="#C42B1C"/>
+                            </Setter.Value>
+                        </Setter>
+                        <Setter Property="ToolTip" Value="删除该页，并立即保存到 PDF"/>
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding CanDelete}" Value="False">
+                                <Setter Property="ToolTip" Value="至少要保留一页，最后一页不可删除"/>
+                            </DataTrigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.35"/>
+                            </Trigger>
+                        </Style.Triggers>
+                    </Style>
+                </Button.Style>
+            </Button>
+        </Grid>
+    </DataTemplate>
 </ResourceDictionary>

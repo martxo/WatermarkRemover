@@ -17,6 +17,21 @@
     <SolidColorBrush x:Key="HoverSurfaceBrush" Color="#FFEDF0F6"/>
     <SolidColorBrush x:Key="BorderBrushLight" Color="#FFE4E7ED"/>
 
+    <!-- PDF preview: dark neutral canvas behind the white document pages -->
+    <SolidColorBrush x:Key="PreviewCanvasBrush" Color="#FF33363D"/>
+
+    <!-- Shell (sampled from the TRAE reference UI):
+         outer window / sidebar / title bar are light gray, only the content card is white. -->
+    <SolidColorBrush x:Key="ShellBrush" Color="#FFF5F5F5"/>
+    <SolidColorBrush x:Key="ShellSidebarBrush" Color="#FFF3F4F5"/>
+    <SolidColorBrush x:Key="ShellCardStrokeBrush" Color="#FFEEEEEE"/>
+    <SolidColorBrush x:Key="ShellInsetCardBrush" Color="#FFF3F4F5"/>
+    <SolidColorBrush x:Key="ShellInsetCardStrokeBrush" Color="#FFE4E8ED"/>
+    <SolidColorBrush x:Key="ShellNavSelectedBrush" Color="#FFE5E5E5"/>
+    <SolidColorBrush x:Key="ShellControlFillBrush" Color="#FFE1E4E7"/>
+    <SolidColorBrush x:Key="ShellMenuHoverBrush" Color="#FFF0F0F0"/>
+    <SolidColorBrush x:Key="AvatarBrush" Color="#FFA8DE63"/>
+
     <!-- Text -->
     <SolidColorBrush x:Key="TextPrimaryBrush" Color="#FF1A1D26"/>
     <SolidColorBrush x:Key="TextSecondaryBrush" Color="#FF6B7280"/>

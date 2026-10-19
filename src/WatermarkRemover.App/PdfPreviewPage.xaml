@@ -1,0 +1,196 @@
+﻿<UserControl x:Class="WatermarkRemover.App.PdfPreviewPage"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Background="Transparent">
+
+    <!-- Screen-level image viewer content (hosted by FullscreenViewerWindow, which paints the
+         dark veil over the whole screen). The interaction is the desktop image-browser staple:
+         a film-rail directory on the left, the page in the middle with wheel zoom anchored at
+         the cursor, drag to pan, double click to fit, paging on the canvas edges. The shared
+         strip drives both surfaces, so the rail is always in sync with the shown page. -->
+
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="Auto"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+
+        <!-- film rail: the directory of pages, one tile per page, click to switch -->
+        <Border Grid.Column="0"
+                Background="#66000000"
+                BorderBrush="#33FFFFFF"
+                BorderThickness="0,0,1,0">
+            <Grid Margin="14,12">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+
+                <TextBlock Grid.Row="0"
+                           Text="页面"
+                           FontSize="12"
+                           Foreground="#99FFFFFF"
+                           Margin="2,0,0,10"/>
+
+                <ScrollViewer Grid.Row="1"
+                              HorizontalScrollBarVisibility="Disabled"
+                              VerticalScrollBarVisibility="Auto"
+                              Focusable="False">
+                    <ItemsControl ItemsSource="{Binding Thumbnails}"
+                                  ItemTemplate="{StaticResource PdfThumbnailTileTemplate}"
+                                  Visibility="{Binding HasThumbnails, Converter={StaticResource BoolToVis}}">
+                        <ItemsControl.ItemContainerStyle>
+                            <Style TargetType="ContentPresenter">
+                                <Setter Property="Margin" Value="0,0,0,8"/>
+                            </Style>
+                        </ItemsControl.ItemContainerStyle>
+                    </ItemsControl>
+                </ScrollViewer>
+            </Grid>
+        </Border>
+
+        <!-- viewer column: caption bar, zoomable canvas, paging arrows -->
+        <Grid Grid.Column="1">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <!-- caption bar: file name + page indicator + actions, all on the veil -->
+            <Grid Grid.Row="0" Margin="20,12,20,4">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock Text="&#xE8A5;"
+                               FontFamily="Segoe MDL2 Assets"
+                               FontSize="14"
+                               Foreground="#E6FFFFFF"
+                               VerticalAlignment="Center"/>
+
+                    <TextBlock Text="{Binding Title}"
+                               FontSize="14"
+                               FontWeight="SemiBold"
+                               Foreground="White"
+                               Margin="10,0,0,0"
+                               VerticalAlignment="Center"
+                               TextTrimming="CharacterEllipsis"/>
+
+                    <TextBlock Text="{Binding PageIndicator}"
+                               FontSize="12"
+                               Foreground="#99FFFFFF"
+                               Margin="14,0,0,0"
+                               VerticalAlignment="Center"/>
+                </StackPanel>
+
+                <TextBlock Grid.Column="1"
+                           Text="滚轮缩放 · 拖动平移 · 双击复原"
+                           FontSize="11"
+                           Foreground="#66FFFFFF"
+                           VerticalAlignment="Center"
+                           HorizontalAlignment="Center"/>
+
+                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Button Content="重新加载"
+                            Style="{StaticResource SmallButton}"
+                            Command="{Binding RefreshCommand}"
+                            ToolTip="重新渲染当前页（渲染失败时可重试）"/>
+                    <Button Content="关闭"
+                            Style="{StaticResource GhostButton}"
+                            Margin="10,0,0,0"
+                            Command="{Binding CloseCommand}"
+                            ToolTip="退出看图（Esc 同样生效）"/>
+                </StackPanel>
+            </Grid>
+
+            <!-- page canvas: fits the area at 100% zoom; wheel zooms around the cursor, drag
+                 pans, double click returns to fit (handled in code-behind) -->
+            <Grid Grid.Row="1">
+                <ScrollViewer x:Name="ZoomHost"
+                              Background="Transparent"
+                              HorizontalScrollBarVisibility="Auto"
+                              VerticalScrollBarVisibility="Auto"
+                              Focusable="False"
+                              PreviewMouseWheel="OnPreviewWheel"
+                              PreviewMouseLeftButtonDown="OnCanvasMouseDown"
+                              PreviewMouseMove="OnCanvasMouseMove"
+                              PreviewMouseLeftButtonUp="OnCanvasMouseUp">
+                    <Grid>
+                        <Image x:Name="PageImage"
+                               Source="{Binding CurrentImage}"
+                               Stretch="Uniform"
+                               HorizontalAlignment="Center"
+                               VerticalAlignment="Center"/>
+                    </Grid>
+                </ScrollViewer>
+
+                <!-- corner edit buttons, mirroring the tile layout (rotate top-left, delete
+                     top-right); they drive the current page's tile commands, so rotate/delete
+                     here save into the PDF exactly like the tiles do -->
+                <Button Style="{StaticResource CanvasNavButton}"
+                        HorizontalAlignment="Left"
+                        VerticalAlignment="Top"
+                        Margin="12,12,0,0"
+                        Content="&#xE7AD;"
+                        Command="{Binding CurrentTile.RotateCommand}"
+                        IsEnabled="{Binding CurrentTile.CanRotate}"
+                        ToolTip="顺时针旋转 90°，并立即保存到 PDF"/>
+                <Button HorizontalAlignment="Right"
+                        VerticalAlignment="Top"
+                        Margin="0,12,12,0"
+                        Content="&#xE74D;"
+                        Command="{Binding CurrentTile.DeleteCommand}"
+                        IsEnabled="{Binding CurrentTile.CanDelete}"
+                        ToolTipService.ShowOnDisabled="True"
+                        ToolTip="删除当前页，并立即保存到 PDF">
+                    <Button.Style>
+                        <Style TargetType="Button" BasedOn="{StaticResource CanvasNavButton}">
+                            <Setter Property="Foreground" Value="#FF9A8F"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding CurrentTile.CanDelete}" Value="False">
+                                    <Setter Property="ToolTip" Value="至少要保留一页，最后一页不可删除"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Button.Style>
+                </Button>
+
+                <Button Style="{StaticResource CanvasNavButton}"
+                        HorizontalAlignment="Left"
+                        VerticalAlignment="Center"
+                        Margin="12,0,0,0"
+                        Content="&#xE76B;"
+                        Command="{Binding PreviousCommand}"
+                        IsEnabled="{Binding CanGoPrevious}"
+                        ToolTip="上一页"/>
+                <Button Style="{StaticResource CanvasNavButton}"
+                        HorizontalAlignment="Right"
+                        VerticalAlignment="Center"
+                        Margin="0,0,12,0"
+                        Content="&#xE76C;"
+                        Command="{Binding NextCommand}"
+                        IsEnabled="{Binding CanGoNext}"
+                        ToolTip="下一页"/>
+
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center"
+                            IsHitTestVisible="False"
+                            Visibility="{Binding HasStatusText, Converter={StaticResource BoolToVis}}">
+                    <ProgressBar Width="180" Height="6"
+                                 IsIndeterminate="True"
+                                 Foreground="{StaticResource AccentBrush}"
+                                 Visibility="{Binding IsLoading, Converter={StaticResource BoolToVis}}"/>
+                    <TextBlock Text="{Binding StatusText}"
+                               FontSize="13"
+                               Foreground="White"
+                               TextAlignment="Center"
+                               TextWrapping="Wrap"
+                               MaxWidth="420"
+                               Margin="0,12,0,0"/>
+                </StackPanel>
+            </Grid>
+        </Grid>
+    </Grid>
+</UserControl>

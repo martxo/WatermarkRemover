@@ -20,6 +20,9 @@ public static class AppFolders
 
     public static string LogDirectory => Path.Combine(Root, "logs");
 
+    /// <summary>Recognition report JSONL files (kept far longer than logs — training corpus).</summary>
+    public static string ReportDirectory => Path.Combine(Root, "reports");
+
     private static string DefaultFallbackDirectory => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "WatermarkRemover");

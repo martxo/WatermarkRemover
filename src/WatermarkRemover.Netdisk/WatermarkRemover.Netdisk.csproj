@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- net8.0 like WatermarkRemover.Core; the providers themselves only use HTTP. -->
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>WatermarkRemover.Netdisk</RootNamespace>
+    <AssemblyName>WatermarkRemover.Netdisk</AssemblyName>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\WatermarkRemover.Core\WatermarkRemover.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Token refresh decisions and JSON mapping are internal; the tests exercise them directly. -->
+    <InternalsVisibleTo Include="WatermarkRemover.Tests" />
+  </ItemGroup>
+
+</Project>

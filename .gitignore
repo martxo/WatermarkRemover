@@ -4,6 +4,9 @@ bin/
 obj/
 logs/
 
+# Throwaway detached-test-run logs (deleted when a run finishes; may be file-locked)
+testrun.*.log
+
 # Local tools (portable git/gh)
 .tools/
 
@@ -15,3 +18,12 @@ logs/
 WatermarkRemover.settings.json
 *.user
 .vs/
+
+# Brother iPrint&Scan 逆向复刻产物 —— 仅在本机保留，不推送。
+# 复刻原型与逆向证据的目标是整合进办公助理软件，不进入本仓库；
+# 其中 research/brother-ipscan 还含反编译与字符串提取证据，不应上传。
+/ipscan-clone/
+/research/
+
+# Trae IDE 工作目录（AI 规划文档、skills）——本地工作笔记，不入库。
+/.trae/

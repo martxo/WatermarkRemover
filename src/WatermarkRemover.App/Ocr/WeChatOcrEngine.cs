@@ -2,7 +2,10 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
+using SkiaSharp;
+using WatermarkRemover.Core.Features.Layout;
 using WatermarkRemover.Core.Features.Ocr;
+using WatermarkRemover.Core.Geometry;
 
 namespace WatermarkRemover.App.Ocr;
 
@@ -14,7 +17,7 @@ namespace WatermarkRemover.App.Ocr;
 /// and WeChat itself does not need to be running or logged in. Quality is markedly better than
 /// the Windows built-in OCR for Chinese documents.
 /// </summary>
-public sealed class WeChatOcrEngine : IOcrEngine
+public sealed class WeChatOcrEngine : IOcrEngine, IBoundedOcrEngine
 {
     /// <summary>wcocr hands us the JSON answer as a UTF-8 C string through this callback.</summary>
     [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
@@ -101,7 +104,58 @@ public sealed class WeChatOcrEngine : IOcrEngine
         return true;
     }
 
-    public async Task<IReadOnlyList<string>> RecognizeAsync(byte[] imageBytes)
+    public async Task<IReadOnlyList<string>> RecognizeAsync(byte[] imageBytes) =>
+        (await RecognizeRawAsync(imageBytes).ConfigureAwait(false)).Select(b => b.Text).ToList();
+
+    /// <summary>
+    /// Line bounds parsed from the response's left/top/width/height fields (present in the
+    /// WeChat OCR JSON), normalized against the source image — this is what drives the
+    /// anchor-based layout blocks.
+    /// </summary>
+    public async Task<IReadOnlyList<RecognizedLine>> RecognizeWithBoundsAsync(byte[] imageBytes)
+    {
+        var blocks = await RecognizeRawAsync(imageBytes).ConfigureAwait(false);
+
+        (double width, double height) = TryDecodeSize(imageBytes);
+        var lines = new List<RecognizedLine>(blocks.Count);
+        foreach (var block in blocks)
+            lines.Add(new RecognizedLine(block.Text, NormalizeBox(block, width, height)));
+        return lines;
+    }
+
+    /// <summary>Header-only decode for the pixel size; null when the image cannot be read.</summary>
+    private static (double Width, double Height) TryDecodeSize(byte[] imageBytes)
+    {
+        try
+        {
+            using SKBitmap? info = SKBitmap.Decode(imageBytes);
+            return info is null ? (0, 0) : (info.Width, info.Height);
+        }
+        catch
+        {
+            return (0, 0);
+        }
+    }
+
+    private static RectD? NormalizeBox(RawBlock block, double width, double height)
+    {
+        if (block.Left is not { } left || block.Top is not { } top ||
+            block.Width is not { } w || block.Height is not { } h ||
+            width <= 0 || height <= 0)
+            return null;
+
+        double x = Math.Clamp(left / width, 0, 1);
+        double y = Math.Clamp(top / height, 0, 1);
+        double nw = Math.Clamp(w / width, 0, 1 - x);
+        double nh = Math.Clamp(h / height, 0, 1 - y);
+        return nw <= 0 || nh <= 0 ? null : new RectD(x, y, nw, nh);
+    }
+
+    /// <summary>One recognised text block with its raw pixel box (null when absent).</summary>
+    private readonly record struct RawBlock(
+        string Text, double? Left, double? Top, double? Width, double? Height);
+
+    private async Task<IReadOnlyList<RawBlock>> RecognizeRawAsync(byte[] imageBytes)
     {
         ArgumentNullException.ThrowIfNull(imageBytes);
 
@@ -127,7 +181,7 @@ public sealed class WeChatOcrEngine : IOcrEngine
                     throw new InvalidOperationException("微信 OCR 引擎未返回结果。");
 
                 HookShutdown();
-                return ParseLines(json);
+                return ParseBlocks(json);
             }
             finally
             {
@@ -149,8 +203,10 @@ public sealed class WeChatOcrEngine : IOcrEngine
         Volatile.Write(ref _resultJson, Encoding.UTF8.GetString(bytes));
     }
 
-    /// <summary>Result JSON: {"errcode":0,"ocr_response":[{"text":"…","left":…,…}, …]}.</summary>
-    private static IReadOnlyList<string> ParseLines(string json)
+    /// <summary>Result JSON: {"errcode":0,"ocr_response":[{"text":"…","left":…,"top":…,
+    /// "width":…,"height":…}, …]}. Box fields are read tolerantly (right/bottom fallback) —
+    /// a response without them simply yields blocks with null boxes.</summary>
+    private static IReadOnlyList<RawBlock> ParseBlocks(string json)
     {
         try
         {
@@ -169,18 +225,27 @@ public sealed class WeChatOcrEngine : IOcrEngine
 
             if (!root.TryGetProperty("ocr_response", out JsonElement blocks) ||
                 blocks.ValueKind != JsonValueKind.Array)
-                return Array.Empty<string>();
+                return Array.Empty<RawBlock>();
 
-            var lines = new List<string>();
+            var lines = new List<RawBlock>();
             foreach (JsonElement block in blocks.EnumerateArray())
             {
-                if (block.ValueKind == JsonValueKind.Object &&
-                    block.TryGetProperty("text", out JsonElement text) &&
-                    text.ValueKind == JsonValueKind.String &&
-                    text.GetString() is { Length: > 0 } line)
-                {
-                    lines.Add(line);
-                }
+                if (block.ValueKind != JsonValueKind.Object ||
+                    !block.TryGetProperty("text", out JsonElement text) ||
+                    text.ValueKind != JsonValueKind.String ||
+                    text.GetString() is not { Length: > 0 } line)
+                    continue;
+
+                double? left = Number(block, "left");
+                double? top = Number(block, "top");
+                double? width = Number(block, "width");
+                double? height = Number(block, "height");
+                if (width is null && left is not null && Number(block, "right") is { } right)
+                    width = right - left;
+                if (height is null && top is not null && Number(block, "bottom") is { } bottom)
+                    height = bottom - top;
+
+                lines.Add(new RawBlock(line, left, top, width, height));
             }
 
             return lines;
@@ -189,6 +254,11 @@ public sealed class WeChatOcrEngine : IOcrEngine
         {
             throw new InvalidOperationException("微信 OCR 返回了无法解析的结果。", ex);
         }
+
+        static double? Number(JsonElement element, string name) =>
+            element.TryGetProperty(name, out JsonElement value) && value.ValueKind == JsonValueKind.Number
+                ? value.GetDouble()
+                : null;
     }
 
     /// <summary>Kills the OCR worker process when the app exits; registered once, after first use.</summary>

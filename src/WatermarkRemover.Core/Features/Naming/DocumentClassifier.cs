@@ -17,7 +17,19 @@ public static class DocumentClassifier
     /// <summary>Returns the best profile or null when nothing matches convincingly.</summary>
     public static DocumentProfile? Classify(string text)
     {
-        if (string.IsNullOrWhiteSpace(text)) return null;
+        (DocumentProfile? profile, int score, int runnerUp) = ClassifyDetailed(text);
+        return profile is not null && score - runnerUp >= MinMargin ? profile : null;
+    }
+
+    /// <summary>
+    /// Scores every profile and exposes the winner with both raw scores. The profile is
+    /// non-null once the absolute score clears <see cref="MinScore"/>; the margin gate stays
+    /// with <see cref="Classify"/> — callers that need to see borderline winners (the
+    /// recognition report's classify_low_margin rule) judge the margin themselves.
+    /// </summary>
+    public static (DocumentProfile? Profile, int Score, int RunnerUp) ClassifyDetailed(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return (null, 0, 0);
 
         DocumentProfile? best = null;
         int bestScore = 0;
@@ -38,9 +50,7 @@ public static class DocumentClassifier
             }
         }
 
-        return best is not null && bestScore >= MinScore && bestScore - runnerUp >= MinMargin
-            ? best
-            : null;
+        return (best is not null && bestScore >= MinScore ? best : null, bestScore, runnerUp);
     }
 
     private static int Score(DocumentProfile profile, string text)
