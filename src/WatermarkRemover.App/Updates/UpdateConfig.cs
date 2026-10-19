@@ -35,4 +35,20 @@ public static class UpdateConfig
         && Repository.Contains('/', StringComparison.Ordinal);
 
     public static string LatestReleaseApiUrl => $"https://api.github.com/repos/{Repository}/releases/latest";
+
+    // ── Velopack channel (增量推送, v1.15.0+) ──
+    // The Velopack channel rides the same GitHub repository: vpk pack produces full/delta nupkgs
+    // plus releases.win.json which are attached to the same release as the legacy zip, so both
+    // channels live side by side and clients pick their own.
+
+    /// <summary>Velopack package id, must match <c>vpk pack --packId</c>. Becomes the install
+    /// folder name under %LocalAppData%.</summary>
+    public const string VelopackPackId = "WatermarkRemover";
+
+    /// <summary>Base URL form GithubSource expects ("https://github.com/owner/repo").</summary>
+    public static string VelopackRepoUrl => $"https://github.com/{Repository}";
+
+    /// <summary>Velopack release channel. Must match <c>vpk pack --channel</c>; "win" is the
+    /// vpk default on Windows, so the code deliberately never passes --channel at pack time.</summary>
+    public const string VelopackChannel = "win";
 }

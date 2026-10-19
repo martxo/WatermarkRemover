@@ -1,5 +1,7 @@
 # Build output
 publish/
+Releases/
+dist/
 bin/
 obj/
 logs/

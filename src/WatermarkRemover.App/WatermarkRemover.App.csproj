@@ -17,6 +17,9 @@
     <!-- PP-OCR (PaddleOCR ONNX) recognition for machines without WeChat. -->
     <PackageReference Include="RapidOcrNet" Version="4.2.0" />
     <PackageReference Include="SkiaSharp" Version="3.119.1" />
+    <!-- Incremental updates (增量推送): vpk-generated delta/full packages on GitHub Releases.
+         v1.2.158 was pulled for a severe bug — pin 1.2.161 or newer deliberately. -->
+    <PackageReference Include="Velopack" Version="1.2.161" />
   </ItemGroup>
 
   <PropertyGroup>
@@ -29,7 +32,7 @@
     <AssemblyName>WatermarkRemover</AssemblyName>
     <RootNamespace>WatermarkRemover.App</RootNamespace>
     <ApplicationIcon Condition="Exists('app.ico')">app.ico</ApplicationIcon>
-    <Version>1.14.8</Version>
+    <Version>1.15.0</Version>
     <AssemblyVersion>$(Version)</AssemblyVersion>
     <FileVersion>$(Version)</FileVersion>
     <Product>Watermark Remover</Product>

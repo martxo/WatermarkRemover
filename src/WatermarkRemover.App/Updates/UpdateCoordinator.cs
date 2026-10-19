@@ -17,6 +17,9 @@ public static class UpdateCoordinator
 {
     private static readonly UpdateService Service = new();
 
+    /// <summary>Velopack channel (增量推送); only used when the app is Velopack-installed.</summary>
+    private static readonly VelopackUpdateService VelopackService = new();
+
     /// <summary>1 when a check/update is already running; guards re-entrant triggers.</summary>
     private static int _running;
 
@@ -57,6 +60,14 @@ public static class UpdateCoordinator
 
     private static async Task RunCheckCoreAsync(Window owner, IDialogService dialogs, bool silent)
     {
+        // Installed (Setup.exe) users ride the Velopack incremental channel; green-directory
+        // users keep the legacy full-zip flow below. Both share the same UI scaffolding.
+        if (VelopackUpdateService.IsChannelUsable)
+        {
+            await RunVelopackCheckCoreAsync(owner, dialogs, silent).ConfigureAwait(true);
+            return;
+        }
+
         // The manual path opens the progress window up front: the channel query can take up to
         // 15 seconds and must not look like a frozen button. The startup path stays invisible.
         UpdateProgressWindow? checkingWindow = null;
@@ -178,6 +189,115 @@ public static class UpdateCoordinator
                 "更新失败，当前版本不受影响。\n\n" +
                 $"原因：{ex.Message}\n\n" +
                 $"可稍后在设置中重试，或到发布页手动下载：\n{info.ReleasePageUrl}",
+                "软件更新");
+        }
+        finally
+        {
+            if (progressWindow.IsLoaded) progressWindow.Close();
+        }
+    }
+
+    // ── Velopack channel (增量推送) — mirrors the legacy flow above against the Velopack feed ──
+
+    private static async Task RunVelopackCheckCoreAsync(Window owner, IDialogService dialogs, bool silent)
+    {
+        UpdateProgressWindow? checkingWindow = null;
+        if (!silent)
+        {
+            checkingWindow = new UpdateProgressWindow { Owner = owner };
+            checkingWindow.ShowStage(UpdateStage.Checking);
+            checkingWindow.Show();
+        }
+
+        VelopackCheckResult result;
+        try
+        {
+            result = await VelopackService.CheckForUpdateAsync().ConfigureAwait(true);
+        }
+        catch (Exception ex)
+        {
+            checkingWindow?.Close();
+            AppLog.Error("检查更新失败", ex);
+            if (!silent)
+                dialogs.Warn(
+                    "检查更新时出错，可能是网络不稳定。\n可稍后重试，或到发布页手动下载。\n\n" +
+                    $"详情：{ex.Message}",
+                    "软件更新");
+            return;
+        }
+
+        if (!result.UpdateAvailable)
+        {
+            checkingWindow?.Close();
+            AppLog.Info($"当前已是最新版本 v{UpdateService.CurrentVersion}");
+            if (!silent)
+                dialogs.Info(
+                    $"当前已是最新版本（v{UpdateService.CurrentVersion}）。",
+                    "软件更新");
+            return;
+        }
+
+        checkingWindow?.Close();
+        AppLog.Info(result.IsDelta
+            ? $"发现新版本 v{result.LatestVersion}（当前 v{UpdateService.CurrentVersion}），有增量更新包"
+            : $"发现新版本 v{result.LatestVersion}（当前 v{UpdateService.CurrentVersion}），将下载全量更新包");
+
+        string sizeText = result.PackageBytes > 0
+            ? $"约 {ProgressTextFormatter.FormatBytes(result.PackageBytes)}"
+            : "未知大小";
+        string packageKind = result.IsDelta
+            ? "增量更新包，无需重新下载完整安装包"
+            : "全量更新包";
+        bool accepted = dialogs.ConfirmYesNo(
+            $"发现新版本 v{result.LatestVersion}（当前 v{UpdateService.CurrentVersion}），是否立即下载并更新？\n\n" +
+            $"更新包：{packageKind}，大小 {sizeText}\n" +
+            "下载、校验均有进度显示，更新完成后程序会自动重启，无需重新安装。",
+            "软件更新");
+
+        if (!accepted) return;
+
+        await DownloadAndApplyVelopackAsync(dialogs, result).ConfigureAwait(true);
+    }
+
+    private static async Task DownloadAndApplyVelopackAsync(IDialogService dialogs, VelopackCheckResult result)
+    {
+        var progressWindow = new UpdateProgressWindow();
+        progressWindow.Show();
+        progressWindow.Report(new UpdateProgress(
+            UpdateStage.Downloading, 0, 0, result.PackageBytes, null,
+            result.IsDelta ? "增量更新" : "全量更新"));
+
+        try
+        {
+            var progress = new Progress<UpdateProgress>(progressWindow.Report);
+            Velopack.UpdateInfo update = await VelopackService
+                .DownloadAsync(result.Update!, progress, progressWindow.Cts.Token)
+                .ConfigureAwait(true);
+
+            AppLog.Info($"更新 v{update.TargetFullRelease.Version} 已下载并通过 Velopack 校验");
+
+            // Hold the "ready" state briefly — a window that closes and an app that vanishes in
+            // the same frame reads as a crash, not a completed update.
+            progressWindow.Report(new UpdateProgress(UpdateStage.ReadyToRestart, 100, 0, null, null, null));
+            await Task.Delay(1200).ConfigureAwait(true);
+
+            progressWindow.Close();
+            // Update.exe waits for this process to exit, applies the package and relaunches;
+            // the current process terminates inside the call — nothing after it runs.
+            VelopackService.ApplyAndRestart(update);
+            AppLog.Info($"准备退出当前程序以完成 v{result.LatestVersion} 更新");
+        }
+        catch (OperationCanceledException)
+        {
+            AppLog.Info("更新下载已取消");
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error($"更新到 v{result.LatestVersion} 失败", ex);
+            dialogs.Warn(
+                "更新失败，当前版本不受影响。\n\n" +
+                $"原因：{ex.Message}\n\n" +
+                "可稍后在设置中重试，或到发布页手动下载安装最新版。",
                 "软件更新");
         }
         finally

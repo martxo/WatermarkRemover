@@ -1,5 +1,6 @@
 ﻿using System.Windows;
 using System.Windows.Threading;
+using Velopack;
 using WatermarkRemover.App.Logging;
 using WatermarkRemover.Core.Settings;
 
@@ -9,6 +10,11 @@ public partial class App : Application
 {
     protected override void OnStartup(StartupEventArgs e)
     {
+        // Must run before anything else: Velopack's install/update hooks intercept --veloapp-*
+        // arguments and fast-exit the process, which only works before any file IO or window is
+        // created. Harmless no-op for green-directory (non-installed) runs.
+        VelopackApp.Build().Run();
+
         base.OnStartup(e);
 
         AppFolders.EnsureRoot();
