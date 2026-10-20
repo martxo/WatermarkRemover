@@ -8,9 +8,11 @@
         markup serves every entry point. The form itself is generated from the provider's declared
         credential fields — a new product needs no UI change here.
 
-        Layout: every row is a two-column Grid sharing one auto-sized label column
-        (SharedSizeGroup), so labels never truncate whatever a provider declares and the
-        inputs all stretch across the remaining width.
+        Layout: scan login (扫码) is the primary path and saves the account by itself; the
+        provider-declared credential fields and the manual OAuth round-trip live collapsed in
+        the advanced expander for the rare hand-token case. Every row is a two-column Grid
+        sharing one auto-sized label column (SharedSizeGroup), so labels never truncate
+        whatever a provider declares and the inputs all stretch across the remaining width.
     -->
     <UserControl.Resources>
         <Style x:Key="FieldLabel" TargetType="TextBlock">
@@ -60,46 +62,50 @@
                          Text="{Binding AccountName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
             </DockPanel>
         </Grid>
-        <ItemsControl ItemsSource="{Binding Fields}" Margin="0,2,0,0">
-            <ItemsControl.ItemTemplate>
-                <DataTemplate>
-                    <Grid Margin="0,0,0,6">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto" SharedSizeGroup="NetdiskFieldLabel" MinWidth="110"/>
-                            <ColumnDefinition Width="*"/>
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="{Binding Label}" Style="{StaticResource FieldLabel}"
-                                   ToolTip="{Binding Hint}"/>
-                        <TextBox Grid.Column="1" Style="{StaticResource InputBox}" MinWidth="0"
-                                 Visibility="{Binding IsPlain, Converter={StaticResource BoolToVis}}"
-                                 Text="{Binding Value, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
-                        <PasswordBox Grid.Column="1" Style="{StaticResource SecretBox}" MinWidth="0"
-                                     Visibility="{Binding IsSecret, Converter={StaticResource BoolToVis}}"
-                                     behaviors:PasswordBoxAssistant.BoundPassword="{Binding Value, Mode=TwoWay}"/>
-                    </Grid>
-                </DataTemplate>
-            </ItemsControl.ItemTemplate>
-        </ItemsControl>
         <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+            <Button Content="扫码登录（推荐）" Command="{Binding ScanLoginCommand}"
+                    Visibility="{Binding HasCliLogin, Converter={StaticResource BoolToVis}}"
+                    Style="{StaticResource PrimaryButton}"/>
             <Button Content="测试连接" Command="{Binding TestConnectionCommand}"
-                    Style="{StaticResource SmallButton}"/>
-            <Button Content="保存账号" Command="{Binding SaveAccountCommand}"
                     Style="{StaticResource SmallButton}" Margin="8,0,0,0"/>
             <Button Content="删除账号" Command="{Binding DeleteAccountCommand}"
                     Style="{StaticResource SmallButton}" Margin="8,0,0,0"/>
         </StackPanel>
-        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
-            <Button Content="扫码登录（推荐）" Command="{Binding ScanLoginCommand}"
-                    Visibility="{Binding HasCliLogin, Converter={StaticResource BoolToVis}}"
-                    Style="{StaticResource SmallButton}"/>
-            <Button Content="打开授权页" Command="{Binding OpenAuthorizePageCommand}"
-                    Style="{StaticResource SmallButton}" Margin="8,0,0,0"/>
-            <TextBox Width="180" Style="{StaticResource InputBox}" MinWidth="0" Margin="8,0,0,0"
-                     ToolTip="粘贴回调地址中的授权码"
-                     Text="{Binding AuthorizationCode, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
-            <Button Content="兑换授权码" Command="{Binding ExchangeCodeCommand}"
-                    Style="{StaticResource SmallButton}" Margin="8,0,0,0"/>
-        </StackPanel>
+        <Expander Header="高级：手动填写凭据（一般不需要）" Margin="0,8,0,0">
+            <StackPanel Margin="0,4,0,0">
+                <ItemsControl ItemsSource="{Binding Fields}" Margin="0,2,0,0">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Grid Margin="0,0,0,6">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" SharedSizeGroup="NetdiskFieldLabel" MinWidth="110"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="{Binding Label}" Style="{StaticResource FieldLabel}"
+                                           ToolTip="{Binding Hint}"/>
+                                <TextBox Grid.Column="1" Style="{StaticResource InputBox}" MinWidth="0"
+                                         Visibility="{Binding IsPlain, Converter={StaticResource BoolToVis}}"
+                                         Text="{Binding Value, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
+                                <PasswordBox Grid.Column="1" Style="{StaticResource SecretBox}" MinWidth="0"
+                                             Visibility="{Binding IsSecret, Converter={StaticResource BoolToVis}}"
+                                             behaviors:PasswordBoxAssistant.BoundPassword="{Binding Value, Mode=TwoWay}"/>
+                            </Grid>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                    <Button Content="保存账号" Command="{Binding SaveAccountCommand}"
+                            Style="{StaticResource SmallButton}"/>
+                    <Button Content="打开授权页" Command="{Binding OpenAuthorizePageCommand}"
+                            Style="{StaticResource SmallButton}" Margin="8,0,0,0"/>
+                    <TextBox Width="180" Style="{StaticResource InputBox}" MinWidth="0" Margin="8,0,0,0"
+                             ToolTip="粘贴回调地址中的授权码"
+                             Text="{Binding AuthorizationCode, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
+                    <Button Content="兑换授权码" Command="{Binding ExchangeCodeCommand}"
+                            Style="{StaticResource SmallButton}" Margin="8,0,0,0"/>
+                </StackPanel>
+            </StackPanel>
+        </Expander>
         <TextBlock Text="{Binding StatusText}" Style="{StaticResource SectionLabel}"
                    TextWrapping="Wrap" Margin="0,8,0,0"/>
     </StackPanel>

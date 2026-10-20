@@ -313,6 +313,13 @@ public sealed class NetdiskAccountSettingViewModel : ObservableObject
 
             var result = await loginService.WaitForTokenAsync(ticket.TicketId).ConfigureAwait(true);
 
+            // The scan flow saves by itself, so an untitled account still needs a usable name —
+            // the product's display name is the natural default ("阿里云盘").
+            if (string.IsNullOrWhiteSpace(AccountName))
+            {
+                AccountName = SelectedProvider.DisplayName;
+            }
+
             var values = new Dictionary<string, string>(CollectCredentials().Values, StringComparer.Ordinal)
             {
                 [AliyunpanCliRuntime.CliLoginKey] = "true",
