@@ -17,8 +17,9 @@ public class PdfOrientationDetectorTests
         return data.ToArray();
     }
 
-    /// <summary>Returns a scripted line per call — the detector queries turns 0..3 in order,
-    /// so the Nth call is the Nth candidate orientation.</summary>
+    /// <summary>Returns a scripted line per call — the detector queries 0°, 180° first and
+    /// only then 90°/270° when the vertical pair is ambiguous, so the Nth call is the Nth
+    /// queried candidate.</summary>
     private sealed class ScriptedOcr(params int[] charsPerTurn) : IOcrEngine
     {
         public string DisplayName => "Scripted";
@@ -126,18 +127,35 @@ public class PdfOrientationDetectorTests
     {
         // The engine reads every rotation equally well (WeChat-like) but always reports
         // upright-style boxes for the candidate it was given — the detector rotates the IMAGE,
-        // so the true turn is where the returned layout looks upright.
+        // so the true turn is where the returned layout looks upright. Portrait canvas: the
+        // landscape guard only exempts pages wider than tall.
+        var ocr = new LayoutScriptedOcr();
+        var detector = new PdfOrientationDetector(ocr);
+
+        int steps = await detector.DetectClockwiseStepsAsync(Png(30, 40));
+
+        // The 0°/180° pair settles it — the sideways probes never even run.
+        Assert.Equal(2, ocr.Calls);
+        Assert.Equal(2, steps);
+    }
+
+    [Fact]
+    public async Task A_landscape_page_is_never_turned_regardless_of_geometry()
+    {
+        // 表格型横版文件（征信/流水）的竖列识别框会把几何通道骗成 "sideways" — the landscape
+        // guard (v1.15 bug A) must return before any OCR, whatever the engine would vote.
         var ocr = new LayoutScriptedOcr();
         var detector = new PdfOrientationDetector(ocr);
 
         int steps = await detector.DetectClockwiseStepsAsync(Png(40, 30));
 
-        Assert.Equal(4, ocr.Calls);
-        Assert.Equal(2, steps);
+        Assert.Equal(0, ocr.Calls); // guarded out before any recognition
+        Assert.Equal(0, steps);
     }
 
-    /// <summary>Always answers with an upright-looking layout for turn 2 and nothing usable
-    /// for the others — geometry must pick turn 2 despite identical text volume everywhere.</summary>
+    /// <summary>Always answers with an upright-looking layout for the flipped (180°) candidate
+    /// and nothing usable for the others — geometry must pick turn 2 despite identical text
+    /// volume everywhere, and the decisive vertical pair must end the vote early.</summary>
     private sealed class LayoutScriptedOcr : IBoundedOcrEngine
     {
         public string DisplayName => "LayoutScripted";
@@ -151,7 +169,7 @@ public class PdfOrientationDetectorTests
         public Task<IReadOnlyList<RecognizedLine>> RecognizeWithBoundsAsync(byte[] imageBytes)
         {
             int turn = Calls++;
-            IReadOnlyList<RecognizedLine> lines = turn == 2
+            IReadOnlyList<RecognizedLine> lines = turn == 1
                 ? UprightLines(8)
                 : Array.Empty<RecognizedLine>();
             return Task.FromResult(lines);
@@ -161,15 +179,32 @@ public class PdfOrientationDetectorTests
     // ---------- the orchestration (real image rotation, scripted OCR) ----------
 
     [Fact]
-    public async Task Detection_runs_all_four_turns_and_rotates_the_candidate_images()
+    public async Task An_upside_down_page_settles_in_two_calls_and_skips_the_sideways_probes()
     {
-        var ocr = new ScriptedOcr(3, 2, 30, 2);
+        // Call order is 0°, 180°, then 90°/270° only when ambiguous. ScriptedOcr indexes by
+        // call: straight reads 3 chars, the flipped candidate reads 30 — decisive, so the
+        // sideways probes are never asked.
+        var ocr = new ScriptedOcr(3, 30);
         var detector = new PdfOrientationDetector(ocr);
 
-        int steps = await detector.DetectClockwiseStepsAsync(Png(40, 30));
+        int steps = await detector.DetectClockwiseStepsAsync(Png(30, 40));
 
-        Assert.Equal(4, ocr.Calls); // every candidate got a reading
+        Assert.Equal(2, ocr.Calls);
         Assert.Equal(2, steps); // 180° was the decisive reading
+    }
+
+    [Fact]
+    public async Task An_ambiguous_vertical_pair_pays_for_the_full_four_way_vote()
+    {
+        // 0° reads 3 chars, 180° reads 10 — under the 20-char floor, so the sideways
+        // candidates are probed and 90° wins. Call order: 0°, 180°, 90°, 270° → 3, 10, 25, 2.
+        var ocr = new ScriptedOcr(3, 10, 25, 2);
+        var detector = new PdfOrientationDetector(ocr);
+
+        int steps = await detector.DetectClockwiseStepsAsync(Png(30, 40));
+
+        Assert.Equal(4, ocr.Calls);
+        Assert.Equal(1, steps);
     }
 
     [Fact]
@@ -177,7 +212,7 @@ public class PdfOrientationDetectorTests
     {
         var detector = new PdfOrientationDetector(new UnusableOcr());
 
-        int steps = await detector.DetectClockwiseStepsAsync(Png(40, 30));
+        int steps = await detector.DetectClockwiseStepsAsync(Png(30, 40));
 
         Assert.Equal(0, steps); // convenience feature degrades to silence, never an error
     }

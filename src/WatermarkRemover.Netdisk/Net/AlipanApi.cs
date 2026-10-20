@@ -21,6 +21,10 @@ internal static class AlipanApi
 
     internal const string ListPath = "/adrive/v1.0/openFile/list";
 
+    internal const string SearchPath = "/adrive/v1.0/openFile/search";
+
+    internal const string GetPath = "/adrive/v1.0/openFile/get";
+
     internal const string CreatePath = "/adrive/v1.0/openFile/create";
 
     internal const string GetUploadUrlPath = "/adrive/v1.0/openFile/getUploadUrl";
@@ -36,4 +40,23 @@ internal static class AlipanApi
 
     /// <summary>Root of a drive listing; the API wants this literal instead of an empty parent id.</summary>
     internal const string RootFolderId = "root";
+
+    // ---------------------------------------------------------------------
+    // tickstep/aliyunpan CLI login bridge (api.tickstep.com). The CLI's author
+    // hosts the OAuth app registration, so the browser authorize URL points the
+    // authorization code at his server and the login token is fetched back from
+    // there. Same endpoints the CLI binary itself uses (panlogin package).
+    // ---------------------------------------------------------------------
+
+    internal const string TickstepWebHost = "https://api.tickstep.com";
+
+    internal const string TickstepQrCreatePath = "/auth/tickstep/aliyunpan/token/qrcode/create";
+
+    internal const string TickstepTokenLoginPath = "/auth/tickstep/aliyunpan/token/common";
+
+    /// <summary>Client id of the CLI author's registered alipan open-platform app.</summary>
+    internal const string CliClientId = "cf9f70e8fc61430f8ec5ab5cadf31375";
+
+    /// <summary>Scope list requested by the CLI login flow (comma form, as the CLI builds it).</summary>
+    internal const string CliScope = "user:base,file:all:read,file:all:write,file:share:write,album:shared:read";
 }

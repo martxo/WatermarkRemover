@@ -1,4 +1,4 @@
-﻿<UserControl x:Class="WatermarkRemover.App.PdfPreviewPage"
+<UserControl x:Class="WatermarkRemover.App.PdfPreviewPage"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              Background="Transparent">
@@ -93,16 +93,12 @@
                            VerticalAlignment="Center"
                            HorizontalAlignment="Center"/>
 
-                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center"
+                            Margin="0,0,54,0">
                     <Button Content="重新加载"
                             Style="{StaticResource SmallButton}"
                             Command="{Binding RefreshCommand}"
                             ToolTip="重新渲染当前页（渲染失败时可重试）"/>
-                    <Button Content="关闭"
-                            Style="{StaticResource GhostButton}"
-                            Margin="10,0,0,0"
-                            Command="{Binding CloseCommand}"
-                            ToolTip="退出看图（Esc 同样生效）"/>
                 </StackPanel>
             </Grid>
 
@@ -127,9 +123,10 @@
                     </Grid>
                 </ScrollViewer>
 
-                <!-- corner edit buttons, mirroring the tile layout (rotate top-left, delete
-                     top-right); they drive the current page's tile commands, so rotate/delete
-                     here save into the PDF exactly like the tiles do -->
+                <!-- corner edit buttons: rotate + delete side by side at top-left (mirroring the
+                     tile layout), paging arrows on the canvas edges; they drive the current
+                     page's tile commands, so rotate/delete here save into the PDF exactly like
+                     the tiles do -->
                 <Button Style="{StaticResource CanvasNavButton}"
                         HorizontalAlignment="Left"
                         VerticalAlignment="Top"
@@ -138,9 +135,9 @@
                         Command="{Binding CurrentTile.RotateCommand}"
                         IsEnabled="{Binding CurrentTile.CanRotate}"
                         ToolTip="顺时针旋转 90°，并立即保存到 PDF"/>
-                <Button HorizontalAlignment="Right"
+                <Button HorizontalAlignment="Left"
                         VerticalAlignment="Top"
-                        Margin="0,12,12,0"
+                        Margin="66,12,0,0"
                         Content="&#xE74D;"
                         Command="{Binding CurrentTile.DeleteCommand}"
                         IsEnabled="{Binding CurrentTile.CanDelete}"
@@ -191,6 +188,42 @@
                                Margin="0,12,0,0"/>
                 </StackPanel>
             </Grid>
+
+            <!-- the close sits flush in the window's extreme top-right corner (spanning both
+                 rows) — the desktop muscle-memory spot: slam the pointer into the corner,
+                 click, and the viewer is gone -->
+            <Button Grid.Row="0" Grid.RowSpan="2"
+                    HorizontalAlignment="Right" VerticalAlignment="Top"
+                    Width="46" Height="44"
+                    Background="Transparent"
+                    Foreground="#E6FFFFFF"
+                    FontFamily="Segoe MDL2 Assets"
+                    FontSize="10"
+                    Focusable="False"
+                    Cursor="Hand"
+                    WindowChrome.IsHitTestVisibleInChrome="True"
+                    Content="&#xE711;"
+                    Command="{Binding CloseCommand}"
+                    ToolTip="关闭看图（Esc 同样生效）">
+                <Button.Template>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                    </ControlTemplate>
+                </Button.Template>
+                <Button.Style>
+                    <Style TargetType="Button">
+                        <Setter Property="Background" Value="Transparent"/>
+                        <Style.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Background" Value="#C42B1C"/>
+                                <Setter Property="Foreground" Value="White"/>
+                            </Trigger>
+                        </Style.Triggers>
+                    </Style>
+                </Button.Style>
+            </Button>
         </Grid>
     </Grid>
 </UserControl>

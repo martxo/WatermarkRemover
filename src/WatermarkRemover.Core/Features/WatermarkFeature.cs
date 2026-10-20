@@ -79,8 +79,10 @@ public sealed class WatermarkFeature : IFeature
         {
             byte[] page = _namingRenderer.RenderFirstPageAsync(pdfPath, NamingRenderDpi)
                 .GetAwaiter().GetResult();
-            var lines = _namingEngine.RecognizeAsync(page).GetAwaiter().GetResult();
-            _trace?.Invoke($"命名：首页渲染 {page.Length / 1024} KB，OCR 识别 {lines.Count} 行", null);
+            var lines = _namingEngine.RecognizeBoundedOrDefaultAsync(page).GetAwaiter().GetResult();
+            _trace?.Invoke(
+                $"命名：首页渲染 {page.Length / 1024} KB，OCR 识别 {lines.Count} 行：{string.Join(" / ", lines.Select(l => l.Text))}",
+                null);
             return SmartNamingService.TryBuildName(lines, _trace);
         }
         catch (Exception ex)

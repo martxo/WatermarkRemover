@@ -1,4 +1,5 @@
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 
 namespace WatermarkRemover.App.ViewModels;
 
@@ -13,6 +14,7 @@ public sealed class PdfPreviewThumbnailViewModel : ObservableObject
     private readonly PdfPreviewViewModel _owner;
     private ImageSource? _image;
     private bool _isSelected;
+    private double _aspect = PdfPreviewViewModel.BaseTileWidth / PdfPreviewViewModel.BaseTileHeight;
 
     public PdfPreviewThumbnailViewModel(PdfPreviewViewModel owner, int index)
     {
@@ -23,11 +25,22 @@ public sealed class PdfPreviewThumbnailViewModel : ObservableObject
         DeleteCommand = new RelayCommand(() => _ = _owner.DeletePageAsync(Index), () => CanDelete);
     }
 
-    /// <summary>Zero-based page this tile stands for.</summary>
-    public int Index { get; }
+    /// <summary>Zero-based page this tile stands for. Shifts when pages are inserted earlier in
+    /// the document; commands read it at execute time, so one notification keeps clicks, the
+    /// corner actions and the label in step.</summary>
+    public int Index { get; private set; }
 
     /// <summary>Human page number painted on the tile.</summary>
     public string PageLabel => (Index + 1).ToString();
+
+    /// <summary>
+    /// Tile width for THIS page: the strip keeps one uniform row height, so each tile's width
+    /// follows its own page's aspect. A landscape page (scanned spreads live with /Rotate 270,
+    /// which the renderer applies) grows wider instead of letterboxing inside a portrait box —
+    /// mixing orientations used to look broken. Falls back to the shared portrait ratio until
+    /// the first bitmap arrives.
+    /// </summary>
+    public double TileWidth => Math.Round(_owner.TileHeight * _aspect);
 
     public ImageSource? Image
     {
@@ -57,8 +70,29 @@ public sealed class PdfPreviewThumbnailViewModel : ObservableObject
 
     public RelayCommand DeleteCommand { get; }
 
-    /// <summary>Owner side: pushes a freshly rendered tile image into the view.</summary>
-    internal void SetImage(ImageSource? image) => Image = image;
+    /// <summary>Owner side: an insert earlier in the document moved this page — re-point the tile
+    /// in place so its image, ring and commands survive untouched. Rebuilding the tile instead is
+    /// what made the whole strip blank and repaint after every insert.</summary>
+    internal void SetIndex(int index)
+    {
+        if (Index == index) return;
+        Index = index;
+        OnPropertyChanged(nameof(Index));
+        OnPropertyChanged(nameof(PageLabel));
+    }
+
+    /// <summary>Owner side: pushes a freshly rendered tile image into the view and re-derives
+    /// this tile's width from the bitmap's true pixel aspect.</summary>
+    internal void SetImage(ImageSource? image)
+    {
+        Image = image;
+        if (image is BitmapSource bmp && bmp.PixelWidth > 0 && bmp.PixelHeight > 0)
+            _aspect = (double)bmp.PixelWidth / bmp.PixelHeight;
+        OnPropertyChanged(nameof(TileWidth));
+    }
+
+    /// <summary>Owner side: zoom changed the shared row height — re-measure this tile.</summary>
+    internal void RefreshTileWidth() => OnPropertyChanged(nameof(TileWidth));
 
     /// <summary>Owner side: re-evaluates CanRotate / CanDelete (the single-flight lock changed).</summary>
     internal void RefreshCommands()

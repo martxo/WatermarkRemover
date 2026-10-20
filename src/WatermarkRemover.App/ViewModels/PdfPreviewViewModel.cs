@@ -3,6 +3,7 @@ using System.IO;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using System.Windows.Threading;
 using SkiaSharp;
 using WatermarkRemover.App.Logging;
 using WatermarkRemover.App.Ocr;
@@ -36,6 +37,13 @@ public sealed class PdfPreviewViewModel : ObservableObject
     /// cached render instead of paying for a second pass; dense scans stay legible at tile size.
     /// </summary>
     private const int ThumbnailDpi = 150;
+
+    /// <summary>
+    /// Render DPI for orientation probes only. Direction voting reads line-box layout, not
+    /// small glyphs, so a 90dpi raster halves the pixels the OCR pays for with no accuracy
+    /// loss. Tiles and canvas stay on 150 — this is a separate cache key and never displayed.
+    /// </summary>
+    private const int OrientationDpi = 90;
 
     /// <summary>
     /// Longest side a thumbnail is pre-scaled to. 720 keeps ~2× oversample even when
@@ -82,16 +90,30 @@ public sealed class PdfPreviewViewModel : ObservableObject
     /// <summary>Whether blank pages are dropped by themselves after load (scan rows do).</summary>
     private readonly bool _autoCleanBlank;
 
+    /// <summary>Host-supplied scanner for the gap button: one scan pass, handed back as the
+    /// written PDF's path (null = nothing scanned; throw = failure with a readable message).
+    /// Null = this strip cannot insert scans (imported files) and the gaps never enable.</summary>
+    private readonly Func<IProgress<string>, Task<string?>>? _scanProvider;
+
     private bool _isOrienting;
 
-    /// <summary>Rendered pages kept as PNG bytes, keyed by (page, dpi); only the visible page gets decoded.</summary>
-    private readonly Dictionary<(int Page, int Dpi), byte[]> _renderedPages = new();
+    /// <summary>Rendered pages kept as PNG bytes, keyed by (page, dpi); only the visible page gets decoded.
+    /// Concurrent: the tile fill (background) and the canvas render (foreground) read and write it at
+    /// the same time — a plain Dictionary threw under exactly that overlap and tiles went missing.</summary>
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<(int Page, int Dpi), byte[]> _renderedPages = new();
+
+    /// <summary>Serializes cache-miss renders. Without it, the tile fill and the canvas can both
+    /// miss the same (page, dpi) and pay for the page twice — and the native PDFium renderer
+    /// must never be driven from two threads at once anyway.</summary>
+    private readonly SemaphoreSlim _renderGate = new(1, 1);
 
     private int _pageCount;
     private int _pageIndex;
     private int _displayedPageIndex = -1;
     private int _loadGeneration;
     private double _thumbnailScale = 1.0;
+    private double _thumbnailScaleDraft = 1.0;
+    private DispatcherTimer? _scaleSettleTimer;
     private ImageSource? _currentImage;
     private bool _isLoading;
     private bool _isRotating;
@@ -102,7 +124,8 @@ public sealed class PdfPreviewViewModel : ObservableObject
         CancellationToken cancellationToken = default,
         Func<int, bool>? confirmPageDelete = null,
         IOcrEngine? ocrEngine = null, bool autoOrient = false,
-        Action<string>? onRelocated = null, bool autoCleanBlank = false)
+        Action<string>? onRelocated = null, bool autoCleanBlank = false,
+        Func<IProgress<string>, Task<string?>>? scanProvider = null)
     {
         _pdfPath = pdfPath;
         _renderer = renderer;
@@ -112,6 +135,7 @@ public sealed class PdfPreviewViewModel : ObservableObject
         _autoOrient = autoOrient;
         _onRelocated = onRelocated;
         _autoCleanBlank = autoCleanBlank;
+        _scanProvider = scanProvider;
         Title = displayName;
         Thumbnails.CollectionChanged += (_, _) =>
         {
@@ -131,6 +155,12 @@ public sealed class PdfPreviewViewModel : ObservableObject
         AutoOrientCommand = new RelayCommand(
             () => _ = AutoOrientAsync(),
             () => _ocrEngine is not null && !_isOrienting && !IsRotating && PageCount > 0);
+        // Any document with at least one page accepts a scan at any slot — front, middle or
+        // end. A one-page scan is exactly the case that needs the bookends most (the missing
+        // page is usually the one before or after), so PageCount > 0, never > 1.
+        InsertScanAfterCommand = new RelayCommand<int>(
+            index => _ = InsertScanAfterAsync(index),
+            _ => _scanProvider is not null && !_isRotating && !_isOrienting && PageCount > 0);
     }
 
     /// <summary>Multiplier on the base tile size, driven by the grid's zoom rail (0.6–2.0).</summary>
@@ -139,29 +169,88 @@ public sealed class PdfPreviewViewModel : ObservableObject
         get => _thumbnailScale;
         set
         {
-            if (SetProperty(ref _thumbnailScale, Math.Clamp(value, MinThumbScale, MaxThumbScale)))
-            {
-                OnPropertyChanged(nameof(TileWidth));
-                OnPropertyChanged(nameof(TileHeight));
-                OnPropertyChanged(nameof(ThumbAreaMaxHeight));
-                CommandManager.InvalidateRequerySuggested();
-            }
+            double clamped = Math.Clamp(value, MinThumbScale, MaxThumbScale);
+            if (!SetProperty(ref _thumbnailScale, clamped)) return;
+            // The rail always shows the settled zoom, whatever moved it (button or drag).
+            ApplyDraftScale(clamped);
+            OnPropertyChanged(nameof(ThumbAreaMaxHeight));
+            CommandManager.InvalidateRequerySuggested();
         }
     }
 
-    /// <summary>Live tile dimensions the shared tile template binds.</summary>
-    public double TileWidth => Math.Round(BaseTileWidth * _thumbnailScale);
-    public double TileHeight => Math.Round(BaseTileHeight * _thumbnailScale);
+    /// <summary>
+    /// The zoom the rail is showing right now. The tiles follow it immediately, so the drag
+    /// feels direct — but the strip's height (and with it the height of the whole record row)
+    /// only catches up once the drag settles. Before that, every pixel of the drag resized the
+    /// record list under the pointer, which is what made the page twitch.
+    /// </summary>
+    public double ThumbnailScaleDraft
+    {
+        get => _thumbnailScaleDraft;
+        set
+        {
+            double clamped = Math.Clamp(value, MinThumbScale, MaxThumbScale);
+            if (!ApplyDraftScale(clamped)) return;
+            ScheduleScaleSettle();
+        }
+    }
+
+    /// <summary>Pushes a zoom value into the rail and the tiles; false when nothing changed.</summary>
+    private bool ApplyDraftScale(double value)
+    {
+        if (Math.Abs(value - _thumbnailScaleDraft) < 0.001) return false;
+        _thumbnailScaleDraft = value;
+        OnPropertyChanged(nameof(ThumbnailScaleDraft));
+        OnPropertyChanged(nameof(TileWidth));
+        OnPropertyChanged(nameof(TileHeight));
+        foreach (var thumbnail in Thumbnails)
+            thumbnail.RefreshTileWidth();
+        return true;
+    }
+
+    /// <summary>
+    /// Starts the settle timer: when the rail stops moving for a moment, the settled zoom
+    /// catches up with the draft and the strip's height follows.
+    /// </summary>
+    private void ScheduleScaleSettle()
+    {
+        if (_scaleSettleTimer is null)
+        {
+            _scaleSettleTimer = new DispatcherTimer(DispatcherPriority.Background)
+            {
+                Interval = TimeSpan.FromMilliseconds(140),
+            };
+            _scaleSettleTimer.Tick += OnScaleSettled;
+        }
+        _scaleSettleTimer.Stop();
+        _scaleSettleTimer.Start();
+    }
+
+    private void OnScaleSettled(object? sender, EventArgs e)
+    {
+        _scaleSettleTimer?.Stop();
+        if (Math.Abs(_thumbnailScaleDraft - _thumbnailScale) < 0.001) return;
+        ThumbnailScale = _thumbnailScaleDraft;
+    }
+
+    /// <summary>Live tile dimensions the shared tile template binds — the zoom the rail shows.</summary>
+    public double TileWidth => Math.Round(BaseTileWidth * _thumbnailScaleDraft);
+    public double TileHeight => Math.Round(BaseTileHeight * _thumbnailScaleDraft);
 
     /// <summary>Height cap for the inline thumbnail grid: about two tile rows, scrolling
     /// inside. A long document must not stretch the whole job list — the user scrolls the
-    /// strip, the row itself (and the zoom rail beside it) stays a fixed size.</summary>
+    /// strip, the row itself (and the zoom rail beside it) stays a fixed size. It follows the
+    /// settled zoom, so dragging the rail never resizes the row under the pointer.</summary>
     public const double ThumbAreaRows = 2.0;
-    public double ThumbAreaMaxHeight => TileHeight * ThumbAreaRows;
+    public double ThumbAreaMaxHeight => Math.Round(BaseTileHeight * _thumbnailScale) * ThumbAreaRows;
 
     public RelayCommand ZoomInCommand { get; }
     public RelayCommand ZoomOutCommand { get; }
     public RelayCommand AutoOrientCommand { get; }
+
+    /// <summary>Gap button between two pages: scans fresh pages and splices them into the PDF
+    /// right after the page the gap follows. Without a host scanner the gaps never enable.</summary>
+    public RelayCommand<int> InsertScanAfterCommand { get; }
 
     /// <summary>Raised by the close button (and by Esc, handled by the viewer window) to leave
     /// the screen-level image viewer.</summary>
@@ -233,6 +322,12 @@ public sealed class PdfPreviewViewModel : ObservableObject
 
     /// <summary>Bottom strip tiles, one per page, built as soon as the page count is known.</summary>
     public ObservableCollection<PdfPreviewThumbnailViewModel> Thumbnails { get; } = new();
+
+    /// <summary>What both strip surfaces actually render: the page tiles with a gap marker
+    /// between each pair of adjacent pages (the insert-scan affordance). The tiles are the
+    /// same instances as <see cref="Thumbnails"/> — selection, images and commands stay shared;
+    /// gaps carry only the index to insert after.</summary>
+    public ObservableCollection<object> StripItems { get; } = new();
 
     /// <summary>Drives the strip's visibility: no pages, no strip.</summary>
     public bool HasThumbnails => Thumbnails.Count > 0;
@@ -389,6 +484,28 @@ public sealed class PdfPreviewViewModel : ObservableObject
         for (int i = 0; i < _pageCount; i++)
             Thumbnails.Add(new PdfPreviewThumbnailViewModel(this, i));
         SyncThumbnailSelection();
+        RebuildStripItems();
+    }
+
+    /// <summary>Rebuilds the display sequence: one atomic unit per page — [gap | tile | tail].
+    /// Unit i opens with the gap after page i-1 (-1 = in front of page one) and only the last
+    /// unit closes with the trailing gap, so every slot of the document (front, between, end)
+    /// still takes a scan while the wrap panel can only break between units — a wrapped row
+    /// never starts with a bare tile, and the columns line up across rows.</summary>
+    private void RebuildStripItems()
+    {
+        StripItems.Clear();
+        for (int i = 0; i < Thumbnails.Count; i++)
+        {
+            string gapToolTip = i == 0
+                ? "点击扫描，把新页插到第一页前面"
+                : "点击扫描，把新页插到这两页之间";
+            var tail = i == Thumbnails.Count - 1
+                ? new PdfPreviewGapViewModel(i, "点击扫描，把新页接着扫到最后一页后面")
+                : null;
+            StripItems.Add(new PdfPreviewStripUnitViewModel(
+                new PdfPreviewGapViewModel(i - 1, gapToolTip), Thumbnails[i], tail));
+        }
     }
 
     /// <summary>Exactly one tile carries the accent ring: the page the canvas is showing.</summary>
@@ -410,7 +527,7 @@ public sealed class PdfPreviewViewModel : ObservableObject
             {
                 byte[] bytes = await GetPageBytesAsync(thumb.Index, ThumbnailDpi);
                 if (IsCancelled || !Thumbnails.Contains(thumb)) return;
-                thumb.SetImage(Decode(MakeThumb(bytes)));
+                thumb.SetImage(await Task.Run(() => MakeThumbSource(bytes)));
             }
             catch (OperationCanceledException)
             {
@@ -462,7 +579,7 @@ public sealed class PdfPreviewViewModel : ObservableObject
             byte[] thumbBytes = await GetPageBytesAsync(pageIndex, ThumbnailDpi);
             if (IsCancelled) return;
             if (pageIndex < Thumbnails.Count)
-                Thumbnails[pageIndex].SetImage(Decode(MakeThumb(thumbBytes)));
+                Thumbnails[pageIndex].SetImage(await Task.Run(() => MakeThumbSource(thumbBytes)));
 
             if (PageIndex == pageIndex)
                 await RenderAsync(pageIndex, force: true);
@@ -543,6 +660,165 @@ public sealed class PdfPreviewViewModel : ObservableObject
     }
 
     /// <summary>
+    /// Waits until no load / orientation / page-write pass is touching the file. The host's
+    /// background naming (a rename = File.Move) races those writers otherwise — a move during
+    /// a strip rewrite throws and the scan silently keeps its timestamp name.
+    /// </summary>
+    internal async Task WaitForSettledAsync()
+    {
+        for (int i = 0; i < 300 && (_isLoading || _isOrienting || IsRotating); i++)
+            await Task.Delay(100).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Gap button between two pages: one scan pass (the host supplies the scanner and reports
+    /// progress through <see cref="StatusText"/>), then the scanned pages are spliced into the
+    /// PDF right after the page the gap follows — one in-place save, then the strip and the
+    /// canvas rebuild onto the new arrangement with the first inserted page on screen. The
+    /// scan's intermediate file is removed once its pages live inside the target; a failed
+    /// scan or a failed insert keeps it, so nothing is ever lost.
+    /// </summary>
+    internal async Task InsertScanAfterAsync(int insertAfterIndex)
+    {
+        if (IsCancelled || IsRotating || _isOrienting) return;
+        if (_scanProvider is null) return;
+        if (insertAfterIndex < -1 || insertAfterIndex >= PageCount) return; // -1 = in front of page one
+
+        IsRotating = true;
+        StatusText = "正在准备扫描…";
+        string slot = insertAfterIndex < 0 ? "开头" : $"第 {insertAfterIndex + 1} 页后";
+        string? scannedPath = null;
+        bool inserted = false;
+        try
+        {
+            scannedPath = await _scanProvider(new Progress<string>(message => StatusText = message)).ConfigureAwait(true);
+            if (IsCancelled) return;
+            if (scannedPath is null || !File.Exists(scannedPath))
+            {
+                StatusText = "扫描未完成，没有页面可插入。";
+                return;
+            }
+
+            int added = await Task.Run(() =>
+            {
+                EnsurePdfReadable();
+                return PdfPageInserter.InsertAfter(_pdfPath, insertAfterIndex, scannedPath!);
+            }).ConfigureAwait(true);
+            inserted = added > 0;
+            AppLog.Info($"预览已插入扫描页：{Path.GetFileName(_pdfPath)} {slot}新增 {added} 页");
+
+            if (IsCancelled) return; // the file is saved; nothing is on screen any more
+            ShiftRenderedPages(insertAfterIndex, added);
+            PageCount += added;
+
+            // Fresh scanner pages can sit sideways or upside down whatever the document looked
+            // like before the gap — probe each new page and turn the crooked ones in place,
+            // before the strip below paints them.
+            await OrientInsertedPagesAsync(insertAfterIndex + 1, added).ConfigureAwait(true);
+            if (IsCancelled) return; // pages are fixed in the file; nothing is on screen any more
+            RememberFileStamp(force: true);
+
+            // Grow the strip in place: tiles before the gap keep their page, tiles after it are
+            // re-pointed with a notification, and only the scanner's pages need pixels. The old
+            // clear-and-rebuild threw away every tile and every cached render, so the whole
+            // strip blanked and repainted page by page — the post-insert jolt.
+            int firstMoved = insertAfterIndex + 1;
+            for (int i = firstMoved; i < Thumbnails.Count; i++)
+                Thumbnails[i].SetIndex(i + added);
+            var fresh = new List<PdfPreviewThumbnailViewModel>();
+            for (int i = 0; i < added; i++)
+            {
+                var tile = new PdfPreviewThumbnailViewModel(this, firstMoved + i);
+                fresh.Add(tile);
+                Thumbnails.Insert(firstMoved + i, tile);
+            }
+            SyncThumbnailSelection();
+            foreach (var thumb in Thumbnails) thumb.RefreshCommands();
+            RebuildStripItems();
+            _ = LoadThumbnailsAsync(fresh);
+
+            // Land on the first page that came out of the scanner.
+            await RenderAsync(Math.Min(insertAfterIndex + 1, PageCount - 1), force: true).ConfigureAwait(true);
+
+            // RenderAsync clears StatusText on success; write our line after that, and leave a
+            // render failure's own message standing.
+            if (StatusText.Length == 0) StatusText = $"已插入 {added} 页扫描页。";
+        }
+        catch (FileNotFoundException ex)
+        {
+            AppLog.Trace($"插入扫描页失败（文件不可达）：{ex.FileName}", ex);
+            if (!IsCancelled) StatusText = ex.Message;
+        }
+        catch (Exception ex)
+        {
+            AppLog.Trace($"插入扫描页失败：{Path.GetFileName(_pdfPath)} {slot}", ex);
+            if (!IsCancelled) StatusText = $"插入扫描页失败：{ex.Message}";
+        }
+        finally
+        {
+            IsRotating = false;
+            if (inserted && scannedPath is not null && File.Exists(scannedPath))
+            {
+                try { File.Delete(scannedPath); }
+                catch (IOException)
+                {
+                    // A leftover scan file beats losing the pages; the log already recorded the insert.
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Auto-orientation scoped to the pages an insert just brought in: each new page is
+    /// rendered and voted on by the same OCR quarter-turn detector the load-time orient uses;
+    /// every crooked page is collected first, then all turns land in ONE in-place save. Quiet
+    /// by contract — a page the engine cannot read (blank back, unusable OCR) stays untouched.
+    /// </summary>
+    private async Task OrientInsertedPagesAsync(int firstIndex, int count)
+    {
+        if (_ocrEngine is null) return;
+        var detector = new PdfOrientationDetector(_ocrEngine);
+
+        // Probe first, write once: every fresh page is OCR-scored at probe DPI, then all pages
+        // that need turning are applied in a single file rewrite. One rewrite per page used to
+        // make an N-page insert rewrite the whole PDF N times. Cancelling mid-probe now simply
+        // leaves the file untouched — a cleaner contract than mid-way partial turns.
+        var turns = new List<(int Index, int Steps)>();
+        var probed = new List<int>();
+        for (int index = firstIndex; index < firstIndex + count && index < PageCount; index++)
+        {
+            byte[] pagePng = await GetPageBytesAsync(index, OrientationDpi).ConfigureAwait(true);
+            if (IsCancelled) return;
+            probed.Add(index);
+            int steps = await Task.Run(() => detector.DetectClockwiseStepsAsync(pagePng, _cancellationToken)).ConfigureAwait(true);
+            if (IsCancelled) return;
+            if (steps != 0) turns.Add((index, steps));
+        }
+
+        // Probe rasters are never displayed (tiles and canvas read PreviewDpi); unturned
+        // pages' entries are pure ballast, turned pages lose their whole key set below.
+        foreach (int index in probed.Where(i => turns.All(t => t.Index != i)))
+            _renderedPages.TryRemove((index, OrientationDpi), out _);
+
+        if (turns.Count == 0) return;
+
+        await Task.Run(() =>
+        {
+            EnsurePdfReadable();
+            PdfPageRotator.RotatePages(_pdfPath, turns);
+        }).ConfigureAwait(true);
+        if (IsCancelled) return; // the file is fixed; nothing is on screen any more
+
+        // The probes cached these pages' PRE-rotation bytes and the canvas may hold a pre-turn
+        // PreviewDpi render; drop every stale entry so both surfaces show the turned page.
+        foreach (var (index, _) in turns)
+            InvalidatePage(index);
+
+        AppLog.Info($"已摆正插入页：{Path.GetFileName(_pdfPath)}，{turns.Count}/{count} 页需旋转" +
+                    $"（{string.Join("、", turns.Select(t => $"第{t.Index + 1}页顺时针{t.Steps * 90}°"))}），单次写盘");
+    }
+
+    /// <summary>
     /// Auto-orientation: render the first page, let the OCR engine vote on the four quarter
     /// turns, and — if the verdict is decisive — turn the whole document in a single save, then
     /// rebuild every surface (tiles, render cache, canvas). Deliberately quiet: an engine that
@@ -558,11 +834,11 @@ public sealed class PdfPreviewViewModel : ObservableObject
         StatusText = "正在检测页面方向…";
         try
         {
-            byte[] pagePng = await GetPageBytesAsync(0, PreviewDpi);
-            if (IsCancelled) return;
+            byte[] pagePng = await GetPageBytesAsync(0, OrientationDpi);
 
             var detector = new PdfOrientationDetector(_ocrEngine);
             int steps = await Task.Run(() => detector.DetectClockwiseStepsAsync(pagePng, _cancellationToken));
+            _renderedPages.TryRemove((0, OrientationDpi), out _); // probe raster is never displayed
             if (IsCancelled) return;
 
             if (steps == 0)
@@ -650,27 +926,53 @@ public sealed class PdfPreviewViewModel : ObservableObject
         }
     }
 
-    /// <summary>Rendered bytes are cached per (page, dpi) — a page the user already visited never re-renders.</summary>
+    /// <summary>Remaps the render cache around an insert: pages at or before the gap keep their
+    /// pixels, pages after it travel with their new index. Clearing the cache instead used to
+    /// throw away every render, so the whole strip had to render again from scratch — the
+    /// blank-and-repaint jolt right after an insert.</summary>
+    private void ShiftRenderedPages(int insertAfterIndex, int added)
+    {
+        var remapped = new Dictionary<(int Page, int Dpi), byte[]>();
+        foreach (var ((page, dpi), bytes) in _renderedPages)
+            remapped[(page <= insertAfterIndex ? page : page + added, dpi)] = bytes;
+        _renderedPages.Clear();
+        foreach (var (key, bytes) in remapped)
+            _renderedPages[key] = bytes;
+    }
+
+    /// <summary>Rendered bytes are cached per (page, dpi) — a page the user already visited never re-renders.
+    /// Cache-miss renders hold <see cref="_renderGate"/> so concurrent askers (tile fill vs canvas)
+    /// share one render instead of racing the cache and doubling the work.</summary>
     private async Task<byte[]> GetPageBytesAsync(int pageIndex, int dpi)
     {
         var key = (pageIndex, dpi);
         if (_renderedPages.TryGetValue(key, out byte[]? cached)) return cached;
 
-        byte[] bytes;
+        await _renderGate.WaitAsync(_cancellationToken);
         try
         {
-            bytes = await _renderer.RenderPageAsync(_pdfPath, pageIndex, dpi);
+            if (_renderedPages.TryGetValue(key, out cached)) return cached;
+
+            byte[] bytes;
+            try
+            {
+                bytes = await _renderer.RenderPageAsync(_pdfPath, pageIndex, dpi);
+            }
+            catch (Exception) when (!File.Exists(_pdfPath))
+            {
+                // The user renamed/moved the file while the strip was open — track it down before
+                // giving up; a plain failure here is what made the strip feel broken.
+                if (!await Task.Run(TryRelocatePdf)) throw;
+                bytes = await _renderer.RenderPageAsync(_pdfPath, pageIndex, dpi);
+            }
+            RememberFileStamp();
+            _renderedPages[key] = bytes;
+            return bytes;
         }
-        catch (Exception) when (!File.Exists(_pdfPath))
+        finally
         {
-            // The user renamed/moved the file while the strip was open — track it down before
-            // giving up; a plain failure here is what made the strip feel broken.
-            if (!await Task.Run(TryRelocatePdf)) throw;
-            bytes = await _renderer.RenderPageAsync(_pdfPath, pageIndex, dpi);
+            _renderGate.Release();
         }
-        RememberFileStamp();
-        _renderedPages[key] = bytes;
-        return bytes;
     }
 
     /// <summary>
@@ -775,7 +1077,7 @@ public sealed class PdfPreviewViewModel : ObservableObject
     private void InvalidatePage(int pageIndex)
     {
         foreach ((int page, int dpi) in _renderedPages.Keys.Where(key => key.Page == pageIndex).ToList())
-            _renderedPages.Remove((page, dpi));
+            _renderedPages.TryRemove((page, dpi), out _);
     }
 
     /// <summary>PDFium hands back PNG bytes; WPF wants a frozen bitmap it can bind from any thread.</summary>
@@ -792,25 +1094,56 @@ public sealed class PdfPreviewViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Pre-scales a full render down to <see cref="ThumbMaxSide"/> with a quality resampler, so
-    /// WPF only does the last ~2× of the shrink onto the tile. Sources already at or below the
-    /// cap (tests feed tiny images) pass through untouched.
+    /// Turns a full render into a frozen tile image. The caller runs this OFF the UI thread:
+    /// PDFium's PNG is decoded once by Skia, pre-scaled to <see cref="ThumbMaxSide"/> with a
+    /// quality resampler, and wrapped straight into a frozen BitmapSource from its raw BGRA
+    /// pixels. The old pipeline re-encoded the scaled bitmap as a quality-100 PNG only for
+    /// WPF to immediately decode that PNG again — both steps pure waste, and both ran on the
+    /// dispatcher once per page right when a scan finished: the post-scan stutter.
+    /// Sources already at or below the cap skip the scale (tests feed tiny images) but are
+    /// still converted, so the returned image is always frozen and thread-safe.
     /// </summary>
-    private static byte[] MakeThumb(byte[] png)
+    private static ImageSource MakeThumbSource(byte[] png)
     {
         using var source = SKBitmap.Decode(png);
-        if (source is null) return png;
-        int longest = Math.Max(source.Width, source.Height);
-        if (longest <= ThumbMaxSide) return png;
+        if (source is null) return Decode(png);
 
+        int longest = Math.Max(source.Width, source.Height);
+        using var target = longest > ThumbMaxSide ? Downscale(source, longest) : ConvertBgra(source);
+        return ToFrozenBitmap(target);
+    }
+
+    /// <summary>Quality downscale straight into WPF-eatable BGRA pixels.</summary>
+    private static SKBitmap Downscale(SKBitmap source, int longest)
+    {
         double factor = ThumbMaxSide / (double)longest;
         int w = Math.Max(1, (int)Math.Round(source.Width * factor));
         int h = Math.Max(1, (int)Math.Round(source.Height * factor));
-        using var target = new SKBitmap(w, h, source.ColorType, source.AlphaType);
-        if (!source.ScalePixels(target, new SKSamplingOptions(SKCubicResampler.Mitchell))) return png;
-        using var image = SKImage.FromBitmap(target);
-        using var data = image.Encode(SKEncodedImageFormat.Png, 100);
-        return data.ToArray();
+        return ScaleInto(w, h, source);
+    }
+
+    /// <summary>Same-size BGRA copy: the source color type may not match WPF's Bgra32.</summary>
+    private static SKBitmap ConvertBgra(SKBitmap source) =>
+        ScaleInto(source.Width, source.Height, source);
+
+    private static SKBitmap ScaleInto(int w, int h, SKBitmap source)
+    {
+        var target = new SKBitmap(w, h, SKColorType.Bgra8888, SKAlphaType.Unpremul);
+        if (!source.ScalePixels(target, new SKSamplingOptions(SKCubicResampler.Mitchell)))
+        {
+            target.Dispose();
+            return new SKBitmap(1, 1, SKColorType.Bgra8888, SKAlphaType.Unpremul);
+        }
+        return target;
+    }
+
+    private static BitmapSource ToFrozenBitmap(SKBitmap bgra)
+    {
+        var bitmap = BitmapSource.Create(
+            bgra.Width, bgra.Height, 96, 96,
+            PixelFormats.Bgra32, null, bgra.Bytes.ToArray(), bgra.RowBytes);
+        bitmap.Freeze();
+        return bitmap;
     }
 
     private bool IsCancelled => _cancellationToken.IsCancellationRequested;

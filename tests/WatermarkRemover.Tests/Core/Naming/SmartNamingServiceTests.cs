@@ -1,4 +1,6 @@
+using WatermarkRemover.Core.Features.Layout;
 using WatermarkRemover.Core.Features.Naming;
+using WatermarkRemover.Core.Geometry;
 
 namespace WatermarkRemover.Tests.Core.Naming;
 
@@ -266,6 +268,80 @@ public class CreditReportNamingTests
         // Regression for v1.14.0 naming every credit report 被查询者征信 / 高级领导征信: the
         // text channel must return null (timestamp name kept); the region locator finds the name.
         Assert.Null(SmartNamingService.TryBuildName(ShreddedHeaderRealScanLines));
+    }
+}
+
+/// <summary>
+/// 竖排标签条 regression (v1.15.0 名类执照 / 名光执照): a licence's spread label column
+/// (名 称 / 类 型 / 经 营 者) comes back from the OCR engine as one tall box merging the rows'
+/// first characters — 名类 / 类经 — text shaped exactly like a 2-char person name. Whichever
+/// OCR line order puts such a strip before the real name row, the extractor's first-wins rule
+/// names the file after it. Bounded input lets the naming pipeline drop these strips on
+/// geometry alone (height ≫ width).
+/// </summary>
+public class VerticalLabelStripTests
+{
+    private static RecognizedLine Line(string text, double x, double y, double width, double height) =>
+        new(text, new RectD(x, y, width, height));
+
+    /// <summary>2026-10-20 08:12 real scan (upright licence): strip 名类 (名称+类型 first
+    /// chars, box 0.01x0.07) emitted before the name merges — 名类执照 was the field result.</summary>
+    private static readonly RecognizedLine[] UprightLicenseWithStrip =
+    {
+        Line("营业执照", 0.33, 0.31, 0.37, 0.12),
+        Line("统一社会信用代码", 0.11, 0.34, 0.14, 0.03),
+        Line("名类", 0.11, 0.50, 0.01, 0.07),
+        Line("称玉林市福绵区三层楼便利店(个体工商户)", 0.19, 0.50, 0.29, 0.03),
+        Line("型个体工商户", 0.19, 0.54, 0.10, 0.03),
+        Line("者梁桂", 0.19, 0.58, 0.06, 0.03),
+        Line("登记机关", 0.67, 0.82, 0.11, 0.03),
+    };
+
+    /// <summary>Shredded-label variant: label column fully shredded, so only the standalone-row
+    /// fallback can name the page — where the strip would win purely by line order.</summary>
+    private static readonly RecognizedLine[] ShreddedLicenseWithStrip =
+    {
+        Line("营业执照", 0.33, 0.31, 0.37, 0.12),
+        Line("统一社会信用代码", 0.11, 0.34, 0.14, 0.03),
+        Line("名类", 0.11, 0.50, 0.01, 0.07),
+        Line("梁桂", 0.19, 0.58, 0.06, 0.03),
+        Line("登记机关", 0.67, 0.82, 0.11, 0.03),
+    };
+
+    [Fact]
+    public void Vertical_strip_is_dropped_and_the_label_merge_still_names_the_licence()
+    {
+        var result = SmartNamingService.TryBuildName(UprightLicenseWithStrip);
+
+        Assert.NotNull(result);
+        Assert.Equal("梁桂", result!.PersonName);
+        Assert.Equal("梁桂执照", result.SuggestedStem);
+    }
+
+    [Fact]
+    public void Vertical_strip_never_wins_the_standalone_fallback_by_line_order()
+    {
+        // The string pipeline on these texts names the strip (名类执照 — the field bug);
+        // bounded input must not.
+        Assert.Equal("名类执照", SmartNamingService.TryBuildName(
+            ShreddedLicenseWithStrip.Select(l => l.Text).ToList())!.SuggestedStem);
+
+        var result = SmartNamingService.TryBuildName(ShreddedLicenseWithStrip);
+        Assert.NotNull(result);
+        Assert.Equal("梁桂", result!.PersonName);
+    }
+
+    [Fact]
+    public void Horizontal_name_rows_are_never_dropped_by_the_strip_filter()
+    {
+        var lines = new[]
+        {
+            Line("营业执照", 0.33, 0.31, 0.37, 0.12),
+            Line("统一社会信用代码", 0.11, 0.34, 0.14, 0.03),
+            Line("梁桂", 0.19, 0.58, 0.06, 0.03),
+        };
+
+        Assert.Equal("梁桂执照", SmartNamingService.TryBuildName(lines)!.SuggestedStem);
     }
 }
 

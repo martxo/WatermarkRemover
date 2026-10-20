@@ -76,11 +76,43 @@ public class PreviewStripTests
     /// <summary>LoadAsync runs fire-and-forget behind OpenPreviewStrip; drain it so the shared
     /// PDFium renderer releases the temp file before the finally deletes it. The first few
     /// rounds wait unconditionally — IsLoading is still false during LoadAsync's startup beat,
-    /// which is exactly the race that made this flaky before.</summary>
+    /// which is exactly the race that made this flaky before. IsRotating covers the scan row's
+    /// blank-page cleanup, which rewrites the file after the tiles are already filled — a
+    /// delete during it used to be masked by how long the old slow tile pipeline took.</summary>
     private static async Task DrainStripAsync(PdfPreviewViewModel strip)
     {
-        for (int i = 0; i < 300 && (i < 5 || strip.IsLoading || strip.Thumbnails.Any(t => t.Image is null)); i++)
+        for (int i = 0; i < 300 && (i < 5 || strip.IsLoading || strip.IsRotating || strip.Thumbnails.Any(t => t.Image is null)); i++)
             await Task.Delay(10);
+
+        // Scan rows also auto-orient after the tiles settle — fire-and-forget. The pass got
+        // fast enough (90dpi probes, early vertical verdict) to finish BEFORE this drain
+        // looks, so IsOrienting can be false again while the renderer's file handle is still
+        // winding down. DeleteWhenReleased absorbs that transient window.
+        if (strip.AutoOrientCommand.CanExecute(null))
+        {
+            for (int i = 0; i < 300 && !strip.IsOrienting; i++)
+                await Task.Delay(10);
+            for (int i = 0; i < 300 && strip.IsOrienting; i++)
+                await Task.Delay(10);
+        }
+    }
+
+    /// <summary>Deletes a temp strip file, riding out the brief window where the strip's
+    /// background passes (orient probe, blank clean, PDFium mapping teardown) still hold it.</summary>
+    private static void DeleteWhenReleased(string pdf)
+    {
+        for (int i = 0; ; i++)
+        {
+            try
+            {
+                File.Delete(pdf);
+                return;
+            }
+            catch (IOException) when (i < 300)
+            {
+                Thread.Sleep(10);
+            }
+        }
     }
 
     [Fact]
@@ -127,7 +159,7 @@ public class PreviewStripTests
         finally
         {
             if (job.Strip is { } strip) await DrainStripAsync(strip);
-            File.Delete(pdf);
+            DeleteWhenReleased(pdf);
         }
     }
 

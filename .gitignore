@@ -1,8 +1,12 @@
 # Build output
 publish/
+publish-staging/
 Releases/
 dist/
 bin/
+bin2/
+bin3/
+bin_t1/
 obj/
 logs/
 

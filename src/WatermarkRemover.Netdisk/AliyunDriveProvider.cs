@@ -58,6 +58,9 @@ public sealed class AliyunDriveProvider : INetdiskProvider, INetdiskOAuthFlow
 
     public INetdiskOAuthFlow OAuth => this;
 
+    /// <summary>Assisted scan login (CLI-hosted OAuth) is offered for 阿里云盘.</summary>
+    public bool SupportsCliLogin => true;
+
     public async Task<INetdiskSession> ConnectAsync(
         NetdiskCredentials credentials,
         CancellationToken cancellationToken = default)
@@ -65,7 +68,7 @@ public sealed class AliyunDriveProvider : INetdiskProvider, INetdiskOAuthFlow
         if (string.IsNullOrEmpty(credentials.Get(AliyunTokenService.AccessTokenKey)) &&
             string.IsNullOrEmpty(credentials.Get(AliyunTokenService.RefreshTokenKey)))
         {
-            throw new NetdiskAuthException("请先填写 access_token 或 refresh_token。", "MissingCredentials");
+            throw new NetdiskAuthException("请先完成扫码登录，或填写 access_token / refresh_token。", "MissingCredentials");
         }
 
         if (!string.IsNullOrEmpty(credentials.Get(AliyunTokenService.RefreshTokenKey)) &&
@@ -108,12 +111,23 @@ public sealed class AliyunDriveProvider : INetdiskProvider, INetdiskOAuthFlow
         return await tokens.ExchangeCodeAsync(appCredentials, code, cancellationToken).ConfigureAwait(false);
     }
 
-    private AliyunTokenService CreateTokenService(NetdiskCredentials credentials) =>
-        new(
+    private AliyunTokenService CreateTokenService(NetdiskCredentials credentials)
+    {
+        // CLI-hosted account (scan login): no app credentials and no refresh token of our own —
+        // renewal is delegated to the local aliyunpan CLI via AliyunpanCliRuntime.
+        if (string.Equals(credentials.Get(AliyunpanCliRuntime.CliLoginKey), "true", StringComparison.Ordinal))
+        {
+            return new AliyunTokenService(
+                _http, string.Empty, string.Empty, _clock,
+                (ct) => AliyunpanCliRuntime.RefreshViaCliAsync(credentials, ct));
+        }
+
+        return new(
             _http,
             credentials.Get(AppIdKey) ?? string.Empty,
             credentials.Get(AppSecretKey) ?? string.Empty,
             _clock);
+    }
 
     private static string Require(NetdiskCredentials credentials, string key, string message)
     {

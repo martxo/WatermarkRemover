@@ -65,6 +65,25 @@
                           ItemsSource="{Binding AccountNames}"
                           SelectedItem="{Binding SelectedAccountName, Mode=TwoWay}"/>
 
+                <TextBlock DockPanel.Dock="Left" Text="盘" Style="{StaticResource FieldLabel}"
+                           Visibility="{Binding HasMultipleDrives, Converter={StaticResource BoolToVis}}"/>
+                <ComboBox DockPanel.Dock="Left" Width="100" Margin="0,0,10,0"
+                          FontSize="13" Padding="8,6" VerticalContentAlignment="Center"
+                          ToolTip="多盘账号可切换存储空间（备份盘/资源库/相册）"
+                          Visibility="{Binding HasMultipleDrives, Converter={StaticResource BoolToVis}}"
+                          ItemsSource="{Binding Drives}" DisplayMemberPath="Name"
+                          SelectedItem="{Binding SelectedDrive, Mode=TwoWay}"/>
+
+                <TextBox DockPanel.Dock="Left" Width="150" Margin="0,0,6,0"
+                         Style="{StaticResource InputBox}" Padding="8,6"
+                         VerticalContentAlignment="Center" FontSize="13"
+                         ToolTip="按名称搜索当前盘的文件/文件夹；清空后回车回到当前目录"
+                         Text="{Binding SearchText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                         KeyDown="OnSearchBoxKeyDown"/>
+                <Button DockPanel.Dock="Left" Content="搜索"
+                        Command="{Binding SearchCommand}"
+                        Style="{StaticResource ToolButton}"/>
+
                 <DockPanel>
                     <TextBlock DockPanel.Dock="Left" Text="新建" Style="{StaticResource FieldLabel}"/>
                     <Button DockPanel.Dock="Right" Content="新建" Width="56" Margin="6,0,0,0"
@@ -147,6 +166,7 @@
             </DataGrid.InputBindings>
             <DataGrid.Columns>
                 <DataGridTextColumn Header="名称" Binding="{Binding Name}" Width="*"/>
+                <DataGridTextColumn Header="位置" Binding="{Binding Location}" Width="150"/>
                 <DataGridTextColumn Header="类型" Binding="{Binding Kind}" Width="80"/>
                 <DataGridTextColumn Header="大小" Binding="{Binding SizeText}" Width="100"/>
                 <DataGridTextColumn Header="修改时间" Binding="{Binding ModifiedText}" Width="140"/>

@@ -44,7 +44,8 @@ internal static class AlipanJson
         var isFolder = string.Equals(TryGetString(element, "type"), "folder", StringComparison.OrdinalIgnoreCase);
         var size = TryGetInt64(element, "size") ?? 0;
         var modified = TryGetTime(element, "updated_at", "modified_at", "created_at");
-        return new NetdiskFile(id, name, isFolder, size, modified);
+        var parent = TryGetString(element, "parent_file_id");
+        return new NetdiskFile(id, name, isFolder, size, modified, parent);
     }
 
     internal static NetdiskQuota ParseSpaceInfo(string json) => ParseSpaceInfo(ParseRoot(json));

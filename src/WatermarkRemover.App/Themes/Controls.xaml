@@ -1,5 +1,6 @@
 <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:vm="clr-namespace:WatermarkRemover.App.ViewModels">
 
     <!-- Shared control styles. Every window pulls these in via App.xaml; window-specific
          templates stay in the window. Colors always come from Palette.xaml keys. -->
@@ -132,20 +133,21 @@
     </Style>
 
     <!-- Floating round nav button on the inline preview canvas (image-viewer convention:
-         translucent disc, white glyph, brightens on hover, dims when disabled) -->
+         translucent disc, white glyph, brightens on hover, dims when disabled). 46px so the
+         paging / rotate / delete targets stay easy to find and hit on the dark canvas. -->
     <Style x:Key="CanvasNavButton" TargetType="Button">
-        <Setter Property="Width" Value="34"/>
-        <Setter Property="Height" Value="34"/>
+        <Setter Property="Width" Value="46"/>
+        <Setter Property="Height" Value="46"/>
         <Setter Property="Background" Value="#66202020"/>
         <Setter Property="Foreground" Value="White"/>
         <Setter Property="FontFamily" Value="Segoe MDL2 Assets"/>
-        <Setter Property="FontSize" Value="14"/>
+        <Setter Property="FontSize" Value="18"/>
         <Setter Property="Focusable" Value="False"/>
         <Setter Property="Cursor" Value="Hand"/>
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="Button">
-                    <Border Background="{TemplateBinding Background}" CornerRadius="17">
+                    <Border Background="{TemplateBinding Background}" CornerRadius="23">
                         <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
                     </Border>
                 </ControlTemplate>
@@ -275,9 +277,13 @@
          under a job card and the film rail of the screen-level viewer. Single template, single
          click/rotate wiring — the two surfaces render the same view model collection anyway. -->
     <DataTemplate x:Key="PdfThumbnailTileTemplate">
-        <Grid Width="{Binding DataContext.TileWidth, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
-              Height="{Binding DataContext.TileHeight, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
-              Margin="0,0,8,0">
+        <!-- Width is per-tile (each page's own aspect — landscape pages grow wider); only the
+             height is shared, so mixed portrait/landscape strips stay row-aligned. No margin
+             here: the strip unit owns all spacing through its plus slots, so a plus sits
+             exactly halfway between its neighbouring pages (a one-sided margin used to pull
+             every plus off centre). -->
+        <Grid Width="{Binding TileWidth}"
+              Height="{Binding DataContext.TileHeight, RelativeSource={RelativeSource AncestorType=ItemsControl}}">
             <!-- click surface: opens the screen-level viewer on this page -->
             <Button Command="{Binding SelectCommand}"
                     ToolTip="点击放大该页"
@@ -294,6 +300,37 @@
                                RenderOptions.BitmapScalingMode="HighQuality"
                                Margin="3"/>
                     </Border>
+                    <!-- skeleton placeholder: the tile exists but its page pixels have not
+                         arrived yet (a scan just landed, the strip fills tile by tile). A
+                         shimmering sweep instead of a dead white card reads as "thumbnail
+                         being generated" — the frontend skeleton-screen convention. The
+                         layers stay Collapsed; DataTemplate.Triggers below reveal them. -->
+                    <Border x:Name="SkeletonBase"
+                            Margin="1"
+                            Visibility="Collapsed"
+                            Background="{StaticResource SurfaceAltBrush}"/>
+                    <Grid ClipToBounds="True">
+                        <Border x:Name="ShimmerStripe"
+                                Width="70"
+                                HorizontalAlignment="Left"
+                                Margin="1"
+                                Visibility="Collapsed">
+                            <Border.RenderTransform>
+                                <!-- Named on purpose: a template-declared Freezable is frozen for
+                                     speed, and animating through a frozen instance is the
+                                     "cannot animate (0).(1) on an immutable object" crash that
+                                     killed the app mid-layout. A named instance stays mutable. -->
+                                <TranslateTransform x:Name="ShimmerX" X="-70"/>
+                            </Border.RenderTransform>
+                            <Border.Background>
+                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                                    <GradientStop Color="#00FFFFFF" Offset="0"/>
+                                    <GradientStop Color="#B3FFFFFF" Offset="0.5"/>
+                                    <GradientStop Color="#00FFFFFF" Offset="1"/>
+                                </LinearGradientBrush>
+                            </Border.Background>
+                        </Border>
+                    </Grid>
                     <Border Background="#99000000"
                             HorizontalAlignment="Right"
                             VerticalAlignment="Bottom"
@@ -379,5 +416,305 @@
                 </Button.Style>
             </Button>
         </Grid>
+
+        <!-- Skeleton switching lives here, in the TEMPLATE's trigger scope: a style's trigger
+             storyboard cannot use TargetName (MC4011), and the sweep must reach the named
+             unfrozen transform by name. -->
+        <DataTemplate.Triggers>
+            <DataTrigger Binding="{Binding Image}" Value="{x:Null}">
+                <Setter TargetName="SkeletonBase" Property="Visibility" Value="Visible"/>
+                <Setter TargetName="ShimmerStripe" Property="Visibility" Value="Visible"/>
+                <DataTrigger.EnterActions>
+                    <BeginStoryboard x:Name="TileShimmer">
+                        <Storyboard>
+                            <DoubleAnimation Storyboard.TargetName="ShimmerX"
+                                             Storyboard.TargetProperty="X"
+                                             From="-70" To="640" Duration="0:0:1.6"
+                                             RepeatBehavior="Forever"/>
+                        </Storyboard>
+                    </BeginStoryboard>
+                </DataTrigger.EnterActions>
+                <DataTrigger.ExitActions>
+                    <StopStoryboard BeginStoryboardName="TileShimmer"/>
+                </DataTrigger.ExitActions>
+            </DataTrigger>
+        </DataTemplate.Triggers>
     </DataTemplate>
+
+    <!-- One insert gap between two adjacent pages: a thin slot between two tiles. The slot
+         itself is laid out from the first frame — a fixed 14px column the strip never
+         reflows — but the plus GLYPH is revealed only while the pointer is over the slot:
+         hidden until wanted, so it can never trail the thumbnails either. Hovering lights
+         the slot and invites a single click — clicking it runs one scan and splices the
+         fresh pages into the document right here. While such a pass IS holding the file, a
+         hover shows the plus dimmed (not lit) and inert: the dead click can't be mistaken
+         for a broken button. The same template serves the inline grid (wrap, horizontal)
+         and the viewer rail (stack, vertical). -->
+    <DataTemplate x:Key="PdfGapInsertTemplate">
+        <!-- A narrow column between two pages is the hit zone: full tile height, plus
+             centred — the user's mental model is "the plus sits before its page". 14px wide:
+             the strip's whole spacing rhythm lives in this one slot (pages carry no margin),
+             so the plus sits exactly halfway between its neighbours and the leading/trailing
+             gaps match the page-to-page gap. -->
+        <Button Width="14"
+                Height="{Binding DataContext.TileHeight, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                HorizontalAlignment="Center"
+                Command="{Binding DataContext.InsertScanAfterCommand, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                CommandParameter="{Binding InsertAfterIndex}"
+                ToolTip="{Binding ToolTip}"
+                Cursor="Hand"
+                Focusable="False">
+            <Button.Style>
+                <Style TargetType="Button">
+                    <Setter Property="Background" Value="Transparent"/>
+                    <Setter Property="Template">
+                        <Setter.Value>
+                            <ControlTemplate TargetType="Button">
+                                <Border x:Name="Root" Background="Transparent" CornerRadius="3">
+                                    <TextBlock x:Name="Glyph"
+                                               Text="&#xE710;"
+                                               FontFamily="Segoe MDL2 Assets"
+                                               FontSize="12"
+                                               Foreground="{StaticResource AccentBrush}"
+                                               HorizontalAlignment="Center"
+                                               VerticalAlignment="Center"
+                                               Opacity="0"/>
+                                </Border>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter TargetName="Root" Property="Background" Value="{StaticResource ShellMenuHoverBrush}"/>
+                                        <Setter TargetName="Glyph" Property="Opacity" Value="1"/>
+                                    </Trigger>
+                                    <!-- A busy pass keeps the slot in place but hides the plus;
+                                         hovering it shows the dimmed (0.3) glyph instead of the
+                                         lit one — inert, so hover feedback never lies. -->
+                                    <Trigger Property="IsEnabled" Value="False">
+                                        <Setter TargetName="Glyph" Property="Opacity" Value="0"/>
+                                    </Trigger>
+                                    <!-- Last so it overrides both triggers above when both are
+                                         active (busy + hover): dim wins over lit and hidden. -->
+                                    <MultiTrigger>
+                                        <MultiTrigger.Conditions>
+                                            <Condition Property="IsEnabled" Value="False"/>
+                                            <Condition Property="IsMouseOver" Value="True"/>
+                                        </MultiTrigger.Conditions>
+                                        <Setter TargetName="Root" Property="Background" Value="Transparent"/>
+                                        <Setter TargetName="Glyph" Property="Opacity" Value="0.3"/>
+                                    </MultiTrigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </Setter.Value>
+                    </Setter>
+                </Style>
+            </Button.Style>
+        </Button>
+    </DataTemplate>
+
+    <!-- One atomic strip unit: [left plus | page tile | (right plus, last unit only)]. The
+         wrap panel can only break BETWEEN units, so every row — including a wrapped second
+         row — opens with its own plus slot and the columns stay vertically aligned. Between
+         two adjacent pages a single plus serves both edges, so the interior tail must be
+         COLLAPSED here, not merely null: a ContentControl instantiates its ContentTemplate
+         even for null content, and an uncollapsed interior tail paints a second, dead plus
+         between every pair of pages (the hover-reveal design exposed exactly that). -->
+    <DataTemplate x:Key="PdfStripUnitTemplate">
+        <StackPanel Orientation="Horizontal">
+            <ContentControl Content="{Binding Gap}"
+                            ContentTemplate="{StaticResource PdfGapInsertTemplate}"/>
+            <ContentControl Content="{Binding Tile}"
+                            ContentTemplate="{StaticResource PdfThumbnailTileTemplate}"/>
+            <!-- Trailing bookend: exists only on the last unit; null = collapsed. -->
+            <ContentControl Content="{Binding Tail}"
+                            ContentTemplate="{StaticResource PdfGapInsertTemplate}">
+                <ContentControl.Style>
+                    <Style TargetType="ContentControl">
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding Tail}" Value="{x:Null}">
+                                <Setter Property="Visibility" Value="Collapsed"/>
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </ContentControl.Style>
+            </ContentControl>
+        </StackPanel>
+    </DataTemplate>
+
+    <!-- Hairline scrollbars, the way web apps do it: no arrow buttons, a thin rounded thumb
+         floating in a narrow gutter instead of the fat Windows default. Every scroll bar in
+         the app (record list, settings, preview rail) picks this up implicitly.
+         Two traps live here, both bit us once: the thumb's visual must stretch ALONG the
+         track (only the cross axis may be centred — centring both axes measures the visual
+         to zero height and the bar renders nothing at all), and MinWidth/MinHeight must be
+         zeroed or the theme's 17px floor wins and the gutter stops being hairline. -->
+    <!-- Scrollers that must never shove their content sideways when the scrollbar appears:
+         the vertical scrollbar gutter is RESERVED ALWAYS — "scrollbar-gutter: stable". Two
+         surfaces need it. The inline thumbnail strip: zooming (draft-sized tiles vs the
+         settled height cap) makes it overflow and un-overflow many times DURING one drag,
+         and every Auto toggle stole/restored 10px of content width so the tiles trembled
+         left-right. The record list: settling a zoom changes the row's height, the list's
+         scrollbar toggles on that change, and the WHOLE window got shoved sideways (the
+         "右侧滚动条出现导致抖动" report; the 140ms settle timer fires repeatedly during a
+         slow drag). The bar itself stays Auto — hidden whenever content fits — and merely
+         inherits the hairline style. -->
+    <Style x:Key="StableGutterScrollViewer" TargetType="ScrollViewer">
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ScrollViewer">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <!-- Reserved whether or not the bar is showing. -->
+                            <ColumnDefinition Width="10"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="*"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+                        <ScrollContentPresenter x:Name="PART_ScrollContentPresenter"
+                                                CanContentScroll="{TemplateBinding CanContentScroll}"
+                                                Content="{TemplateBinding Content}"
+                                                ContentTemplate="{TemplateBinding ContentTemplate}"
+                                                Margin="{TemplateBinding Padding}"/>
+                        <ScrollBar x:Name="PART_VerticalScrollBar"
+                                   Grid.Column="1"
+                                   Orientation="Vertical"
+                                   Minimum="0"
+                                   Maximum="{TemplateBinding ScrollableHeight}"
+                                   ViewportSize="{TemplateBinding ViewportHeight}"
+                                   Value="{Binding VerticalOffset, Mode=OneWay, RelativeSource={RelativeSource TemplatedParent}}"
+                                   Visibility="{TemplateBinding ComputedVerticalScrollBarVisibility}"/>
+                        <ScrollBar x:Name="PART_HorizontalScrollBar"
+                                   Grid.Row="1"
+                                   Orientation="Horizontal"
+                                   Minimum="0"
+                                   Maximum="{TemplateBinding ScrollableWidth}"
+                                   ViewportSize="{TemplateBinding ViewportWidth}"
+                                   Value="{Binding HorizontalOffset, Mode=OneWay, RelativeSource={RelativeSource TemplatedParent}}"
+                                   Visibility="{TemplateBinding ComputedHorizontalScrollBarVisibility}"/>
+                    </Grid>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- The record list (JobList) carries the same stable gutter. The default ListView
+         template's internal ScrollViewer can't be reached directly, so this minimal template
+         substitutes one styled with StableGutterScrollViewer; item visuals stay untouched in
+         ItemContainerStyle. -->
+    <Style x:Key="StableGutterListView" TargetType="ListView">
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ListView">
+                    <Border Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}">
+                        <ScrollViewer Style="{StaticResource StableGutterScrollViewer}"
+                                      CanContentScroll="{TemplateBinding ScrollViewer.CanContentScroll}"
+                                      HorizontalScrollBarVisibility="{TemplateBinding ScrollViewer.HorizontalScrollBarVisibility}"
+                                      VerticalScrollBarVisibility="{TemplateBinding ScrollViewer.VerticalScrollBarVisibility}"
+                                      Padding="{TemplateBinding Padding}"
+                                      Focusable="False">
+                            <ItemsPresenter/>
+                        </ScrollViewer>
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style TargetType="ScrollBar">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="BorderThickness" Value="0"/>
+        <Setter Property="Width" Value="10"/>
+        <Setter Property="MinWidth" Value="0"/>
+        <Setter Property="MinHeight" Value="0"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ScrollBar">
+                    <Grid Background="{TemplateBinding Background}" SnapsToDevicePixels="True">
+                        <Track x:Name="PART_Track"
+                               Orientation="{TemplateBinding Orientation}"
+                               IsDirectionReversed="True"
+                               Minimum="{TemplateBinding Minimum}"
+                               Maximum="{TemplateBinding Maximum}"
+                               Value="{TemplateBinding Value}"
+                               ViewportSize="{TemplateBinding ViewportSize}">
+                            <!-- Invisible paging buttons: the empty track above/below the
+                                 thumb still pages, like every modern scroll bar. -->
+                            <Track.DecreaseRepeatButton>
+                                <RepeatButton Command="ScrollBar.PageUpCommand" Focusable="False" Opacity="0"/>
+                            </Track.DecreaseRepeatButton>
+                            <Track.Thumb>
+                                <Thumb>
+                                    <Thumb.Template>
+                                        <ControlTemplate TargetType="Thumb">
+                                            <Border x:Name="Bar"
+                                                    Background="#FFC6CAD1"
+                                                    CornerRadius="3"
+                                                    Width="6"
+                                                    HorizontalAlignment="Center"/>
+                                            <ControlTemplate.Triggers>
+                                                <Trigger Property="IsMouseOver" Value="True">
+                                                    <Setter TargetName="Bar" Property="Background" Value="#FF9AA1AB"/>
+                                                </Trigger>
+                                            </ControlTemplate.Triggers>
+                                        </ControlTemplate>
+                                    </Thumb.Template>
+                                </Thumb>
+                            </Track.Thumb>
+                            <Track.IncreaseRepeatButton>
+                                <RepeatButton Command="ScrollBar.PageDownCommand" Focusable="False" Opacity="0"/>
+                            </Track.IncreaseRepeatButton>
+                        </Track>
+                    </Grid>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+        <Style.Triggers>
+            <Trigger Property="Orientation" Value="Horizontal">
+                <Setter Property="Width" Value="Auto"/>
+                <Setter Property="Height" Value="10"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="ScrollBar">
+                            <Grid Background="{TemplateBinding Background}" SnapsToDevicePixels="True">
+                                <Track x:Name="PART_Track"
+                                       Orientation="{TemplateBinding Orientation}"
+                                       IsDirectionReversed="False"
+                                       Minimum="{TemplateBinding Minimum}"
+                                       Maximum="{TemplateBinding Maximum}"
+                                       Value="{TemplateBinding Value}"
+                                       ViewportSize="{TemplateBinding ViewportSize}">
+                                    <Track.DecreaseRepeatButton>
+                                        <RepeatButton Command="ScrollBar.PageLeftCommand" Focusable="False" Opacity="0"/>
+                                    </Track.DecreaseRepeatButton>
+                                    <Track.Thumb>
+                                        <Thumb>
+                                            <Thumb.Template>
+                                                <ControlTemplate TargetType="Thumb">
+                                                    <Border x:Name="Bar"
+                                                            Background="#FFC6CAD1"
+                                                            CornerRadius="3"
+                                                            Height="6"
+                                                            VerticalAlignment="Center"/>
+                                                    <ControlTemplate.Triggers>
+                                                        <Trigger Property="IsMouseOver" Value="True">
+                                                            <Setter TargetName="Bar" Property="Background" Value="#FF9AA1AB"/>
+                                                        </Trigger>
+                                                    </ControlTemplate.Triggers>
+                                                </ControlTemplate>
+                                            </Thumb.Template>
+                                        </Thumb>
+                                    </Track.Thumb>
+                                    <Track.IncreaseRepeatButton>
+                                        <RepeatButton Command="ScrollBar.PageRightCommand" Focusable="False" Opacity="0"/>
+                                    </Track.IncreaseRepeatButton>
+                                </Track>
+                            </Grid>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Trigger>
+        </Style.Triggers>
+    </Style>
 </ResourceDictionary>

@@ -46,6 +46,14 @@ public sealed class AppSettings
     public bool AutoNameByContent { get; set; } = true;
 
     /// <summary>
+    /// Probe only the first page for content-based naming on multi-page documents (on by
+    /// default): the type and the customer name almost always sit on page one, and serial OCR
+    /// passes over a long document hold the pipeline for seconds. Off = probe up to four
+    /// pages, for scans whose first face is a cover or a blank duplex back.
+    /// </summary>
+    public bool NameFromFirstPageOnly { get; set; } = true;
+
+    /// <summary>
     /// Name of the OCR engine the user pinned in the settings OCR section (a factory name from
     /// the engine chain). Empty = pick the best available engine automatically. A preference
     /// whose engine is unavailable falls back to the automatic chain at runtime.
@@ -87,6 +95,7 @@ public sealed class AppSettings
         CheckUpdatesOnStartup = CheckUpdatesOnStartup,
         QuickSuffixes = new List<string>(QuickSuffixes),
         AutoNameByContent = AutoNameByContent,
+        NameFromFirstPageOnly = NameFromFirstPageOnly,
         PreferredOcrEngine = PreferredOcrEngine,
         PreferredLayoutStage = PreferredLayoutStage,
         ScanDuplex = ScanDuplex,

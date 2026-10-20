@@ -381,6 +381,7 @@ public sealed class SettingsViewModel : ObservableObject
         _target.OutputMode = Settings.OutputMode;
         _target.OutputDirectory = Settings.OutputDirectory;
         _target.AutoNameByContent = Settings.AutoNameByContent;
+        _target.NameFromFirstPageOnly = Settings.NameFromFirstPageOnly;
         _target.RemoveLinkedAnnotations = Settings.RemoveLinkedAnnotations;
         _target.MaxConcurrency = Settings.MaxConcurrency;
         _target.CheckUpdatesOnStartup = Settings.CheckUpdatesOnStartup;

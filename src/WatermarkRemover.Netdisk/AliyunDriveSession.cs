@@ -18,6 +18,7 @@ public sealed class AliyunDriveSession : INetdiskSession
     private readonly AliyunTokenService _tokens;
     private readonly Func<DateTimeOffset> _clock;
     private NetdiskCredentials _credentials;
+    private readonly List<NetdiskDrive> _drives = new();
     private string _driveId = string.Empty;
 
     internal AliyunDriveSession(
@@ -36,7 +37,22 @@ public sealed class AliyunDriveSession : INetdiskSession
 
     public NetdiskCredentials CurrentCredentials => _credentials;
 
-    /// <summary>Identifies the account and resolves the drive id; called by the provider at connect time.</summary>
+    public IReadOnlyList<NetdiskDrive> Drives => _drives;
+
+    public string CurrentDriveId => _driveId;
+
+    public Task SwitchDriveAsync(string driveId, CancellationToken cancellationToken = default)
+    {
+        if (!_drives.Any(d => d.Id == driveId))
+        {
+            throw new NetdiskException($"账号不包含盘 {driveId}，无法切换。", "UnknownDriveId");
+        }
+
+        _driveId = driveId;
+        return Task.CompletedTask;
+    }
+
+    /// <summary>Identifies the account and resolves the drive ids; called by the provider at connect time.</summary>
     internal static async Task<AliyunDriveSession> OpenAsync(
         HttpClient http,
         AliyunTokenService tokens,
@@ -54,9 +70,24 @@ public sealed class AliyunDriveSession : INetdiskSession
         var drive = await session
             .SendAsync(HttpMethod.Post, AlipanApi.DriveInfoPath, new Dictionary<string, object?>(), cancellationToken)
             .ConfigureAwait(false);
-        session._driveId = AlipanJson.TryGetString(drive, "default_drive_id", "drive_id")
+        // The platform splits one account into several drives (备份盘 default / 资源库 resource /
+        // 相册 album); register every one the account actually has so the UI can offer switching.
+        var defaultId = AlipanJson.TryGetString(drive, "default_drive_id", "drive_id")
             ?? throw new NetdiskException("getDriveInfo 响应缺少 default_drive_id，无法定位网盘。", "MissingDriveId");
+        session._drives.Add(new NetdiskDrive(defaultId, "备份盘"));
+        var resourceId = AlipanJson.TryGetString(drive, "resource_drive_id");
+        if (!string.IsNullOrEmpty(resourceId))
+        {
+            session._drives.Add(new NetdiskDrive(resourceId, "资源库"));
+        }
 
+        var albumId = AlipanJson.TryGetString(drive, "album_drive_id");
+        if (!string.IsNullOrEmpty(albumId) && albumId != resourceId)
+        {
+            session._drives.Add(new NetdiskDrive(albumId, "相册"));
+        }
+
+        session._driveId = defaultId;
         return session;
     }
 
@@ -91,6 +122,54 @@ public sealed class AliyunDriveSession : INetdiskSession
 
         var response = await SendAsync(HttpMethod.Post, AlipanApi.ListPath, body, cancellationToken).ConfigureAwait(false);
         return AlipanJson.ParseListPage(response);
+    }
+
+    /// <summary>Searches the current drive by file/folder name; the response shape matches list.</summary>
+    public async Task<NetdiskPage> SearchAsync(
+        string keyword,
+        int pageSize = 100,
+        string? cursor = null,
+        CancellationToken cancellationToken = default)
+    {
+        var sanitized = keyword.Replace("\"", string.Empty).Trim();
+        if (sanitized.Length == 0)
+        {
+            throw new NetdiskException("搜索关键词不能为空。", "EmptySearchKeyword");
+        }
+
+        var body = new Dictionary<string, object?>
+        {
+            ["drive_id"] = _driveId,
+            ["query"] = $"name match \"{sanitized}\"",
+            // NOTE: unlike list, the search endpoint rejects order_by/order_direction
+            // (InvalidParameter.OrderBy) — sorting happens client-side in FillItems.
+            ["limit"] = pageSize,
+        };
+        if (!string.IsNullOrEmpty(cursor))
+        {
+            body["marker"] = cursor;
+        }
+
+        var response = await SendAsync(HttpMethod.Post, AlipanApi.SearchPath, body, cancellationToken).ConfigureAwait(false);
+        return AlipanJson.ParseListPage(response);
+    }
+
+    /// <summary>Fetches one node by id (openFile/get); used to label where search results live.</summary>
+    public async Task<string?> GetNodeNameAsync(string nodeId, CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var response = await SendAsync(
+                HttpMethod.Post,
+                AlipanApi.GetPath,
+                new Dictionary<string, object?> { ["drive_id"] = _driveId, ["file_id"] = nodeId },
+                cancellationToken).ConfigureAwait(false);
+            return AlipanJson.ParseFileNode(response).Name;
+        }
+        catch (NetdiskException)
+        {
+            return null;
+        }
     }
 
     public async Task<NetdiskFile> CreateFolderAsync(

@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Input;
 using WatermarkRemover.App.ViewModels;
 
 namespace WatermarkRemover.App;
@@ -28,5 +29,14 @@ public partial class NetdiskWindow : Window
         _authPanel.SelectedProvider = _viewModel.SelectedProvider;
         _authPanel.SelectedAccountName = _viewModel.SelectedAccountName;
         AuthExpander.IsExpanded = true;
+    }
+
+    private void OnSearchBoxKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter && _viewModel.SearchCommand.CanExecute(null))
+        {
+            _viewModel.SearchCommand.Execute(null);
+            e.Handled = true;
+        }
     }
 }

@@ -78,10 +78,12 @@ public class PdfPreviewViewModelTests
             throw new NotSupportedException();
     }
 
-    /// <summary>Paging commands fire and forget; a short drain keeps the assertions deterministic.</summary>
+    /// <summary>Paging commands fire and forget; a short drain keeps the assertions deterministic.
+    /// Also waits out the strip's tile fill: the loop is fire-and-forget too, and a render-count
+    /// assertion that runs while a tile is still queued reads one render short under load.</summary>
     private static async Task DrainAsync(PdfPreviewViewModel vm)
     {
-        for (int i = 0; i < 100 && vm.IsLoading; i++)
+        for (int i = 0; i < 100 && (vm.IsLoading || vm.Thumbnails.Any(t => t.Image is null)); i++)
             await Task.Delay(10);
     }
 

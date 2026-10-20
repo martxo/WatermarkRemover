@@ -1,5 +1,7 @@
 namespace WatermarkRemover.Core.Features.Naming;
 
+using WatermarkRemover.Core.Features.Layout;
+
 /// <summary>
 /// Facade for content-based naming: recognised text lines in, an
 /// <see cref="AutoNameResult"/> out (or null when the document cannot be named confidently).
@@ -7,6 +9,28 @@ namespace WatermarkRemover.Core.Features.Naming;
 /// </summary>
 public static class SmartNamingService
 {
+    /// <summary>
+    /// Bounded-OCR entry. 竖排文本行 first: spread label columns (名 称 / 类 型 / 经 营 者) come
+    /// back from the engine as one tall box merging the rows' first characters — 名类 / 类经 —
+    /// text that reads exactly like a 2-char name. On geometry alone (height ≫ width) such
+    /// strips are dropped here, so neither the label shapes nor the standalone-row fallback can
+    /// ever harvest them regardless of OCR line order (名类执照 / 名光执照 bug).
+    /// </summary>
+    public static AutoNameResult? TryBuildName(IReadOnlyList<RecognizedLine> lines, Action<string, Exception?>? trace = null)
+    {
+        var texts = new List<string>(lines.Count);
+        foreach (RecognizedLine line in lines)
+        {
+            if (line.Bounds is { } b && b.Height > b.Width * 2)
+            {
+                trace?.Invoke($"命名：剔除竖排文本行「{line.Text}」（框 {b.Width:F2}x{b.Height:F2}），标签列碎片不参与命名", null);
+                continue;
+            }
+            texts.Add(line.Text);
+        }
+        return TryBuildName(texts, trace);
+    }
+
     /// <summary>
     /// Returns null when the type is unrecognised or the name cannot be extracted. Each decision
     /// point reports through <paramref name="trace"/> so a failing machine's log tells which step

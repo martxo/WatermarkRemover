@@ -1,4 +1,3 @@
-using System.Reflection;
 using PdfSharpCore;
 using PdfSharpCore.Pdf;
 using PdfSharpCore.Pdf.IO;
@@ -49,6 +48,33 @@ public static class PdfPageRotator
             foreach (var page in doc.Pages)
                 page.Rotate = Turned(page.Rotate, quarterTurns);
         });
+
+    /// <summary>
+    /// Turns several pages, each by its own quarter-turn count, in ONE in-place save — the
+    /// insert path probes every fresh page's orientation, then fixes them all with a single
+    /// file rewrite instead of one rewrite per turned page. Zero-turn entries are skipped;
+    /// every index is validated before anything is mutated, and the swap-over save means an
+    /// exception can never leave a truncated file behind.
+    /// </summary>
+    public static void RotatePages(string pdfPath, IReadOnlyList<(int PageIndex, int QuarterTurns)> turns)
+    {
+        if (turns.Count == 0) return;
+        EditDocument(pdfPath, doc =>
+        {
+            foreach (var (pageIndex, _) in turns)
+            {
+                if (pageIndex < 0 || pageIndex >= doc.PageCount)
+                    throw new ArgumentOutOfRangeException(nameof(turns),
+                        $"页码超出范围：第 {pageIndex + 1} 页（共 {doc.PageCount} 页）。");
+            }
+
+            foreach (var (pageIndex, quarterTurns) in turns)
+            {
+                if (quarterTurns % 4 == 0) continue;
+                doc.Pages[pageIndex].Rotate = Turned(doc.Pages[pageIndex].Rotate, quarterTurns);
+            }
+        });
+    }
 
     private static int Turned(int currentRotation, int quarterTurns) =>
         ((currentRotation % 360) + 360 + 90 * (quarterTurns % 4)) % 360;
@@ -103,61 +129,6 @@ public static class PdfPageRotator
             edit(doc, doc.Pages[pageIndex]);
         });
 
-    private static void EditDocument(string pdfPath, Action<PdfDocument> edit)
-    {
-        if (string.IsNullOrWhiteSpace(pdfPath))
-            throw new ArgumentException("PDF path must not be empty.", nameof(pdfPath));
-
-        string tempPath = pdfPath + ".edit.tmp";
-        try
-        {
-            PdfDocument? doc = null;
-            try
-            {
-                doc = PdfReader.Open(pdfPath, PdfDocumentOpenMode.Modify);
-                DisableForeignPageOrientationCorrection(doc);
-                edit(doc);
-                doc.Save(tempPath);
-            }
-            finally
-            {
-                (doc as IDisposable)?.Dispose();
-            }
-
-            // Swap only now that the side file is complete and the original is released.
-            File.Move(tempPath, pdfPath, overwrite: true);
-        }
-        finally
-        {
-            try
-            {
-                if (File.Exists(tempPath)) File.Delete(tempPath);
-            }
-            catch (IOException)
-            {
-                // A leftover side file is harmless; the PDF itself is already intact.
-            }
-        }
-    }
-
-    /// <summary>
-    /// PdfSharpCore flags every page whose explicit /Rotate is 90/270 as "landscape" on open,
-    /// and its WriteObject then swaps that page's MediaBox width/height whenever the page is
-    /// serialized with an even rotation (0/180) — a correction meant for pages the library
-    /// created itself. On foreign pages it is plain corruption: the content stream is copied
-    /// unchanged, so the swapped box clips everything that now sits outside it (a portrait
-    /// scan loses its top third). Rotating here is metadata-only, and /Rotate is interpreted
-    /// by the viewer per the PDF spec — no library-side box compensation is wanted. Reset the
-    /// flag so WriteObject never touches the MediaBox of any page.
-    /// </summary>
-    private static void DisableForeignPageOrientationCorrection(PdfDocument doc)
-    {
-        var orientationField = typeof(PdfPage).GetField("_orientation",
-            BindingFlags.NonPublic | BindingFlags.Instance);
-        if (orientationField is null)
-            return; // a future PdfSharpCore may rename the field; the swap guard simply degrades
-
-        foreach (var page in doc.Pages)
-            orientationField.SetValue(page, PageOrientation.Portrait);
-    }
+    private static void EditDocument(string pdfPath, Action<PdfDocument> edit) =>
+        PdfDocumentEditor.EditDocument(pdfPath, edit);
 }

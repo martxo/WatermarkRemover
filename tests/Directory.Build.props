@@ -1,0 +1,10 @@
+<Project>
+  <!-- Test-run isolation: a frozen testhost permanently locks the bin dir it ran from and
+       survives taskkill, so every deterministic output dir (bin\Release, bin\rN, ...) is
+       guaranteed to collide with a lock sooner or later and the build dies in MSB3027 copy
+       retries. run-tests.ps1 stamps each run; this maps that stamp to a private dir under
+       bin\runs\. An explicit BaseOutputPath still wins for ad-hoc debugging. -->
+  <PropertyGroup>
+    <BaseOutputPath Condition="'$(BaseOutputPath)' == '' and '$(TestRunStamp)' != ''">bin\runs\$(TestRunStamp)\</BaseOutputPath>
+  </PropertyGroup>
+</Project>

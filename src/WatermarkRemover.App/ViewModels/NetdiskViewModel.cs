@@ -9,9 +9,16 @@ namespace WatermarkRemover.App.ViewModels;
 /// <summary>One row in the netdisk file list.</summary>
 public sealed class NetdiskItemViewModel
 {
-    public NetdiskItemViewModel(NetdiskFile file) => File = file;
+    public NetdiskItemViewModel(NetdiskFile file, string? location = null)
+    {
+        File = file;
+        Location = location ?? string.Empty;
+    }
 
     public NetdiskFile File { get; }
+
+    /// <summary>Name of the containing folder; only filled for search results.</summary>
+    public string Location { get; }
 
     public string Name => File.Name;
 
@@ -58,7 +65,11 @@ public sealed class NetdiskViewModel : ObservableObject
     private INetdiskSession? _session;
     private NetdiskAccountState? _currentAccount;
     private NetdiskItemViewModel? _selectedItem;
+    private NetdiskDrive? _selectedDrive;
+    private bool _suppressDriveSwitch;
     private string _newFolderName = string.Empty;
+    private string _searchText = string.Empty;
+    private readonly Dictionary<string, string> _locationCache = new(StringComparer.Ordinal);
     private string _statusText = "选择产品与账号后点击「连接」。";
     private bool _isBusy;
     private int _progressPercent;
@@ -82,6 +93,7 @@ public sealed class NetdiskViewModel : ObservableObject
 
         ConnectCommand = new RelayCommand(() => _ = RunAsync(ConnectAsync), () => !IsBusy && SelectedProvider is not null && SelectedAccountName is not null);
         RefreshCommand = new RelayCommand(() => _ = RunAsync(() => ListAsync(CurrentFolderId)), () => !IsBusy && _session is not null);
+        SearchCommand = new RelayCommand(() => _ = RunAsync(SearchAsync), () => !IsBusy && _session is not null);
         UploadCommand = new RelayCommand(() => _ = RunAsync(UploadAsync), () => !IsBusy && _session is not null);
         DownloadCommand = new RelayCommand(() => _ = RunAsync(DownloadAsync), () => !IsBusy && _session is not null && SelectedItem is { File.IsFolder: false });
         NewFolderCommand = new RelayCommand(() => _ = RunAsync(NewFolderAsync), () => !IsBusy && _session is not null && !string.IsNullOrWhiteSpace(NewFolderName));
@@ -101,6 +113,25 @@ public sealed class NetdiskViewModel : ObservableObject
 
     public ObservableCollection<NetdiskBreadcrumbItem> Breadcrumbs { get; } = new();
 
+    /// <summary>Storage spaces of the connected account (阿里云盘: 备份盘/资源库/相册).</summary>
+    public ObservableCollection<NetdiskDrive> Drives { get; } = new();
+
+    /// <summary>Whether the drive selector is worth showing (more than one storage space).</summary>
+    public bool HasMultipleDrives => Drives.Count > 1;
+
+    /// <summary>Picking a drive switches the session over and reloads its root listing.</summary>
+    public NetdiskDrive? SelectedDrive
+    {
+        get => _selectedDrive;
+        set
+        {
+            if (SetProperty(ref _selectedDrive, value) && !_suppressDriveSwitch)
+            {
+                _ = RunAsync(SwitchDriveAsync);
+            }
+        }
+    }
+
     public INetdiskProvider? SelectedProvider
     {
         get => _selectedProvider;
@@ -119,6 +150,9 @@ public sealed class NetdiskViewModel : ObservableObject
 
     public string NewFolderName { get => _newFolderName; set => SetProperty(ref _newFolderName, value); }
 
+    /// <summary>Keyword for the drive search box; empty means "reload current folder".</summary>
+    public string SearchText { get => _searchText; set => SetProperty(ref _searchText, value); }
+
     public string StatusText { get => _statusText; set => SetProperty(ref _statusText, value); }
 
     public string QuotaText { get => _quotaText; set => SetProperty(ref _quotaText, value); }
@@ -130,6 +164,8 @@ public sealed class NetdiskViewModel : ObservableObject
     public RelayCommand ConnectCommand { get; }
 
     public RelayCommand RefreshCommand { get; }
+
+    public RelayCommand SearchCommand { get; }
 
     public RelayCommand UploadCommand { get; }
 
@@ -239,23 +275,110 @@ public sealed class NetdiskViewModel : ObservableObject
         _currentAccount = account;
         _path.Clear();
         _path.Add((string.Empty, "根目录"));
+        RebuildDriveOptions();
         StatusText = $"已连接：{_session.Account.DisplayName}";
         await ListAsync(string.Empty);
         await RefreshQuotaAsync();
+    }
+
+    /// <summary>Fills the drive selector from the session; multi-drive products offer switching.</summary>
+    private void RebuildDriveOptions()
+    {
+        Drives.Clear();
+        foreach (var drive in _session?.Drives ?? (IReadOnlyList<NetdiskDrive>)Array.Empty<NetdiskDrive>())
+        {
+            Drives.Add(drive);
+        }
+
+        _suppressDriveSwitch = true;
+        SelectedDrive = Drives.FirstOrDefault(d => d.Id == _session?.CurrentDriveId) ?? Drives.FirstOrDefault();
+        _suppressDriveSwitch = false;
+        OnPropertyChanged(nameof(HasMultipleDrives));
+    }
+
+    /// <summary>Points the session at another drive and reloads the listing from its root.</summary>
+    private async Task SwitchDriveAsync()
+    {
+        if (_session is null || SelectedDrive is null ||
+            SelectedDrive.Id == _session.CurrentDriveId)
+        {
+            return;
+        }
+
+        await _session.SwitchDriveAsync(SelectedDrive.Id);
+        _path.Clear();
+        _path.Add((string.Empty, "根目录"));
+        StatusText = $"已切换到「{SelectedDrive.Name}」。";
+        await ListAsync(string.Empty);
     }
 
     private async Task ListAsync(string folderId)
     {
         var session = _session ?? throw new InvalidOperationException("尚未连接网盘。");
         var page = await session.ListAsync(folderId);
+        FillItems(page);
+        RebuildBreadcrumbs();
+    }
 
+    /// <summary>Searches the current drive by name; empty keyword reloads the current folder.</summary>
+    private async Task SearchAsync()
+    {
+        if (_session is null)
+        {
+            return;
+        }
+
+        var keyword = SearchText?.Trim() ?? string.Empty;
+        if (keyword.Length == 0)
+        {
+            await ListAsync(_path[^1].Id);
+            return;
+        }
+
+        StatusText = $"正在搜索「{keyword}」…";
+        var page = await _session.SearchAsync(keyword);
+        var locations = await ResolveLocationsAsync(page.Items);
+        FillItems(page, locations);
+        StatusText = $"搜索「{keyword}」：{page.Items.Count} 个结果（当前盘）。双击文件夹可进入。";
+    }
+
+    /// <summary>
+    /// Names the parent folders behind search results so same-named files are tellable apart.
+    /// Folder ids are resolved once per session and reused across searches.
+    /// </summary>
+    private async Task<IReadOnlyDictionary<string, string>> ResolveLocationsAsync(IReadOnlyList<NetdiskFile> items)
+    {
+        var known = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var parentId in items.Select(f => f.ParentId).Where(p => !string.IsNullOrEmpty(p)).Distinct())
+        {
+            if (_locationCache.TryGetValue(parentId!, out var cached))
+            {
+                known[parentId!] = cached;
+                continue;
+            }
+
+            var name = await _session!.GetNodeNameAsync(parentId!);
+            if (!string.IsNullOrEmpty(name))
+            {
+                _locationCache[parentId!] = name!;
+                known[parentId!] = name!;
+            }
+        }
+
+        return known;
+    }
+
+    private void FillItems(NetdiskPage page, IReadOnlyDictionary<string, string>? locations = null)
+    {
         Items.Clear();
         foreach (var file in page.Items.OrderByDescending(f => f.IsFolder).ThenBy(f => f.Name, StringComparer.OrdinalIgnoreCase))
         {
-            Items.Add(new NetdiskItemViewModel(file));
+            var location = locations is not null && file.ParentId is not null &&
+                           locations.TryGetValue(file.ParentId, out var name)
+                ? name
+                : null;
+            Items.Add(new NetdiskItemViewModel(file, location));
         }
-
-        RebuildBreadcrumbs();
     }
 
     private async Task OpenFolderAsync(NetdiskItemViewModel? item)

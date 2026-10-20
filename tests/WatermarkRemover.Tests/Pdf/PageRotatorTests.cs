@@ -176,6 +176,47 @@ public class PageRotatorTests : IDisposable
         Assert.False(File.Exists(path + ".edit.tmp"));
     }
 
+    // --- RotatePages (batch) ---
+
+    [Fact]
+    public void Rotating_several_pages_applies_each_turn_in_one_save()
+    {
+        string path = WriteMultiPageFixture(3);
+
+        PdfPageRotator.RotatePages(path, new[] { (PageIndex: 0, QuarterTurns: 1), (PageIndex: 1, QuarterTurns: 0), (PageIndex: 2, QuarterTurns: 3) });
+
+        Assert.Equal(3, ReadPageCount(path));
+        var (w0, h0) = RenderSizeAt(path, 0);
+        Assert.True(w0 > h0, $"page 1 should be landscape after +90°, got {w0}x{h0}");
+        var (w1, h1) = RenderSizeAt(path, 1);
+        Assert.True(w1 < h1, "page 2 carried 0 turns and must stay portrait");
+        var (w2, h2) = RenderSizeAt(path, 2);
+        Assert.True(w2 > h2, $"page 3 should be landscape after +270°, got {w2}x{h2}");
+        Assert.False(File.Exists(path + ".edit.tmp"), "temporary file must not survive the swap");
+    }
+
+    [Fact]
+    public void Batch_rotate_validates_every_index_before_writing_anything()
+    {
+        string path = WriteMultiPageFixture(2);
+        string before = File.ReadAllText(path);
+
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            PdfPageRotator.RotatePages(path, new[] { (PageIndex: 0, QuarterTurns: 1), (PageIndex: 5, QuarterTurns: 1) }));
+
+        Assert.Equal(before, File.ReadAllText(path));
+        Assert.False(File.Exists(path + ".edit.tmp"));
+    }
+
+    /// <summary>Size as a PDFium-based renderer sees it — the same channel the preview binds to.</summary>
+    private static (int Width, int Height) RenderSizeAt(string path, int pageIndex)
+    {
+        var lib = DocLib.Instance; // shared singleton — never dispose it
+        using var reader = lib.GetDocReader(path, new PageDimensions(0.25));
+        var page = reader.GetPageReader(pageIndex);
+        return (page.GetPageWidth(), page.GetPageHeight());
+    }
+
     /// <summary>Size as a PDFium-based renderer sees it — the same channel the preview binds to.</summary>
     private static (int Width, int Height) RenderSize(string path)
     {

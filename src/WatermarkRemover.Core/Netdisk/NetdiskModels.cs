@@ -6,7 +6,8 @@ public sealed record NetdiskFile(
     string Name,
     bool IsFolder,
     long Size,
-    DateTimeOffset? ModifiedAt);
+    DateTimeOffset? ModifiedAt,
+    string? ParentId = null);
 
 /// <summary>One page of a folder listing; <see cref="NextCursor"/> null means the last page.</summary>
 public sealed record NetdiskPage(IReadOnlyList<NetdiskFile> Items, string? NextCursor);

@@ -21,7 +21,8 @@ public class PdfAutoOrientTests
 
         public Task<byte[]> RenderPageAsync(string pdfPath, int pageIndex, int dpi)
         {
-            var info = new SKImageInfo(40, 30, SKColorType.Bgra8888, SKAlphaType.Premul);
+            // Portrait canvas — the orientation detector exempts landscape pages outright.
+            var info = new SKImageInfo(30, 40, SKColorType.Bgra8888, SKAlphaType.Premul);
             using var bitmap = new SKBitmap(info);
             using var image = SKImage.FromBitmap(bitmap);
             using var data = image.Encode(SKEncodedImageFormat.Png, 100);
@@ -35,7 +36,8 @@ public class PdfAutoOrientTests
             throw new NotSupportedException();
     }
 
-    /// <summary>The detector queries turns 0..3 in order; the Nth call scores the Nth turn.</summary>
+    /// <summary>The detector queries 0°, 180° first and only then 90°/270° when ambiguous;
+    /// the Nth call scores the Nth queried candidate.</summary>
     private sealed class QueueOcr(params int[] charsPerCall) : IOcrEngine
     {
         public string DisplayName => "Queue";
@@ -84,9 +86,10 @@ public class PdfAutoOrientTests
         File.WriteAllBytes(pdf, PdfFixture.CamScannerLike().Build());
         try
         {
-            // turn 0 reads 2 chars, turn 1 reads 3, turn 2 reads 30 → the page is upside down.
+            // Call order is 0°, 180°, then 90°/270° only when the vertical pair is ambiguous:
+            // straight reads 2 chars, the flipped candidate reads 30 → decisive upside-down.
             var vm = new PdfPreviewViewModel(pdf, "scan.pdf", new FakeRenderer(1),
-                ocrEngine: new QueueOcr(2, 3, 30, 2), autoOrient: true);
+                ocrEngine: new QueueOcr(2, 30), autoOrient: true);
             await vm.LoadAsync();
             await DrainAsync(vm);
 

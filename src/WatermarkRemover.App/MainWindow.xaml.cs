@@ -62,6 +62,50 @@ public partial class MainWindow : Window
         radio.IsChecked = true;
     }
 
+    /// <summary>
+    /// The inline thumbnail strip scrolls inside its record card; the record list itself
+    /// scrolls the page. WPF's inner ScrollViewer swallows the wheel even when it has
+    /// reached its end, so the page froze exactly when the user wanted to reach the next
+    /// record. Once the strip has nothing left to show, hand the wheel over to the list.
+    /// Both direction checks matter: "up" must test headroom ABOVE (offset &gt; 0) and
+    /// "down" headroom BELOW — the previous code had them swapped, so a strip scrolled to
+    /// its top ate every upward notch (they clamped at offset 0) and the page never moved;
+    /// and the forwarded step must be negated because wheel-up arrives as a POSITIVE delta.
+    /// </summary>
+    private void OnStripPreviewMouseWheel(object sender, System.Windows.Input.MouseWheelEventArgs e)
+    {
+        if (sender is not ScrollViewer strip) return;
+        int direction = Math.Sign(e.Delta);
+        if (direction == 0) return;
+
+        // The strip still has room in this direction — it takes the wheel itself.
+        bool canScroll = direction > 0
+            ? strip.VerticalOffset > 0
+            : strip.VerticalOffset < strip.ScrollableHeight - 0.5;
+        if (canScroll) return;
+
+        ScrollViewer? list = FindAncestorScrollViewer(strip);
+        if (list is null) return;
+
+        // One wheel notch ≈ three lines, the same distance the list itself would scroll.
+        // Delta is positive scrolling up, so the step along the list must be negated.
+        double step = -e.Delta / 120.0 * 48.0;
+        list.ScrollToVerticalOffset(Math.Clamp(list.VerticalOffset + step, 0, list.ScrollableHeight));
+        e.Handled = true;
+    }
+
+    /// <summary>The nearest ScrollViewer above <paramref name="source"/> in the visual tree.</summary>
+    private static ScrollViewer? FindAncestorScrollViewer(DependencyObject source)
+    {
+        DependencyObject? current = System.Windows.Media.VisualTreeHelper.GetParent(source);
+        while (current is not null)
+        {
+            if (current is ScrollViewer viewer) return viewer;
+            current = System.Windows.Media.VisualTreeHelper.GetParent(current);
+        }
+        return null;
+    }
+
     /// <summary>Persists the scan layout choice the moment a radio is checked (no save button).</summary>
     private void OnScanDuplexChecked(object sender, RoutedEventArgs e)
     {

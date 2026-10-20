@@ -45,23 +45,70 @@ public sealed class PdfOrientationDetector
     /// </summary>
     public async Task<int> DetectClockwiseStepsAsync(byte[] pagePng, CancellationToken cancellationToken = default)
     {
-        var scores = new Dictionary<int, double>(4);
-        for (int steps = 0; steps < 4; steps++)
+        // Landscape pages are meant to be read sideways. 表格型横版文件（征信/流水）的竖列识别框
+        // 会把几何通道骗成 "sideways" 并强转竖向 — never auto-turn a page that is wider than tall.
+        using (var probe = SkiaSharp.SKBitmap.Decode(pagePng))
         {
-            byte[] candidate = steps == 0 ? pagePng : Rotate(pagePng, steps);
-            try
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                scores[steps] = _engine is IBoundedOcrEngine bounded
-                    ? await GeometryScoreAsync(bounded, candidate)
-                    : await TextVolumeScoreAsync(candidate);
-            }
-            catch (InvalidOperationException)
-            {
-                return 0; // no usable OCR on this machine — silently keep the page as scanned
-            }
+            if (probe is not null && probe.Width > probe.Height) return 0;
         }
-        return PickBestTurn(scores, minWinningScore: _engine is IBoundedOcrEngine ? MinGeometryScore : MinWinningChars);
+
+        bool bounded = _engine is IBoundedOcrEngine;
+        double minWinningScore = bounded ? MinGeometryScore : MinWinningChars;
+
+        async Task<double> ScoreAsync(byte[] candidate)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return bounded
+                ? await GeometryScoreAsync((IBoundedOcrEngine)_engine, candidate)
+                : await TextVolumeScoreAsync(candidate);
+        }
+
+        double straight, flipped;
+        try
+        {
+            straight = await ScoreAsync(pagePng);
+            flipped = await ScoreAsync(Rotate(pagePng, 2));
+        }
+        catch (InvalidOperationException)
+        {
+            return 0; // no usable OCR on this machine — silently keep the page as scanned
+        }
+
+        // The vertical pair settles the overwhelming majority of real defects (duplex back
+        // sides). When 180° clears both the win factor and the floor, the sideways candidates
+        // cannot beat it inside either channel's envelope: geometry gates a sideways page on
+        // the wide-ratio (≈0) and text volume assumes rotation-weak engines (≈0 chars). So
+        // the decisive pair ends the vote early; anything ambiguous pays for all four.
+        if (flipped >= straight * WinFactor && flipped >= minWinningScore) return 2;
+
+        double right, left;
+        try
+        {
+            right = await ScoreAsync(Rotate(pagePng, 1));
+            left = await ScoreAsync(Rotate(pagePng, 3));
+        }
+        catch (InvalidOperationException)
+        {
+            return 0;
+        }
+
+        return PickBestTurn(new Dictionary<int, double>
+        {
+            [0] = straight,
+            [1] = right,
+            [2] = flipped,
+            [3] = left,
+        }, minWinningScore);
+    }
+
+    /// <summary>
+    /// Convenience for the naming pipeline: returns the page upright — the same detection plus
+    /// the turn, so 命名 never reads a sideways page (躺倒识别取错字 bug, 名光执照).
+    /// </summary>
+    public async Task<byte[]> OrientAsync(byte[] pagePng, CancellationToken cancellationToken = default)
+    {
+        int steps = await DetectClockwiseStepsAsync(pagePng, cancellationToken);
+        return steps == 0 ? pagePng : Rotate(pagePng, steps);
     }
 
     /// <summary>Geometry channel: read the candidate upright and score its line-box layout.</summary>

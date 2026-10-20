@@ -27,6 +27,12 @@ public sealed class AliyunTokenService
     private readonly Func<DateTimeOffset> _clock;
     private readonly SemaphoreSlim _refreshLock = new(1, 1);
 
+    /// <summary>
+    /// Renewal source for accounts whose refresh token is not in the bag (CLI-hosted login): the
+    /// callback runs the external renewal and returns a fresh credential bag.
+    /// </summary>
+    private readonly Func<CancellationToken, Task<NetdiskCredentials>>? _externalRefresh;
+
     private string? _consumedRefreshToken;
     private NetdiskCredentials? _refreshResult;
 
@@ -34,12 +40,14 @@ public sealed class AliyunTokenService
         HttpClient http,
         string clientId,
         string clientSecret,
-        Func<DateTimeOffset>? clock = null)
+        Func<DateTimeOffset>? clock = null,
+        Func<CancellationToken, Task<NetdiskCredentials>>? externalRefresh = null)
     {
         _http = http;
         _clientId = clientId;
         _clientSecret = clientSecret;
         _clock = clock ?? (() => DateTimeOffset.UtcNow);
+        _externalRefresh = externalRefresh;
     }
 
     /// <summary>Whether the access token should be rotated before the next request.</summary>
@@ -108,7 +116,22 @@ public sealed class AliyunTokenService
         var refreshToken = credentials.Get(RefreshTokenKey);
         if (string.IsNullOrEmpty(refreshToken))
         {
-            throw new NetdiskAuthException("缺少 refresh_token，无法续期访问令牌，请重新授权。", "MissingRefreshToken");
+            if (_externalRefresh is null)
+            {
+                throw new NetdiskAuthException("缺少 refresh_token，无法续期访问令牌，请重新授权。", "MissingRefreshToken");
+            }
+
+            // CLI-hosted account: no refresh token of our own — delegate to the external renewer.
+            // Concurrent callers are serialized by the same lock; each run returns a fresh bag.
+            await _refreshLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                return await _externalRefresh(cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                _refreshLock.Release();
+            }
         }
 
         await _refreshLock.WaitAsync(cancellationToken).ConfigureAwait(false);

@@ -20,6 +20,16 @@ public sealed record ScanOutcome(
     string? Error,
     string? ErrorDetails);
 
+/// <summary>Raised when a scan is started while another scan still holds the scanner gate.
+/// Distinct from a failed scan so callers can react with "busy" feedback instead of an error.</summary>
+public sealed class ScannerBusyException : InvalidOperationException
+{
+    public ScannerBusyException()
+        : base("扫描仪正在工作中，请等待当前扫描完成。")
+    {
+    }
+}
+
 /// <summary>
 /// Drives one scan end to end: pick the first available engine channel (Brother's official engine
 /// through the x86 bridge, WIA fallback), pull pages, restore duplex reading order, assemble a
@@ -40,7 +50,12 @@ public sealed class ScanService
     {
         try
         {
-            return await RunAsync(duplex, color, progress, cancellationToken);
+            // The engine chain is synchronous COM that fakes asynchrony (Task.FromResult):
+            // the Brother WMI probe, WIA.DeviceManager creation and device enumeration all
+            // used to run ON the UI thread — the jolt right after pressing 开始扫描. The
+            // whole session belongs on a worker thread; progress text still marshals back
+            // through the IProgress<string>, and there is no WIA dialog to pin to an STA.
+            return await Task.Run(() => RunAsync(duplex, color, progress, cancellationToken));
         }
         catch (OperationCanceledException)
         {

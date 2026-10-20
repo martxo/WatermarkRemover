@@ -89,8 +89,11 @@
                     Style="{StaticResource SmallButton}" Margin="8,0,0,0"/>
         </StackPanel>
         <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
-            <Button Content="打开授权页" Command="{Binding OpenAuthorizePageCommand}"
+            <Button Content="扫码登录（推荐）" Command="{Binding ScanLoginCommand}"
+                    Visibility="{Binding HasCliLogin, Converter={StaticResource BoolToVis}}"
                     Style="{StaticResource SmallButton}"/>
+            <Button Content="打开授权页" Command="{Binding OpenAuthorizePageCommand}"
+                    Style="{StaticResource SmallButton}" Margin="8,0,0,0"/>
             <TextBox Width="180" Style="{StaticResource InputBox}" MinWidth="0" Margin="8,0,0,0"
                      ToolTip="粘贴回调地址中的授权码"
                      Text="{Binding AuthorizationCode, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>

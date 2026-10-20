@@ -1,4 +1,4 @@
-﻿using System.Collections.ObjectModel;
+using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.IO;
 using System.Windows;
@@ -11,6 +11,7 @@ using WatermarkRemover.App.Ocr;
 using WatermarkRemover.App.Services;
 using WatermarkRemover.App.Settings;
 using WatermarkRemover.Core.Features;
+using WatermarkRemover.Core.Features.Layout;
 using WatermarkRemover.Core.Features.Naming;
 using WatermarkRemover.Core.Features.Netdisk;
 using WatermarkRemover.Core.Features.Ocr;
@@ -72,6 +73,10 @@ public sealed class MainViewModel : ObservableObject
     private readonly IShellOpenService _shell;
     private readonly JobQueueService _queue = new();
     private readonly ScanService _scanService;
+
+    /// <summary>Serializes every scanner run — the hardware is exclusive, and the scan page's
+    /// button and the preview strips' gap buttons must never drive it at the same time.</summary>
+    private readonly SemaphoreSlim _scannerGate = new(1, 1);
     private bool _isBusy;
     private int _completedCount;
     private bool _isSettingsOpen;
@@ -499,6 +504,71 @@ public sealed class MainViewModel : ObservableObject
     {
         if (IsBusy) return;
 
+        ScanOutcome outcome;
+        try
+        {
+            outcome = await ScanOnceAsync(progressSink: null).ConfigureAwait(true);
+        }
+        catch (ScannerBusyException ex)
+        {
+            _dialogs.Info(ex.Message, "提示");
+            return;
+        }
+
+        if (!outcome.Success)
+        {
+            AppLog.Error($"扫描失败：{outcome.Error}");
+            _dialogs.Error(outcome.Error ?? "扫描失败", "扫描失败");
+            return;
+        }
+
+        // The row (and its unfolded thumbnail strip) lands the moment the scan saves —
+        // naming/OCR must never hold the result hostage. The rename runs behind it; the
+        // open strip tracks the rename of its own file by fingerprint when it next
+        // needs the path.
+        FileJobViewModel job = AddScanJob(outcome.OutputPath!, outcome.PageCount);
+        _ = RenameScanInBackgroundAsync(job, outcome.OutputPath!);
+    }
+
+    /// <summary>
+    /// The one scanner session every scan goes through, however it was started — the scan
+    /// page's 开始扫描 button and the preview strip's gap buttons both land here, so the
+    /// busy state and status line behave identically for both. It takes the scanner gate
+    /// (fails fast while the hardware is busy), lifts <see cref="IsBusy"/> so every command
+    /// sees the scanner working, maps the scan page's layout/colour, and mirrors progress
+    /// into the scan panel's status line; <paramref name="progressSink"/>, when given,
+    /// receives the same messages (the preview strip paints them under its record card).
+    /// Throws <see cref="ScannerBusyException"/> when another scan still holds the hardware.
+    /// </summary>
+    private async Task<ScanOutcome> ScanOnceAsync(IProgress<string>? progressSink)
+    {
+        if (!await _scannerGate.WaitAsync(0).ConfigureAwait(true))
+            throw new ScannerBusyException();
+
+        IsBusy = true;
+        ScanStatus = "正在准备扫描…";
+        var progress = new Progress<string>(message =>
+        {
+            ScanStatus = message;
+            progressSink?.Report(message);
+        });
+        try
+        {
+            var (duplex, color) = ScanModes();
+            return await _scanService.ScanAsync(duplex, color, progress, CancellationToken.None)
+                .ConfigureAwait(true);
+        }
+        finally
+        {
+            _scannerGate.Release();
+            IsBusy = false;
+            ScanStatus = string.Empty;
+        }
+    }
+
+    /// <summary>The scan page's layout and colour, mapped from the settings' UI ints.</summary>
+    private (DuplexMode Duplex, ColorMode Color) ScanModes()
+    {
         var duplex = (DuplexMode)Math.Clamp(Settings.ScanDuplex, 0, 2);
         // UI ints (0 自动 / 1 彩色 / 2 灰度 / 3 黑白) deliberately differ from the engine enum's
         // numeric order (GrayDiffusion sits between Color24 and TrueGray) — map explicitly.
@@ -509,35 +579,30 @@ public sealed class MainViewModel : ObservableObject
             2 => ColorMode.TrueGray,
             _ => ColorMode.BlackWhite,
         };
-        IsBusy = true;
-        try
-        {
-            var progress = new Progress<string>(message => ScanStatus = message);
-            ScanStatus = "正在准备扫描…";
-            ScanOutcome outcome = await _scanService.ScanAsync(duplex, color, progress, CancellationToken.None)
-                .ConfigureAwait(true);
+        return (duplex, color);
+    }
 
-            if (!outcome.Success)
-            {
-                AppLog.Error($"扫描失败：{outcome.Error}");
-                _dialogs.Error(outcome.Error ?? "扫描失败", "扫描失败");
-                return;
-            }
-
-            ScanStatus = "正在识别内容（自动命名）…";
-            string finalPath = await TryRenameScanByContentAsync(outcome.OutputPath!).ConfigureAwait(true);
-            AddScanJob(finalPath, outcome.PageCount);
-        }
-        finally
+    /// <summary>
+    /// The preview strip's gap-button scan: one pass handed back as the scanned PDF's path for
+    /// the strip to splice in. It runs the exact same scanner session as the scan page's
+    /// 开始扫描 button (<see cref="ScanOnceAsync"/>) — gate, busy state, layout/colour and
+    /// progress mirroring included — so the two entries cannot drift apart again.
+    /// </summary>
+    private async Task<string?> ScanIntoStripAsync(IProgress<string> progress)
+    {
+        ScanOutcome outcome = await ScanOnceAsync(progress).ConfigureAwait(true);
+        if (!outcome.Success)
         {
-            IsBusy = false;
-            ScanStatus = string.Empty;
+            AppLog.Error($"插入扫描失败：{outcome.Error}");
+            throw new InvalidOperationException(outcome.Error ?? "扫描失败");
         }
+        return outcome.OutputPath;
     }
 
     /// <summary>Files a finished scan into the job list. The PDF is both input and output of the
-    /// record, so every existing interaction (rename, chips, delete) applies without changes.</summary>
-    private void AddScanJob(string pdfPath, int pageCount)
+    /// record, so every existing interaction (rename, chips, delete) applies without changes.
+    /// Returns the row so the (async) content-naming chain can follow it.</summary>
+    private FileJobViewModel AddScanJob(string pdfPath, int pageCount)
     {
         var job = new FileJobViewModel(pdfPath, Settings.QuickSuffixes)
         {
@@ -552,6 +617,33 @@ public sealed class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(StatusText));
         // Zero-click preview: the strip unfolds the moment the scan lands.
         OpenPreviewStrip(job);
+        return job;
+    }
+
+    /// <summary>
+    /// Fire-and-forget content naming for a fresh scan: the row is already visible under its
+    /// timestamp name; when the chain lands a confident name the file moves and the row follows
+    /// (the open strip re-finds its file by fingerprint when it next needs the path). Naming
+    /// must never fail the scan — every exception lands in the log, the timestamp name stays.
+    /// </summary>
+    private async Task RenameScanInBackgroundAsync(FileJobViewModel job, string pdfPath)
+    {
+        try
+        {
+            // The open strip auto-orients / rewrites the file right after landing; a rename
+            // (File.Move) during that write throws, so drain the strip's busy passes first.
+            await (job.Strip?.WaitForSettledAsync() ?? Task.CompletedTask).ConfigureAwait(false);
+            string finalPath = await TryRenameScanByContentAsync(pdfPath).ConfigureAwait(false);
+            if (string.Equals(finalPath, pdfPath, StringComparison.OrdinalIgnoreCase)) return;
+            AppLog.Info($"后台命名完成：{Path.GetFileName(pdfPath)} → {Path.GetFileName(finalPath)}");
+            var dispatcher = Application.Current?.Dispatcher;
+            if (dispatcher is null) return;
+            dispatcher.Invoke(() => job.UpdateRenamed(finalPath));
+        }
+        catch (Exception ex)
+        {
+            AppLog.Trace("命名：后台自动命名异常，保留时间戳命名", ex);
+        }
     }
 
     /// <summary>Render resolution for the scan naming OCR pass. 220 dpi: at 150 the value
@@ -561,7 +653,9 @@ public sealed class MainViewModel : ObservableObject
 
     /// <summary>Cap on the pages probed for naming: a duplex/multi-sheet scan packs several
     /// document faces into one PDF and the type may only sit on a later page, but a long
-    /// unrecognisable document must not hold the job row hostage with serial OCR passes.</summary>
+    /// unrecognisable document must not hold the job row hostage with serial OCR passes. The
+    /// settings can pin probing to the first page only — the common case reads the name from
+    /// page one, and a long document would just burn seconds.</summary>
     private const int MaxNamingProbePages = 4;
 
     /// <summary>Type short name for the fixed-region credit report locator's naming result.</summary>
@@ -586,10 +680,13 @@ public sealed class MainViewModel : ObservableObject
         try
         {
             int pageCount = await SharedPdfRenderer.GetPageCountAsync(pdfPath).ConfigureAwait(true);
+            int probeLimit = Settings.NameFromFirstPageOnly ? 1 : MaxNamingProbePages;
             AutoNameResult? autoName = null;
-            for (int pageIndex = 0; pageIndex < pageCount && pageIndex < MaxNamingProbePages && autoName is null; pageIndex++)
+            for (int pageIndex = 0; pageIndex < pageCount && pageIndex < probeLimit && autoName is null; pageIndex++)
             {
                 byte[] image = await SharedPdfRenderer.RenderPageAsync(pdfPath, pageIndex, NamingRenderDpi).ConfigureAwait(true);
+                // 摆正后再识别：ADF 躺倒页在方向检测完成前就进命名链会取错字（横版画布守卫不受影响）。
+                image = await new PdfOrientationDetector(SharedOcrEngine).OrientAsync(image).ConfigureAwait(true);
                 AppLog.Trace($"命名：第 {pageIndex + 1}/{pageCount} 页渲染 {image.Length / 1024} KB", null);
 
                 // Fast path for fixed-layout types: locate the name cell geometrically and
@@ -604,8 +701,11 @@ public sealed class MainViewModel : ObservableObject
                     continue;
                 }
 
-                IReadOnlyList<string> lines = await SharedOcrEngine.RecognizeAsync(image).ConfigureAwait(true);
-                AppLog.Trace($"命名：第 {pageIndex + 1}/{pageCount} 页 OCR 识别 {lines.Count} 行", null);
+                IReadOnlyList<RecognizedLine> lines = await SharedOcrEngine
+                    .RecognizeBoundedOrDefaultAsync(image).ConfigureAwait(true);
+                AppLog.Trace(
+                    $"命名：第 {pageIndex + 1}/{pageCount} 页 OCR 识别 {lines.Count} 行：{string.Join(" / ", lines.Select(l => l.Text))}",
+                    null);
                 autoName = SmartNamingService.TryBuildName(lines, AppLog.Trace);
             }
             if (autoName is null) return pdfPath;
@@ -614,7 +714,20 @@ public sealed class MainViewModel : ObservableObject
             string target = OutputNameGenerator.FindAvailablePath(directory, autoName.SuggestedStem + Path.GetExtension(pdfPath));
             if (string.Equals(target, pdfPath, StringComparison.OrdinalIgnoreCase)) return pdfPath;
 
-            File.Move(pdfPath, target);
+            // The strip may still hold the file for a page write (e.g. the user rotated a page
+            // while the naming OCR ran); a short backoff beats losing the good name.
+            for (int attempt = 1; ; attempt++)
+            {
+                try
+                {
+                    File.Move(pdfPath, target);
+                    break;
+                }
+                catch (IOException) when (attempt < 3)
+                {
+                    await Task.Delay(attempt * 400).ConfigureAwait(false);
+                }
+            }
             AppLog.Info($"扫描自动命名：{Path.GetFileName(pdfPath)} → {Path.GetFileName(target)}");
             return target;
         }
@@ -806,7 +919,8 @@ public sealed class MainViewModel : ObservableObject
             ocrEngine: SharedOcrEngine,
             autoOrient: scanRow,
             onRelocated: job.UpdateRenamed, // a renamed file is tracked, the row follows
-            autoCleanBlank: scanRow); // duplex scans drop their blank back sides by themselves
+            autoCleanBlank: scanRow, // duplex scans drop their blank back sides by themselves
+            scanProvider: scanRow ? ScanIntoStripAsync : null); // scan rows can insert scans into gaps
         strip.EnlargeRequested += OnEnlargeRequested;
         job.AttachStrip(strip);
         AppLog.Info($"打开预览：{path}");

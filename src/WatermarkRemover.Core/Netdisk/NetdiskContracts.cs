@@ -24,9 +24,18 @@ public interface INetdiskProvider
     /// <summary>OAuth authorization flow when the product supports it; null = paste tokens directly.</summary>
     INetdiskOAuthFlow? OAuth { get; }
 
+    /// <summary>
+    /// Whether the settings UI should offer the assisted scan login (CLI-hosted OAuth). Default
+    /// false; a product opts in by overriding.
+    /// </summary>
+    bool SupportsCliLogin => false;
+
     /// <summary>Opens a working session against the product. Throws <see cref="NetdiskAuthException"/> on bad credentials.</summary>
     Task<INetdiskSession> ConnectAsync(NetdiskCredentials credentials, CancellationToken cancellationToken = default);
 }
+
+/// <summary>One storage space of an account (阿里云盘: 备份盘/资源库/相册; single-drive products: one entry).</summary>
+public sealed record NetdiskDrive(string Id, string Name);
 
 /// <summary>
 /// A live connection to one account of one product. File operations follow the shared vocabulary
@@ -40,6 +49,15 @@ public interface INetdiskSession : IAsyncDisposable
     /// <summary>Latest credentials after token rotation, for the persistence layer to write back.</summary>
     NetdiskCredentials CurrentCredentials { get; }
 
+    /// <summary>Storage spaces the account exposes; all operations run against <see cref="CurrentDriveId"/>.</summary>
+    IReadOnlyList<NetdiskDrive> Drives { get; }
+
+    /// <summary>The drive id every operation currently targets (first drive by default).</summary>
+    string CurrentDriveId { get; }
+
+    /// <summary>Points subsequent operations at another drive of the same account.</summary>
+    Task SwitchDriveAsync(string driveId, CancellationToken cancellationToken = default);
+
     Task<NetdiskQuota> GetQuotaAsync(CancellationToken cancellationToken = default);
 
     Task<NetdiskPage> ListAsync(
@@ -47,6 +65,24 @@ public interface INetdiskSession : IAsyncDisposable
         int pageSize = 100,
         string? cursor = null,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Searches files by name within the current drive. Page shape matches ListAsync. Products
+    /// without a search capability throw NotSupportedException via the default implementation.
+    /// </summary>
+    Task<NetdiskPage> SearchAsync(
+        string keyword,
+        int pageSize = 100,
+        string? cursor = null,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("该网盘不支持搜索。");
+
+    /// <summary>
+    /// Name of one folder/file by id, used to label where search results live. Returns null when
+    /// the product cannot resolve it (UI then shows no location for the entry).
+    /// </summary>
+    Task<string?> GetNodeNameAsync(string nodeId, CancellationToken cancellationToken = default)
+        => Task.FromResult<string?>(null);
 
     Task<NetdiskFile> CreateFolderAsync(
         string parentFolderId,

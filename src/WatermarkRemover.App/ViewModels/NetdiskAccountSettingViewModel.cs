@@ -1,6 +1,8 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
+using System.Net.Http;
 using WatermarkRemover.Core.Netdisk;
+using WatermarkRemover.Netdisk;
 
 namespace WatermarkRemover.App.ViewModels;
 
@@ -65,6 +67,7 @@ public sealed class NetdiskAccountSettingViewModel : ObservableObject
         TestConnectionCommand = new RelayCommand(() => _ = TestConnectionAsync(), () => SelectedProvider is not null);
         OpenAuthorizePageCommand = new RelayCommand(OpenAuthorizePage, () => SelectedProvider?.OAuth is not null);
         ExchangeCodeCommand = new RelayCommand(() => _ = ExchangeCodeAsync(), () => SelectedProvider?.OAuth is not null && !string.IsNullOrWhiteSpace(AuthorizationCode));
+        ScanLoginCommand = new RelayCommand(() => _ = ScanLoginAsync(), () => SelectedProvider?.SupportsCliLogin == true);
 
         SelectedProvider = Providers.FirstOrDefault();
     }
@@ -85,11 +88,15 @@ public sealed class NetdiskAccountSettingViewModel : ObservableObject
             {
                 RebuildForm();
                 OnPropertyChanged(nameof(HasOAuth));
+                OnPropertyChanged(nameof(HasCliLogin));
             }
         }
     }
 
     public bool HasOAuth => SelectedProvider?.OAuth is not null;
+
+    /// <summary>Whether the assisted scan login button is offered for the selected product.</summary>
+    public bool HasCliLogin => SelectedProvider?.SupportsCliLogin == true;
 
     /// <summary>Picking a saved account reloads its values into the form.</summary>
     public string? SelectedAccountName
@@ -119,6 +126,8 @@ public sealed class NetdiskAccountSettingViewModel : ObservableObject
     public RelayCommand OpenAuthorizePageCommand { get; }
 
     public RelayCommand ExchangeCodeCommand { get; }
+
+    public RelayCommand ScanLoginCommand { get; }
 
     private void RebuildForm()
     {
@@ -277,6 +286,57 @@ public sealed class NetdiskAccountSettingViewModel : ObservableObject
         {
             _trace("网盘授权码兑换失败", ex);
             StatusText = $"授权失败：{ex.Message}";
+        }
+    }
+
+    /// <summary>
+    /// Assisted scan login for CLI-hosted products (阿里云盘): opens the browser authorize page,
+    /// then polls the login server until the authorization lands there — the same dance the
+    /// tickstep/aliyunpan CLI performs. On success the token is written into the account and
+    /// saved; renewal later happens automatically through the local CLI.
+    /// </summary>
+    private async Task ScanLoginAsync()
+    {
+        if (SelectedProvider is null)
+        {
+            return;
+        }
+
+        try
+        {
+            StatusText = "正在创建登录会话…";
+            var loginService = new AliyunpanCliLoginService(new HttpClient());
+            var deviceId = AliyunpanCliRuntime.TryReadDeviceId() ?? Guid.NewGuid().ToString("N");
+            var ticket = await loginService.BeginAsync(deviceId).ConfigureAwait(true);
+            Process.Start(new ProcessStartInfo(ticket.AuthorizeUrl.ToString()) { UseShellExecute = true });
+            StatusText = "已打开授权页：完成「允许授权 + App 扫码」两次登录后，本页自动完成（约 1 分钟内）。";
+
+            var result = await loginService.WaitForTokenAsync(ticket.TicketId).ConfigureAwait(true);
+
+            var values = new Dictionary<string, string>(CollectCredentials().Values, StringComparer.Ordinal)
+            {
+                [AliyunpanCliRuntime.CliLoginKey] = "true",
+                [AliyunpanCliRuntime.CliDeviceIdKey] = deviceId,
+                [AliyunTokenService.AccessTokenKey] = result.AccessToken,
+                [AliyunTokenService.ExpiresAtKey] = result.ExpiresAt.ToString("O"),
+            };
+            _upsertAccount(new NetdiskAccountState(SelectedProvider.Id, AccountName.Trim(), values));
+            RefreshAccountNames();
+
+            foreach (var field in Fields)
+            {
+                if (values.TryGetValue(field.Key, out var value))
+                {
+                    field.Value = value;
+                }
+            }
+
+            StatusText = $"登录成功，账号「{AccountName.Trim()}」已保存。令牌续期将由本机 aliyunpan 工具自动完成。";
+        }
+        catch (Exception ex)
+        {
+            _trace("网盘扫码登录失败", ex);
+            StatusText = $"扫码登录失败：{ex.Message}";
         }
     }
 }
