@@ -22,6 +22,19 @@ $ReleasesDir = 'd:\code\Releases'
 $Gh = 'd:\code\.tools\gh\bin\gh.exe'
 $Tag = "v$Version"
 
+# Step 0 exists because UpdateService.CurrentVersion reports the APP ASSEMBLY version (read
+# from the compiled dll, not the package metadata). Forgetting to bump the csproj therefore
+# shipped installers that said 1.16.3 but apps that reported 1.16.2 forever. Stamping the
+# csproj and publishing here makes the whole chain — installer, UI, update feed — agree.
+Write-Host "== 0/4 stamp csproj version $Version + dotnet publish =="
+$Csproj = 'd:\code\src\WatermarkRemover.App\WatermarkRemover.App.csproj'
+$text = Get-Content $Csproj -Raw
+$stamped = $text -replace '<Version>[^<]+</Version>', "<Version>$Version</Version>"
+if ($stamped -eq $text) { throw "version stamp failed — <Version> not found in $Csproj" }
+Set-Content $Csproj $stamped -NoNewline
+& 'C:\Users\dx\.dotnet\dotnet.exe' publish $Csproj -c Release -o d:\code\publish-staging --nologo -v q
+if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed ($LASTEXITCODE)" }
+
 Write-Host "== 1/4 vpk pack $Version =="
 vpk pack --packId WatermarkRemover --packVersion $Version `
     --packDir d:\code\publish-staging --mainExe WatermarkRemover.exe
@@ -91,3 +104,8 @@ $deltas | ForEach-Object {
     Write-Host ("  delta {0}  {1:N0} KB" -f $_.Version, ($_.Size / 1KB))
 }
 Write-Host "released $Tag — delta chain intact"
+
+# Commit the version stamp so the next build doesn't drift back to a stale assembly version.
+git add $Csproj
+git commit -m "chore: bump version to $Version" | Out-Null
+git push | Out-Null
