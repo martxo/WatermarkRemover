@@ -62,6 +62,7 @@ public sealed class MainViewModel : ObservableObject
             new IWatermarkStrategy[] { new BottomRightBadgeStrategy() },
             SharedPdfRenderer,
             SharedOcrEngine,
+            orientPage: image => new PdfOrientationDetector(SharedOcrEngine).OrientAsync(image),
             trace: AppLog.Trace),
         new OcrFeature(SharedPdfRenderer, SharedOcrEngine, trace: AppLog.Trace),
         new NetdiskFeature(),
@@ -488,6 +489,7 @@ public sealed class MainViewModel : ObservableObject
             {
                 lock (_sync) CompletedCount++;
                 MoveToTop(job);
+                OpenStripWhenFinished(job);
             }).ConfigureAwait(true);
         }
         finally
@@ -925,6 +927,26 @@ public sealed class MainViewModel : ObservableObject
         job.AttachStrip(strip);
         AppLog.Info($"打开预览：{path}");
         _ = strip.LoadAsync();
+    }
+
+    /// <summary>
+    /// Zero-click preview for drag-dropped rows: the moment a watermark job lands its PDF, the
+    /// strip unfolds exactly like a fresh scan's — same builder, same interactions. Runs on the
+    /// queue's worker thread, so the strip build marshals to the UI thread. Scan rows are
+    /// excluded: their strip already opened when the scan landed, and a second call would fold
+    /// it back up.
+    /// </summary>
+    private void OpenStripWhenFinished(FileJobViewModel job)
+    {
+        if (job.OwnerFeatureId != "watermark.badge") return;
+        if (job.State != JobState.Succeeded) return;
+        if (job.Strip is not null) return;
+
+        var dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher is null) return;
+
+        if (dispatcher.CheckAccess()) OpenPreviewStrip(job);
+        else dispatcher.Invoke(OpenPreviewStrip, job);
     }
 
     /// <summary>

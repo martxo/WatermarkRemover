@@ -8,6 +8,43 @@ namespace WatermarkRemover.Tests.App;
 
 public class PdfOrientationDetectorTests
 {
+    /// <summary>
+    /// The sideways-naming regression (v1.15.32, 2026-10-21): the watermark (imported PDF)
+    /// naming chain rendered the first page and OCR'd it as-is — imported files never pass
+    /// through the scan flow's auto-orientation, so a lying-down page read as garbage and
+    /// naming silently kept the timestamp name. The chain now routes the page through an
+    /// injected upright pass built on this detector. Source-level guard: the feature must
+    /// apply the injected orient delegate BEFORE recognition, and the app must wire the
+    /// detector into the watermark registration.
+    /// </summary>
+    [Fact]
+    public void Watermark_naming_orientes_the_page_before_recognising_it()
+    {
+        static string Read(params string[] parts) =>
+            File.ReadAllText(Path.Combine(FindSolutionRoot(), Path.Combine(parts)));
+
+        string feature = Read("src", "WatermarkRemover.Core", "Features", "WatermarkFeature.cs");
+        Assert.Contains("Func<byte[], Task<byte[]>>? orientPage", feature);
+        // Order matters: the upright pass sits between the render and the OCR call.
+        int render = feature.IndexOf("RenderFirstPageAsync", StringComparison.Ordinal);
+        int orient = feature.IndexOf("_orientPage(page)", StringComparison.Ordinal);
+        int ocr = feature.IndexOf("RecognizeBoundedOrDefaultAsync", StringComparison.Ordinal);
+        Assert.True(render >= 0 && orient > render && ocr > orient,
+            "WatermarkFeature.TryAutoName must orient the page after rendering and before OCR.");
+
+        string main = Read("src", "WatermarkRemover.App", "ViewModels", "MainViewModel.cs");
+        Assert.Contains("orientPage: image => new PdfOrientationDetector(SharedOcrEngine).OrientAsync(image)", main);
+    }
+
+    private static string FindSolutionRoot()
+    {
+        DirectoryInfo? dir = new(Path.GetDirectoryName(typeof(PdfOrientationDetectorTests).Assembly.Location)!);
+        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "WatermarkRemover.sln")))
+            dir = dir.Parent;
+        Assert.NotNull(dir);
+        return dir!.FullName;
+    }
+
     private static byte[] Png(int width, int height)
     {
         var info = new SKImageInfo(width, height, SKColorType.Bgra8888, SKAlphaType.Premul);

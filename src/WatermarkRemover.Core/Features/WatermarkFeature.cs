@@ -21,6 +21,7 @@ public sealed class WatermarkFeature : IFeature
     private readonly IReadOnlyList<IWatermarkStrategy> _strategies;
     private readonly IPdfPageRenderer? _namingRenderer;
     private readonly IOcrEngine? _namingEngine;
+    private readonly Func<byte[], Task<byte[]>>? _orientPage;
     private readonly Action<string, Exception?>? _trace;
 
     public WatermarkFeature(
@@ -28,6 +29,7 @@ public sealed class WatermarkFeature : IFeature
         IEnumerable<IWatermarkStrategy> strategies,
         IPdfPageRenderer? namingRenderer = null,
         IOcrEngine? namingEngine = null,
+        Func<byte[], Task<byte[]>>? orientPage = null,
         Action<string, Exception?>? trace = null)
     {
         _source = source ?? throw new ArgumentNullException(nameof(source));
@@ -36,6 +38,7 @@ public sealed class WatermarkFeature : IFeature
             throw new ArgumentException("At least one watermark strategy is required.", nameof(strategies));
         _namingRenderer = namingRenderer;
         _namingEngine = namingEngine;
+        _orientPage = orientPage;
         _trace = trace;
     }
 
@@ -79,6 +82,10 @@ public sealed class WatermarkFeature : IFeature
         {
             byte[] page = _namingRenderer.RenderFirstPageAsync(pdfPath, NamingRenderDpi)
                 .GetAwaiter().GetResult();
+            // 摆正后再识别：导入的 PDF 不走扫描的自动调正，躺倒页会让 OCR 读不出有效文字
+            // （与扫描命名链 MainViewModel.TryRenameScanByContentAsync 同一条摆正实现）。
+            if (_orientPage is not null)
+                page = _orientPage(page).GetAwaiter().GetResult();
             var lines = _namingEngine.RecognizeBoundedOrDefaultAsync(page).GetAwaiter().GetResult();
             _trace?.Invoke(
                 $"命名：首页渲染 {page.Length / 1024} KB，OCR 识别 {lines.Count} 行：{string.Join(" / ", lines.Select(l => l.Text))}",

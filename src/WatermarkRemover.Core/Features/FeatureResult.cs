@@ -95,6 +95,10 @@ public sealed class FeatureResult
         {
             Processing.ProcessingStatus.Succeeded => Success(
                 result.InputPath, result.OutputPath!, successSummary, result.Marks.Count),
+            // A zero-mark run still names and copies the file out, so the row is a real
+            // finished record (preview, rename, delete all live) — not a skipped dead end.
+            Processing.ProcessingStatus.NoWatermarkFound when result.OutputPath is not null => Success(
+                result.InputPath, result.OutputPath, "未检测到水印，已按内容命名保存", 0),
             Processing.ProcessingStatus.NoWatermarkFound => NoChange(result.InputPath, "未检测到水印"),
             _ => FailWithDetails(
                 result.InputPath, result.Error ?? "处理失败", result.ErrorDetails, featureName),

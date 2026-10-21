@@ -48,7 +48,27 @@ public sealed class WatermarkProcessor
                 .ToList();
 
             if (marks.Count == 0)
-                return ProcessingResult.NoWatermarkFound(inputPath);
+            {
+                // 无水印 ≠ 整体跳过：只跳过去水印这一步。内容命名认出文档时，仍产出一份按
+                // 内容命名的副本，记录行的预览、重命名、删除才照常可用；没认出（或未启用
+                // 命名）则无物可命名，保持跳过——也避免对已净文件重复处理时复制出
+                // "-no-watermark-no-watermark" 的链。文件本就叫目标名时同样无需动作。
+                AutoNameResult? autoName = TryInvokeAutoNamer(inputPath);
+                if (autoName is null)
+                    return ProcessingResult.NoWatermarkFound(inputPath);
+
+                string directory = ResolveOutputDirectory(inputPath);
+                string ideal = Path.Combine(directory, autoName.SuggestedStem + Path.GetExtension(inputPath));
+                if (SamePath(ideal, inputPath))
+                    return ProcessingResult.NoWatermarkFound(inputPath);
+
+                string namedCopy = OutputNameGenerator.FindAvailablePath(directory, Path.GetFileName(ideal));
+                if (SamePath(namedCopy, inputPath))
+                    return ProcessingResult.NoWatermarkFound(inputPath);
+
+                File.Copy(inputPath, namedCopy, overwrite: false);
+                return ProcessingResult.NoWatermarkFound(inputPath, namedCopy);
+            }
 
             var edits = BuildEdits(raw, analysis, marks);
 
@@ -70,26 +90,43 @@ public sealed class WatermarkProcessor
     /// </summary>
     private string ResolveOutputPath(string inputPath)
     {
-        string directory = _settings.OutputMode == OutputMode.CustomDirectory &&
-                           !string.IsNullOrWhiteSpace(_settings.OutputDirectory)
-            ? _settings.OutputDirectory
-            : Path.GetDirectoryName(inputPath) ?? string.Empty;
+        string directory = ResolveOutputDirectory(inputPath);
         string extension = Path.GetExtension(inputPath);
 
-        AutoNameResult? autoName = null;
-        try
-        {
-            autoName = _autoNamer?.Invoke(inputPath);
-        }
-        catch
-        {
-            // Naming is a convenience; never let it fail the watermark removal itself.
-        }
+        AutoNameResult? autoName = TryInvokeAutoNamer(inputPath);
 
         return autoName is not null
             ? OutputNameGenerator.FindAvailablePath(directory, autoName.SuggestedStem + extension)
             : OutputNameGenerator.GetOutputPath(inputPath, _settings);
     }
+
+    /// <summary>The directory a produced artefact lands in — custom output directory when set,
+    /// otherwise beside the input. Shared by the watermark path and the zero-mark named copy.</summary>
+    private string ResolveOutputDirectory(string inputPath) =>
+        _settings.OutputMode == OutputMode.CustomDirectory &&
+        !string.IsNullOrWhiteSpace(_settings.OutputDirectory)
+            ? _settings.OutputDirectory
+            : Path.GetDirectoryName(inputPath) ?? string.Empty;
+
+    /// <summary>Invokes the content namer inside a swallow-all guard: naming is a convenience
+    /// and must never take the pipeline down with it.</summary>
+    private AutoNameResult? TryInvokeAutoNamer(string inputPath)
+    {
+        try
+        {
+            return _autoNamer?.Invoke(inputPath);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static bool SamePath(string left, string right) =>
+        string.Equals(
+            Path.GetFullPath(left),
+            Path.GetFullPath(right),
+            StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Parses raw pages into an analysis document. Kept separate for testability.</summary>
     public static DocumentAnalysis Analyze(RawDocument raw)

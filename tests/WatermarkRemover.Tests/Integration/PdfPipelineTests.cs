@@ -30,9 +30,11 @@ public class PdfPipelineTests : IDisposable
         return path;
     }
 
-    private static WatermarkProcessor CreateProcessor(AppSettings? settings = null) =>
+    private static WatermarkProcessor CreateProcessor(
+        AppSettings? settings = null,
+        Func<string, AutoNameResult?>? autoNamer = null) =>
         new(new PdfDocumentSource(), new IWatermarkStrategy[] { new BottomRightBadgeStrategy() },
-            settings ?? new AppSettings());
+            settings ?? new AppSettings(), autoNamer);
 
     [Fact]
     public void Extract_reads_geometry_resources_and_annotations()
@@ -92,6 +94,47 @@ public class PdfPipelineTests : IDisposable
         // A file that is already clean reports "no watermark" and writes nothing.
         Assert.Equal(ProcessingStatus.NoWatermarkFound, second.Status);
         Assert.Null(second.OutputPath);
+    }
+
+    [Fact]
+    public void Process_names_and_copies_a_clean_document_when_the_namer_recognises_it()
+    {
+        byte[] bytes = PdfFixture.CamScannerLike().WithContent("q Q\n").Build();
+        string input = WriteInput(bytes, "clean.pdf");
+
+        var result = CreateProcessor(autoNamer: _ => AutoNameResult.Create("林孝明", "执照")).Process(input);
+
+        // A clean document still lands as a content-named copy the row can preview and rename.
+        Assert.Equal(ProcessingStatus.NoWatermarkFound, result.Status);
+        Assert.NotNull(result.OutputPath);
+        Assert.True(File.Exists(result.OutputPath!), "the named copy must exist on disk");
+        Assert.Equal("林孝明执照.pdf", Path.GetFileName(result.OutputPath));
+        Assert.Equal(bytes, File.ReadAllBytes(result.OutputPath!));
+    }
+
+    [Fact]
+    public void Process_skips_the_copy_when_a_clean_document_is_already_named_ideally()
+    {
+        byte[] bytes = PdfFixture.CamScannerLike().WithContent("q Q\n").Build();
+        string input = WriteInput(bytes, "林孝明执照.pdf");
+
+        var result = CreateProcessor(autoNamer: _ => AutoNameResult.Create("林孝明", "执照")).Process(input);
+
+        // The file already carries its ideal name: a "(2)" duplicate serves nobody.
+        Assert.Equal(ProcessingStatus.NoWatermarkFound, result.Status);
+        Assert.Null(result.OutputPath);
+    }
+
+    [Fact]
+    public void Process_still_skips_a_clean_document_when_naming_is_unavailable()
+    {
+        string input = WriteInput(PdfFixture.CamScannerLike().WithContent("q Q\n").Build(), "clean.pdf");
+
+        var result = CreateProcessor().Process(input);
+
+        // No namer → nothing to name → the old skip stands (no suffix-chain copies).
+        Assert.Equal(ProcessingStatus.NoWatermarkFound, result.Status);
+        Assert.Null(result.OutputPath);
     }
 
     [Fact]

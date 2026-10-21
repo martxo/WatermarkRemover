@@ -46,8 +46,10 @@ public sealed class ProcessingResult
     public static ProcessingResult Succeeded(string inputPath, string outputPath, IReadOnlyList<WatermarkMark> marks) =>
         new(ProcessingStatus.Succeeded, inputPath, outputPath, marks);
 
-    public static ProcessingResult NoWatermarkFound(string inputPath) =>
-        new(ProcessingStatus.NoWatermarkFound, inputPath, null, Array.Empty<WatermarkMark>());
+    /// <param name="outputPath">When the zero-mark run still produced a named pass-through copy,
+    /// this carries it so the row keeps preview / rename / delete instead of dead-ending.</param>
+    public static ProcessingResult NoWatermarkFound(string inputPath, string? outputPath = null) =>
+        new(ProcessingStatus.NoWatermarkFound, inputPath, outputPath, Array.Empty<WatermarkMark>());
 
     public static ProcessingResult Failed(string inputPath, string error, string? errorDetails = null) =>
         new(ProcessingStatus.Failed, inputPath, null, Array.Empty<WatermarkMark>(), error, errorDetails);
