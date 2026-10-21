@@ -56,6 +56,9 @@ public sealed class LanTransferServer : IDisposable
     /// almost never collide.</summary>
     private const int DefaultPort = 52125;
 
+    /// <summary>Firewall rule installed by <see cref="TryElevatedSetup"/>; probed by name.</summary>
+    private const string FirewallRuleName = "WatermarkRemover-LanTransfer";
+
     /// <summary>Copy-paste texts are small; anything bigger is treated as a mistake.</summary>
     private const int MaxTextBytes = 1 << 20;
 
@@ -122,6 +125,13 @@ public sealed class LanTransferServer : IDisposable
         Url = $"http://{(wildcard ? LanAddresses.BestIPv4() : "localhost")}:{port}/?t={_token}";
         IsRunning = true;
 
+        // The listener works even without our firewall rule — Windows just nags the user with a
+        // security alert on EVERY start ("是否允许访问网络"), whose one-click rule never covers
+        // every network profile. Check coverage in the background and self-provision once; after
+        // that single UAC the alert is gone for good.
+        if (wildcard)
+            _ = Task.Run(() => EnsureFirewallCoverage(port));
+
         _contextThread = new Thread(ContextLoop) { IsBackground = true, Name = "LanTransferHttp" };
         _contextThread.Start();
         _trace($"手机传文件：监听端口 {port}，保存目录 {targetDirectory}");
@@ -160,17 +170,23 @@ public sealed class LanTransferServer : IDisposable
 
     /// <summary>
     /// One-time per-machine setup for the LAN prefix: an http.sys URL reservation plus a firewall
-    /// port allow rule. Runs one elevated command — the user sees a single UAC prompt; declining
-    /// keeps the receiver off (the caller turns that into a friendly message).
+    /// rule for THIS executable on the transfer port, all network profiles. Idempotent (stale
+    /// reservations/rules are deleted first — the previous add-only version could never refresh
+    /// a rule after the exe moved, and could never run at all when only the reservation predated
+    /// it, which is exactly how machines ended up nagged forever). Runs one elevated command —
+    /// the user sees a single UAC prompt; declining keeps the receiver working, just nagged.
     /// </summary>
     private static bool TryElevatedSetup(int port)
     {
         try
         {
+            string exe = AppExePath;
             var startInfo = new ProcessStartInfo("cmd.exe",
-                $"/c netsh http add urlacl url=http://+:{port}/ sddl=D:(A;;GX;;;WD) & " +
-                "netsh advfirewall firewall add rule name=\"WatermarkRemover-LanTransfer\" " +
-                $"dir=in action=allow protocol=TCP localport={port}")
+                $"/c netsh http delete urlacl url=http://+:{port}/ & " +
+                $"netsh http add urlacl url=http://+:{port}/ sddl=D:(A;;GX;;;WD) & " +
+                $"netsh advfirewall firewall delete rule name=\"{FirewallRuleName}\" & " +
+                $"netsh advfirewall firewall add rule name=\"{FirewallRuleName}\" " +
+                $"dir=in action=allow protocol=TCP localport={port} profile=any program=\"{exe}\"")
             {
                 UseShellExecute = true,
                 Verb = "runas",
@@ -185,6 +201,44 @@ public sealed class LanTransferServer : IDisposable
             return false; // UAC declined or elevation unavailable
         }
     }
+
+    /// <summary>True when our rule exists AND binds the current exe — a rule left behind by an
+    /// older install location does not cover this binary, so Windows would keep nagging.</summary>
+    private static bool FirewallRuleCovers()
+    {
+        try
+        {
+            var psi = new ProcessStartInfo("netsh.exe",
+                $"advfirewall firewall show rule name=\"{FirewallRuleName}\"")
+            {
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                CreateNoWindow = true,
+            };
+            using var process = Process.Start(psi);
+            if (process is null) return false;
+            string output = process.StandardOutput.ReadToEnd();
+            process.WaitForExit(5_000);
+            // ExitCode 1 = "no rules match" (locale-independent); the program line is checked by
+            // path so a moved portable install re-provisions instead of trusting the stale rule.
+            return process.ExitCode == 0
+                && output.Contains(AppExePath, StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false; // can't tell → treat as uncovered; the elevated path repairs it
+        }
+    }
+
+    private static void EnsureFirewallCoverage(int port)
+    {
+        if (FirewallRuleCovers()) return;
+        TryElevatedSetup(port);
+    }
+
+    private static string AppExePath =>
+        Environment.ProcessPath
+        ?? System.Reflection.Assembly.GetExecutingAssembly().Location;
 
     private static int GrabFreePort()
     {

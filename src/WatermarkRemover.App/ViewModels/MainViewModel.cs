@@ -704,7 +704,7 @@ public sealed class MainViewModel : ObservableObject
             AutoNameResult? autoName = null;
             for (int pageIndex = 0; pageIndex < pageCount && pageIndex < probeLimit && autoName is null; pageIndex++)
             {
-                byte[] image = await SharedPdfRenderer.RenderPageAsync(pdfPath, pageIndex, NamingRenderDpi).ConfigureAwait(true);
+                byte[] image = await SharedPdfRenderer.RenderPageAsync(pdfPath, pageIndex, NamingRenderDpi, priority: true).ConfigureAwait(true);
                 // 摆正后再识别：ADF 躺倒页在方向检测完成前就进命名链会取错字（横版画布守卫不受影响）。
                 image = await new PdfOrientationDetector(SharedOcrEngine).OrientAsync(image).ConfigureAwait(true);
                 AppLog.Trace($"命名：第 {pageIndex + 1}/{pageCount} 页渲染 {image.Length / 1024} KB", null);

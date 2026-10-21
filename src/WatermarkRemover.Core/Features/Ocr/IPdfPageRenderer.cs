@@ -18,6 +18,10 @@ public interface IPdfPageRenderer
     /// <summary>Total page count — the preview needs it before rendering any single page.</summary>
     Task<int> GetPageCountAsync(string pdfPath);
 
-    /// <summary>Renders one page (0-based) — the preview shows a single page at a time.</summary>
-    Task<byte[]> RenderPageAsync(string pdfPath, int pageIndex, int dpi);
+    /// <summary>
+    /// Renders one page (0-based) — the preview shows a single page at a time. High-priority
+    /// callers (orientation probes, blank-page scans, the on-screen canvas) jump ahead of the
+    /// strip's low-priority tile fill in the process-wide render queue.
+    /// </summary>
+    Task<byte[]> RenderPageAsync(string pdfPath, int pageIndex, int dpi, bool priority = false);
 }

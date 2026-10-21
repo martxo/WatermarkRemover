@@ -38,14 +38,14 @@ public sealed class PdfiumPdfPageRenderer : IPdfPageRenderer
     /// make pdfium cross pages — scan B rendered scan A's pixels, OCR'd A's content and inherited
     /// A's content-based name. Every pdfium touch (open → render → dispose) serialises here.
     /// </summary>
-    private static readonly SemaphoreSlim PdfiumGate = new(1, 1);
+    private static readonly PriorityGate PdfiumGate = new();
 
-    public Task<IReadOnlyList<byte[]>> RenderPagesAsync(string pdfPath, int dpi)
+    public async Task<IReadOnlyList<byte[]>> RenderPagesAsync(string pdfPath, int dpi)
     {
         ValidateDpi(dpi);
-        return Task.Run<IReadOnlyList<byte[]>>(() =>
+        return await Task.Run<IReadOnlyList<byte[]>>(async () =>
         {
-            PdfiumGate.Wait();
+            await PdfiumGate.WaitAsync(priority: true).ConfigureAwait(false);
             try
             {
                 using IDocReader reader = Open(pdfPath, dpi);
@@ -62,15 +62,15 @@ public sealed class PdfiumPdfPageRenderer : IPdfPageRenderer
             {
                 PdfiumGate.Release();
             }
-        });
+        }).ConfigureAwait(false);
     }
 
-    public Task<byte[]> RenderFirstPageAsync(string pdfPath, int dpi)
+    public async Task<byte[]> RenderFirstPageAsync(string pdfPath, int dpi)
     {
         ValidateDpi(dpi);
-        return Task.Run(() =>
+        return await Task.Run(async () =>
         {
-            PdfiumGate.Wait();
+            await PdfiumGate.WaitAsync(priority: true).ConfigureAwait(false);
             try
             {
                 using IDocReader reader = Open(pdfPath, dpi);
@@ -86,36 +86,33 @@ public sealed class PdfiumPdfPageRenderer : IPdfPageRenderer
             {
                 PdfiumGate.Release();
             }
-        });
+        }).ConfigureAwait(false);
     }
 
-    public Task<int> GetPageCountAsync(string pdfPath)
+    public async Task<int> GetPageCountAsync(string pdfPath)
     {
-        return Task.Run(() =>
+        await PdfiumGate.WaitAsync(priority: true).ConfigureAwait(false);
+        try
         {
-            PdfiumGate.Wait();
-            try
-            {
-                using IDocReader reader = Open(pdfPath, MetadataDpi);
-                return reader.GetPageCount();
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                throw Wrap(pdfPath, ex);
-            }
-            finally
-            {
-                PdfiumGate.Release();
-            }
-        });
+            using IDocReader reader = Open(pdfPath, MetadataDpi);
+            return reader.GetPageCount();
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw Wrap(pdfPath, ex);
+        }
+        finally
+        {
+            PdfiumGate.Release();
+        }
     }
 
-    public Task<byte[]> RenderPageAsync(string pdfPath, int pageIndex, int dpi)
+    public async Task<byte[]> RenderPageAsync(string pdfPath, int pageIndex, int dpi, bool priority = false)
     {
         ValidateDpi(dpi);
-        return Task.Run(() =>
+        return await Task.Run(async () =>
         {
-            PdfiumGate.Wait();
+            await PdfiumGate.WaitAsync(priority).ConfigureAwait(false);
             try
             {
                 using IDocReader reader = Open(pdfPath, dpi);
@@ -133,7 +130,7 @@ public sealed class PdfiumPdfPageRenderer : IPdfPageRenderer
             {
                 PdfiumGate.Release();
             }
-        });
+        }).ConfigureAwait(false);
     }
 
     private static IDocReader Open(string pdfPath, int dpi) =>
@@ -199,4 +196,52 @@ public sealed class PdfiumPdfPageRenderer : IPdfPageRenderer
 
     private static Exception Wrap(string pdfPath, Exception ex) =>
         new InvalidOperationException($"渲染 PDF 页面失败：{Path.GetFileName(pdfPath)}\n{ex.Message}", ex);
+}
+
+/// <summary>
+/// Serialisation gate with two priority classes. The pdfium singleton must serialise every
+/// touch, but a plain FIFO let the strip's tile fills (N pages back-to-back) head-block the
+/// scan post-process — blank-page scan and orientation probe queued behind every tile, which
+/// read as "缩略图全出来了才开始调正". High-priority waiters (probes, blank scans, the on-screen
+/// canvas) jump the queue: a pending treatment render starts after the render currently in
+/// flight, tiles only when no treatment work is waiting.
+/// </summary>
+internal sealed class PriorityGate
+{
+    private readonly SemaphoreSlim _slot = new(1, 1);
+    private readonly object _sync = new();
+    private readonly Queue<TaskCompletionSource> _high = new();
+    private readonly Queue<TaskCompletionSource> _low = new();
+
+    /// <summary>Takes the slot instantly when idle, otherwise queues behind same/higher priority.</summary>
+    public Task WaitAsync(bool priority)
+    {
+        lock (_sync)
+        {
+            if (_high.Count == 0 && _low.Count == 0 && _slot.CurrentCount > 0)
+            {
+                _slot.Wait(0); // guaranteed by CurrentCount under the lock
+                return Task.CompletedTask;
+            }
+
+            var waiter = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            (priority ? _high : _low).Enqueue(waiter);
+            return waiter.Task;
+        }
+    }
+
+    /// <summary>Hands the slot to the oldest high-priority waiter, else low, else frees it.</summary>
+    public void Release()
+    {
+        TaskCompletionSource? next;
+        lock (_sync)
+        {
+            next = _high.Count > 0 ? _high.Dequeue()
+                 : _low.Count > 0 ? _low.Dequeue()
+                 : null;
+        }
+
+        if (next is not null) next.SetResult();
+        else _slot.Release();
+    }
 }

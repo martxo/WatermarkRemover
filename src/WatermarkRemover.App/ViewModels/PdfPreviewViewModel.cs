@@ -420,15 +420,18 @@ public sealed class PdfPreviewViewModel : ObservableObject
         BuildThumbnails();
         await RenderAsync(0);
 
-        // Tiles fill in after the main canvas is already interactive; a tile that fails to render
-        // simply stays empty — StatusText belongs to the big page, never to the strip.
-        _ = LoadThumbnailsAsync(Thumbnails.ToList());
-
-        // Scan rows self-heal after the first paint, fire-and-forget and in a fixed order:
-        // first the blank pages a duplex feeder produced are dropped (they must not take part
-        // in any later step), then orientation is corrected on what remains.
+        // Scan rows self-heal in a fixed order: first the blank pages a duplex feeder produced
+        // are dropped (they must not take part in any later step), then orientation is corrected
+        // on what remains. Started BEFORE the tile fill on purpose — the blank scan renders the
+        // same 150dpi bitmaps the tiles need, so its render cache feeds the strip instead of
+        // racing it through the pdfium gate.
         if (_autoCleanBlank || (_autoOrient && _ocrEngine is not null))
             _ = RunScanPostProcessAsync();
+
+        // Tiles fill in after the main canvas is already interactive; a tile that fails to render
+        // simply stays empty — StatusText belongs to the big page, never to the strip. Tile
+        // renders are LOW priority: treatment work (probes, blank scan, canvas) cuts ahead.
+        _ = LoadThumbnailsAsync(Thumbnails.ToList());
     }
 
     /// <summary>The scan row's after-load pipeline: blank-page cleanup, then auto-orientation.
@@ -457,7 +460,7 @@ public sealed class PdfPreviewViewModel : ObservableObject
             for (int i = 0; i < PageCount; i++)
             {
                 if (IsCancelled) return;
-                byte[] png = await GetPageBytesAsync(i, PreviewDpi);
+                byte[] png = await GetPageBytesAsync(i, PreviewDpi, priority: true);
                 if (await Task.Run(() => BlankPageDetector.IsBlank(png)))
                     blankPages.Add(i);
             }
@@ -598,7 +601,7 @@ public sealed class PdfPreviewViewModel : ObservableObject
             if (IsCancelled) return; // the file is saved; nothing is on screen any more
             RememberFileStamp(force: true);
 
-            byte[] thumbBytes = await GetPageBytesAsync(pageIndex, ThumbnailDpi);
+            byte[] thumbBytes = await GetPageBytesAsync(pageIndex, ThumbnailDpi, priority: true);
             if (IsCancelled) return;
             if (pageIndex < Thumbnails.Count)
                 Thumbnails[pageIndex].SetImage(await Task.Run(() => MakeThumbSource(thumbBytes)));
@@ -809,7 +812,7 @@ public sealed class PdfPreviewViewModel : ObservableObject
         var probed = new List<int>();
         for (int index = firstIndex; index < firstIndex + count && index < PageCount; index++)
         {
-            byte[] pagePng = await GetPageBytesAsync(index, OrientationDpi).ConfigureAwait(true);
+            byte[] pagePng = await GetPageBytesAsync(index, OrientationDpi, priority: true).ConfigureAwait(true);
             if (IsCancelled) return;
             probed.Add(index);
             int steps = await Task.Run(() => detector.DetectClockwiseStepsAsync(pagePng, _cancellationToken)).ConfigureAwait(true);
@@ -856,7 +859,7 @@ public sealed class PdfPreviewViewModel : ObservableObject
         StatusText = "正在检测页面方向…";
         try
         {
-            byte[] pagePng = await GetPageBytesAsync(0, OrientationDpi);
+            byte[] pagePng = await GetPageBytesAsync(0, OrientationDpi, priority: true);
 
             var detector = new PdfOrientationDetector(_ocrEngine);
             int steps = await Task.Run(() => detector.DetectClockwiseStepsAsync(pagePng, _cancellationToken));
@@ -923,7 +926,7 @@ public sealed class PdfPreviewViewModel : ObservableObject
 
         try
         {
-            byte[] bytes = await GetPageBytesAsync(pageIndex, PreviewDpi);
+            byte[] bytes = await GetPageBytesAsync(pageIndex, PreviewDpi, priority: true);
             if (IsCancelled || generation != _loadGeneration) return;
 
             CurrentImage = Decode(bytes);
@@ -964,8 +967,10 @@ public sealed class PdfPreviewViewModel : ObservableObject
 
     /// <summary>Rendered bytes are cached per (page, dpi) — a page the user already visited never re-renders.
     /// Cache-miss renders hold <see cref="_renderGate"/> so concurrent askers (tile fill vs canvas)
-    /// share one render instead of racing the cache and doubling the work.</summary>
-    private async Task<byte[]> GetPageBytesAsync(int pageIndex, int dpi)
+    /// share one render instead of racing the cache and doubling the work. Treatment callers
+    /// (blank scan, probes, canvas) pass <paramref name="priority"/> to jump the tile queue in the
+    /// process-wide pdfium gate.</summary>
+    private async Task<byte[]> GetPageBytesAsync(int pageIndex, int dpi, bool priority = false)
     {
         var key = (pageIndex, dpi);
         if (_renderedPages.TryGetValue(key, out byte[]? cached)) return cached;
@@ -978,14 +983,14 @@ public sealed class PdfPreviewViewModel : ObservableObject
             byte[] bytes;
             try
             {
-                bytes = await _renderer.RenderPageAsync(_pdfPath, pageIndex, dpi);
+                bytes = await _renderer.RenderPageAsync(_pdfPath, pageIndex, dpi, priority);
             }
             catch (Exception) when (!File.Exists(_pdfPath))
             {
                 // The user renamed/moved the file while the strip was open — track it down before
                 // giving up; a plain failure here is what made the strip feel broken.
                 if (!await Task.Run(TryRelocatePdf)) throw;
-                bytes = await _renderer.RenderPageAsync(_pdfPath, pageIndex, dpi);
+                bytes = await _renderer.RenderPageAsync(_pdfPath, pageIndex, dpi, priority);
             }
             RememberFileStamp();
             _renderedPages[key] = bytes;

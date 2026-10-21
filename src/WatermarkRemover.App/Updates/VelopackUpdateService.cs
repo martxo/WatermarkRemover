@@ -58,6 +58,37 @@ public sealed class VelopackUpdateService
     internal VelopackUpdateService(UpdateManager manager) => _manager = manager;
 
     /// <summary>
+    /// True when this Velopack install carries no local full package — the Portable-zip shape.
+    /// Update.exe exists so the Velopack channel runs, but the delta strategy needs the previous
+    /// full .nupkg as its diff base ("Windows (installer) is the only thing which ships with a
+    /// complete .nupkg", UpdateManager.CreateDeltaUpdateStrategy) — without it EVERY update is a
+    /// full download, forever. Setup.exe installs keep the package; a one-time Setup install
+    /// turns on deltas from then on.
+    /// </summary>
+    public static bool IsPortableShapedInstall
+    {
+        get
+        {
+            try
+            {
+                string? exeDir = Path.GetDirectoryName(Environment.ProcessPath);
+                if (exeDir is null) return false;
+                // Velopack layout: <root>\current\App.exe + <root>\packages\*.nupkg. Anything
+                // else (green directory, dev publish) doesn't have the packages concept at all.
+                if (!string.Equals(Path.GetFileName(exeDir), "current", StringComparison.OrdinalIgnoreCase))
+                    return false;
+                string? root = Path.GetDirectoryName(exeDir);
+                string packages = root is null ? string.Empty : Path.Combine(root, "packages");
+                return !Directory.Exists(packages) || !Directory.EnumerateFiles(packages, "*-full.nupkg").Any();
+            }
+            catch
+            {
+                return false; // can't tell → don't nag the user with the wrong hint
+            }
+        }
+    }
+
+    /// <summary>
     /// Queries the Velopack feed once. Network failures propagate to the caller — the coordinator
     /// renders them with the same dialog as a legacy check failure.
     /// </summary>
