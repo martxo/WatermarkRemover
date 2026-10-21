@@ -36,7 +36,7 @@ public sealed class AppSettings
     /// Quick suffix chips shown next to each processed file. Clicking one appends the suffix to
     /// the file name (clicking again removes it). Managed in the settings window.
     /// </summary>
-    public List<string> QuickSuffixes { get; set; } = new() { "身份证", "户口本", "房产证", "征信", "执照" };
+    public List<string> QuickSuffixes { get; set; } = new() { "征信", "执照", "身份证", "户口本", "房产证" };
 
     /// <summary>
     /// Name watermark-removal outputs after the document's content (e.g. 林孝明执照.pdf) when

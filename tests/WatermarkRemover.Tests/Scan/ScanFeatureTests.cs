@@ -95,7 +95,7 @@ public class ScanOutputDirectoryTests : IDisposable
         Assert.True(Directory.Exists(Path.Combine(_root, "scan-out")));
 
         settings.ScanOutputDirectory = "   ";
-        Assert.Equal(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures),
+        Assert.Equal(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
             ScanOutputDirectory.Resolve(settings));
     }
 }
