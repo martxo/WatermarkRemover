@@ -1,4 +1,4 @@
-using SkiaSharp;
+﻿using SkiaSharp;
 using System.Windows.Media.Imaging;
 using WatermarkRemover.App.ViewModels;
 using WatermarkRemover.Core.Features.Ocr;
@@ -48,7 +48,7 @@ public class PdfPreviewViewModelTests
 
         public Task<int> GetPageCountAsync(string pdfPath) => Task.FromResult(pageCount);
 
-        public Task<byte[]> RenderPageAsync(string pdfPath, int pageIndex, int dpi)
+        public Task<byte[]> RenderPageAsync(string pdfPath, int pageIndex, int dpi, bool priority = false)
         {
             if (failRendering) throw new InvalidOperationException("渲染失败");
             RenderedPageCount++;
@@ -68,7 +68,7 @@ public class PdfPreviewViewModelTests
         public Task<int> GetPageCountAsync(string pdfPath) =>
             throw new InvalidOperationException("文件损坏");
 
-        public Task<byte[]> RenderPageAsync(string pdfPath, int pageIndex, int dpi) =>
+        public Task<byte[]> RenderPageAsync(string pdfPath, int pageIndex, int dpi, bool priority = false) =>
             throw new NotSupportedException();
 
         public Task<IReadOnlyList<byte[]>> RenderPagesAsync(string pdfPath, int dpi) =>

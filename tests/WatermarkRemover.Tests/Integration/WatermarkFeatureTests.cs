@@ -1,4 +1,4 @@
-using WatermarkRemover.Core.Features;
+﻿using WatermarkRemover.Core.Features;
 using WatermarkRemover.Core.Features.Naming;
 using WatermarkRemover.Core.Features.Ocr;
 using WatermarkRemover.Core.Settings;
@@ -57,7 +57,7 @@ public class WatermarkFeatureTests : IDisposable
 
         public Task<int> GetPageCountAsync(string pdfPath) => Task.FromResult(1);
 
-        public Task<byte[]> RenderPageAsync(string pdfPath, int pageIndex, int dpi) =>
+        public Task<byte[]> RenderPageAsync(string pdfPath, int pageIndex, int dpi, bool priority = false) =>
             Task.FromResult(Array.Empty<byte>());
     }
 

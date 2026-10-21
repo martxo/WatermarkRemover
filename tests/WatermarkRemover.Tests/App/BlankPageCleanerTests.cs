@@ -1,4 +1,4 @@
-using SkiaSharp;
+﻿using SkiaSharp;
 using WatermarkRemover.App.Scan;
 using WatermarkRemover.App.ViewModels;
 using WatermarkRemover.Core.Features.Ocr;
@@ -118,7 +118,7 @@ public class BlankPageCleanerTests
     {
         public Task<int> GetPageCountAsync(string pdfPath) => Task.FromResult(pages.Count);
 
-        public Task<byte[]> RenderPageAsync(string pdfPath, int pageIndex, int dpi) =>
+        public Task<byte[]> RenderPageAsync(string pdfPath, int pageIndex, int dpi, bool priority = false) =>
             Task.FromResult(pages[Math.Min(pageIndex, pages.Count - 1)]);
 
         public Task<IReadOnlyList<byte[]>> RenderPagesAsync(string pdfPath, int dpi) =>

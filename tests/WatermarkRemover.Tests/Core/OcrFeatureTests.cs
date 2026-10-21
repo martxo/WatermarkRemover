@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using WatermarkRemover.Core.Features;
 using WatermarkRemover.Core.Features.Ocr;
 using WatermarkRemover.Core.Settings;
@@ -33,7 +33,7 @@ public class OcrFeatureTests : IDisposable
 
         public Task<int> GetPageCountAsync(string pdfPath) => Task.FromResult(pageCount);
 
-        public Task<byte[]> RenderPageAsync(string pdfPath, int pageIndex, int dpi) =>
+        public Task<byte[]> RenderPageAsync(string pdfPath, int pageIndex, int dpi, bool priority = false) =>
             Task.FromResult(new byte[] { 0x89, (byte)'P' });
     }
 
@@ -56,7 +56,7 @@ public class OcrFeatureTests : IDisposable
         public Task<int> GetPageCountAsync(string pdfPath) =>
             throw new InvalidOperationException("渲染失败");
 
-        public Task<byte[]> RenderPageAsync(string pdfPath, int pageIndex, int dpi) =>
+        public Task<byte[]> RenderPageAsync(string pdfPath, int pageIndex, int dpi, bool priority = false) =>
             throw new InvalidOperationException("渲染失败");
     }
 

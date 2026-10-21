@@ -34,7 +34,7 @@ public class PdfStripInsertTests : IDisposable
     {
         public Task<int> GetPageCountAsync(string pdfPath) => Task.FromResult(pageCount);
 
-        public Task<byte[]> RenderPageAsync(string pdfPath, int pageIndex, int dpi)
+        public Task<byte[]> RenderPageAsync(string pdfPath, int pageIndex, int dpi, bool priority = false)
         {
             var (w, h) = sizes is not null && pageIndex < sizes.Length ? sizes[pageIndex] : (30, 40);
             var info = new SKImageInfo(w, h, SKColorType.Bgra8888, SKAlphaType.Premul);
@@ -385,7 +385,7 @@ public class PdfStripInsertTests : IDisposable
         public Task<int> GetPageCountAsync(string pdfPath) =>
             Task.FromResult(DisplaySizes(pdfPath).Count);
 
-        public Task<byte[]> RenderPageAsync(string pdfPath, int pageIndex, int dpi)
+        public Task<byte[]> RenderPageAsync(string pdfPath, int pageIndex, int dpi, bool priority = false)
         {
             var (w, h) = DisplaySizes(pdfPath)[pageIndex];
             return Task.FromResult(Png(w, h));

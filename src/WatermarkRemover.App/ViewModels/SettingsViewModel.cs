@@ -84,6 +84,9 @@ public sealed class SettingsViewModel : ObservableObject
         CopyLogCommand = new RelayCommand(_ => CopyLog());
         ExportLogCommand = new RelayCommand(_ => ExportLog());
         OpenLogFolderCommand = new RelayCommand(_ => OpenLogFolder());
+        OpenUpdateFolderCommand = new RelayCommand(_ => OpenUpdateFolder());
+        CleanUpdateResidueCommand = new RelayCommand(_ => CleanUpdateResidue());
+        RefreshUpdateStorage();
         RefreshReportsCommand = new RelayCommand(_ => RefreshReports());
         OpenReportsFolderCommand = new RelayCommand(_ => OpenReportsFolder());
     }
@@ -131,6 +134,89 @@ public sealed class SettingsViewModel : ObservableObject
 
     /// <summary>Current version, shown at the top of the updates section.</summary>
     public string VersionText => $"当前版本：v{UpdateService.CurrentVersion}";
+
+    // ── 更新下载位置与残留清理（updates section, second card）──
+
+    private string _updateResidueSummary = "正在扫描更新缓存…";
+
+    /// <summary>Where update packages land — the Velopack cache for Setup installs, %TEMP% otherwise.</summary>
+    public string UpdateStoragePath
+    {
+        get
+        {
+            string? packages = UpdateStorage.GetVelopackPackagesDirectory();
+            return packages ?? Path.GetTempPath();
+        }
+    }
+
+    /// <summary>One-line residue tally across both channels, refreshed on entry and after cleaning.</summary>
+    public string UpdateResidueSummary
+    {
+        get => _updateResidueSummary;
+        private set => SetProperty(ref _updateResidueSummary, value);
+    }
+
+    /// <summary>Opens the primary download location in Explorer.</summary>
+    public RelayCommand OpenUpdateFolderCommand { get; }
+
+    /// <summary>Clears leftover packages (old versions, interrupted downloads) after a confirmation.</summary>
+    public RelayCommand CleanUpdateResidueCommand { get; }
+
+    private void RefreshUpdateStorage()
+    {
+        long bytes = 0;
+        int count = 0;
+        foreach (var location in UpdateStorage.Describe())
+        {
+            count += location.ResidueCount;
+            bytes += location.ResidueBytes;
+        }
+
+        UpdateResidueSummary = count == 0
+            ? "没有可清理的更新残留。"
+            : $"发现 {count} 项更新残留 · 共 {FormatResidueBytes(bytes)}，可安全清理";
+    }
+
+    private void CleanUpdateResidue()
+    {
+        var locations = UpdateStorage.Describe();
+        int count = locations.Sum(l => l.ResidueCount);
+        long bytes = locations.Sum(l => l.ResidueBytes);
+        if (count == 0)
+        {
+            UpdateResidueSummary = "没有可清理的更新残留。";
+            return;
+        }
+
+        if (!_dialogs.ConfirmYesNo(
+                $"发现 {count} 项更新残留（共 {FormatResidueBytes(bytes)}）。\n\n" +
+                "清理不会影响当前已安装的版本；清除缓存后，下一次更新可能需要重新下载完整包。是否清理？",
+                "清理更新残留"))
+        {
+            return;
+        }
+
+        var (deleted, freed) = UpdateStorage.Clean();
+        AppLog.Info($"更新残留清理：删除 {deleted} 项，释放 {freed} 字节");
+        RefreshUpdateStorage();
+    }
+
+    private static string FormatResidueBytes(long bytes) => bytes switch
+    {
+        >= 1L << 20 => $"{bytes / 1048576.0:F1} MB",
+        >= 1L << 10 => $"{bytes / 1024.0:F0} KB",
+        _ => $"{bytes} B",
+    };
+
+    private void OpenUpdateFolder()
+    {
+        string? packages = UpdateStorage.GetVelopackPackagesDirectory();
+        string dir = packages ?? Path.GetTempPath();
+        if (!_shell.TryOpenDirectory(dir, out string? error))
+        {
+            _dialogs.Warn($"无法打开文件夹：{error ?? dir}", "更新缓存");
+        }
+    }
 
     /// <summary>
     /// Output-mode toggle of the general section (radio group in the old window, now VM state):

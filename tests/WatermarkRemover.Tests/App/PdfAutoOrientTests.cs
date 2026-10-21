@@ -1,4 +1,4 @@
-using PdfSharpCore.Pdf.IO;
+﻿using PdfSharpCore.Pdf.IO;
 using SkiaSharp;
 using WatermarkRemover.App.ViewModels;
 using WatermarkRemover.Core.Features.Ocr;
@@ -19,7 +19,7 @@ public class PdfAutoOrientTests
     {
         public Task<int> GetPageCountAsync(string pdfPath) => Task.FromResult(pageCount);
 
-        public Task<byte[]> RenderPageAsync(string pdfPath, int pageIndex, int dpi)
+        public Task<byte[]> RenderPageAsync(string pdfPath, int pageIndex, int dpi, bool priority = false)
         {
             // Portrait canvas — the orientation detector exempts landscape pages outright.
             var info = new SKImageInfo(30, 40, SKColorType.Bgra8888, SKAlphaType.Premul);

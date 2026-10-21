@@ -663,6 +663,39 @@
                                         Click="OnCheckUpdate"/>
                             </Grid>
                         </Border>
+
+                        <!-- 更新包落点 + 残留清理：路径只读展示，清理保留增量所需的基底包 -->
+                        <Border Style="{StaticResource InsetCard}" Margin="0,10,0,0">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                    <TextBlock Text="下载位置与残留清理"
+                                               Style="{StaticResource RowTitle}"/>
+                                    <TextBlock Text="{Binding UpdateStoragePath}"
+                                               Style="{StaticResource RowCaption}"
+                                               Margin="0,3,0,0"
+                                               TextTrimming="CharacterEllipsis"
+                                               ToolTip="{Binding UpdateStoragePath}"/>
+                                    <TextBlock Text="{Binding UpdateResidueSummary}"
+                                               Style="{StaticResource RowCaption}"
+                                               Margin="0,2,0,0"/>
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                    <Button Content="打开文件夹"
+                                            Style="{StaticResource SmallButton}"
+                                            Padding="14,7"
+                                            Command="{Binding OpenUpdateFolderCommand}"/>
+                                    <Button Content="清除残留"
+                                            Style="{StaticResource SmallButton}"
+                                            Padding="14,7"
+                                            Margin="0,6,0,0"
+                                            Command="{Binding CleanUpdateResidueCommand}"/>
+                                </StackPanel>
+                            </Grid>
+                        </Border>
                     </StackPanel>
 
                     <!-- ============ 日志与排障 ============ -->

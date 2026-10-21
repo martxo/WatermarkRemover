@@ -1,4 +1,4 @@
-using PdfSharpCore.Pdf.IO;
+﻿using PdfSharpCore.Pdf.IO;
 using SkiaSharp;
 using WatermarkRemover.App.ViewModels;
 using WatermarkRemover.Core.Features.Ocr;
@@ -18,7 +18,7 @@ public class PdfRenameTrackingTests
     {
         public Task<int> GetPageCountAsync(string pdfPath) => Task.FromResult(pageCount);
 
-        public Task<byte[]> RenderPageAsync(string pdfPath, int pageIndex, int dpi)
+        public Task<byte[]> RenderPageAsync(string pdfPath, int pageIndex, int dpi, bool priority = false)
         {
             // A real renderer (PDFium) would throw its own flavour of failure for a missing
             // file; what matters to the strip is that the file is not where it remembers.

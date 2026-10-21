@@ -51,7 +51,7 @@ public class PreviewStripTests
     {
         public Task<int> GetPageCountAsync(string pdfPath) => Task.FromResult(0);
 
-        public Task<byte[]> RenderPageAsync(string pdfPath, int pageIndex, int dpi) =>
+        public Task<byte[]> RenderPageAsync(string pdfPath, int pageIndex, int dpi, bool priority = false) =>
             Task.FromResult(Array.Empty<byte>());
 
         public Task<IReadOnlyList<byte[]>> RenderPagesAsync(string pdfPath, int dpi) =>
