@@ -1041,12 +1041,12 @@ public sealed class MainViewModel : ObservableObject
             return;
         }
 
+        // Deliberately unowned: an owned window is pinned above its owner forever, which blocked
+        // the main window while browsing files side by side. An independent top-level window
+        // z-orders normally.
         _netdiskWindow = new NetdiskWindow(
             new NetdiskViewModel(NetdiskCatalog, NetdiskAccounts, UpsertNetdiskAccount, _dialogs, AppLog.Trace),
-            NetdiskSettings)
-        {
-            Owner = Application.Current.MainWindow,
-        };
+            NetdiskSettings);
         _netdiskWindow.Closed += (_, _) => _netdiskWindow = null;
         _netdiskWindow.Show();
         AppLog.Info("打开网盘管理窗口");

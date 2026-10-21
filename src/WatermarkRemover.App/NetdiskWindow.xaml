@@ -5,7 +5,7 @@
         Title="网盘管理"
         Width="980" Height="640"
         MinWidth="760" MinHeight="480"
-        WindowStartupLocation="CenterOwner"
+        WindowStartupLocation="CenterScreen"
         Background="{StaticResource ShellBrush}">
     <WindowChrome.WindowChrome>
         <!-- Same flat integrated chrome as the main window: the top 44px belongs to our layout

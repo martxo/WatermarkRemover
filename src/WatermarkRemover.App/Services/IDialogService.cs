@@ -22,7 +22,11 @@ public interface IDialogService
     void Error(string message, string title);
 }
 
-/// <summary>MessageBox-backed implementation. Owner windows keep prompts modal to their window.</summary>
+/// <summary>
+/// App-styled prompt implementation: one <see cref="AppConfirmDialog"/> window replaces raw
+/// MessageBox so every confirmation / info / warning / error in the product shares the shell's
+/// visual language. Owner windows keep prompts modal to their window.
+/// </summary>
 public sealed class DialogService : IDialogService
 {
     /// <summary>Shared instance for call sites without a natural owner (view models).</summary>
@@ -33,22 +37,20 @@ public sealed class DialogService : IDialogService
     public DialogService(Window? owner = null) => _owner = owner;
 
     public bool Confirm(string message, string title) =>
-        Show(message, title, MessageBoxButton.OKCancel, MessageBoxImage.Warning) == MessageBoxResult.OK;
+        Show(message, title, MessageBoxButton.OKCancel, PromptKind.Warning);
 
     public bool ConfirmYesNo(string message, string title) =>
-        Show(message, title, MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes;
+        Show(message, title, MessageBoxButton.YesNo, PromptKind.Question);
 
     public void Info(string message, string title) =>
-        Show(message, title, MessageBoxButton.OK, MessageBoxImage.Information);
+        Show(message, title, MessageBoxButton.OK, PromptKind.Information);
 
     public void Warn(string message, string title) =>
-        Show(message, title, MessageBoxButton.OK, MessageBoxImage.Warning);
+        Show(message, title, MessageBoxButton.OK, PromptKind.Warning);
 
     public void Error(string message, string title) =>
-        Show(message, title, MessageBoxButton.OK, MessageBoxImage.Error);
+        Show(message, title, MessageBoxButton.OK, PromptKind.Error);
 
-    private MessageBoxResult Show(string message, string title, MessageBoxButton button, MessageBoxImage image) =>
-        _owner is null
-            ? MessageBox.Show(message, title, button, image)
-            : MessageBox.Show(_owner, message, title, button, image);
+    private bool Show(string message, string title, MessageBoxButton buttons, PromptKind kind) =>
+        AppConfirmDialog.Show(_owner ?? Application.Current?.MainWindow, title, message, kind, buttons);
 }

@@ -1,0 +1,55 @@
+<Window x:Class="WatermarkRemover.App.AppConfirmDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        WindowStyle="None" AllowsTransparency="True" Background="Transparent"
+        Width="420" SizeToContent="Height" ResizeMode="NoResize"
+        ShowInTaskbar="False" WindowStartupLocation="CenterOwner">
+    <!--
+        The one app-styled prompt for every Confirm / ConfirmYesNo / Info / Warn / Error in the
+        product, replacing raw MessageBox.Show so prompts look like the rest of the shell.
+        DialogService decides the kind (icon chip + danger vs accent affirmative); this window
+        only renders it. Enter accepts, Esc cancels, the title row drags the window.
+    -->
+    <Border Margin="16" Background="{StaticResource SurfaceBrush}"
+            BorderBrush="{StaticResource BorderBrushLight}" BorderThickness="1"
+            CornerRadius="12" Padding="20">
+        <StackPanel>
+            <Grid MouseLeftButtonDown="OnTitleDragMove">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <Border Grid.Column="0" Width="38" Height="38" CornerRadius="10"
+                        Background="{Binding IconBackground}" VerticalAlignment="Center">
+                    <TextBlock Text="{Binding IconGlyph}" FontFamily="Segoe MDL2 Assets"
+                               FontSize="16" Foreground="{Binding IconForeground}"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                </Border>
+                <TextBlock Grid.Column="1" Text="{Binding Title}" Margin="10,0,0,0"
+                           FontSize="15" FontWeight="SemiBold" VerticalAlignment="Center"
+                           Foreground="{StaticResource TextPrimaryBrush}"
+                           TextTrimming="CharacterEllipsis"/>
+                <Button Grid.Column="2" Content="&#xE711;" Width="30" Height="30"
+                        Style="{StaticResource CaptionButton}" FontSize="10"
+                        Click="OnDismissClick" ToolTip="关闭"/>
+            </Grid>
+
+            <TextBlock Text="{Binding Message}" Margin="0,14,0,0" FontSize="13"
+                       Foreground="{StaticResource TextSecondaryBrush}"
+                       TextWrapping="Wrap"/>
+
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,18,0,0">
+                <Button Content="{Binding CancelLabel}" Style="{StaticResource GhostButton}"
+                        Visibility="{Binding HasCancel, Converter={StaticResource BoolToVis}}"
+                        Command="{Binding DismissCommand}"/>
+                <Button Content="{Binding AcceptLabel}" Style="{StaticResource PrimaryButton}"
+                        Visibility="{Binding IsSafe, Converter={StaticResource BoolToVis}}"
+                        Command="{Binding AcceptCommand}" Margin="8,0,0,0"/>
+                <Button Content="{Binding AcceptLabel}" Style="{StaticResource DangerButton}"
+                        Visibility="{Binding IsDanger, Converter={StaticResource BoolToVis}}"
+                        Command="{Binding AcceptCommand}" Margin="8,0,0,0"/>
+            </StackPanel>
+        </StackPanel>
+    </Border>
+</Window>
