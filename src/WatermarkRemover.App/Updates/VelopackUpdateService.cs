@@ -1,3 +1,4 @@
+using System.IO;
 using Velopack;
 using Velopack.Sources;
 using WatermarkRemover.Core.Updates;
