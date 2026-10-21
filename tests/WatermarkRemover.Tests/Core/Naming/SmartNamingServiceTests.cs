@@ -454,25 +454,61 @@ public class NameExtractorTests
 }
 
 /// <summary>
-/// The enterprise credit report (人民银行征信中心, corporate edition). Its「征信中心 / 信息概要 /
-/// 报告编号」anchors also live on the PERSONAL report, so without its own profile it classified as
-/// credit-report, got dragged into the personal report's「被查询者姓名」fixed-region locator (which
-/// never matches an enterprise report) and could never be named. The subject is an organisation:
-/// a long company name the 2-4 char person shapes truncate — CompanyLabel takes the whole value.
+/// The enterprise credit report (人民征信中心, corporate edition), fixtures in REAL OCR line
+/// order from two 2026-10 scans. Its「征信中心/信息概要」anchors also live on the PERSONAL report —
+/// before it had its own profile it classified as credit-report and was dragged into a dead-end
+/// fixed-region lookup. The subject is a PERSON (files are filed per customer), but the name sits
+/// in table cells that may not even be on the scanned pages (万花筒 scan never surfaced one) and
+/// the label/value pairs come out of OCR in scrambled order (宏亚's value lands three lines below
+/// its label) — extraction is a guaranteed miss, so the type names to the「谁的企业征信」
+/// placeholder for the user to rename by hand.
 /// </summary>
 public class EnterpriseCreditReportNamingTests
 {
-    /// <summary>OCR reading order of the report's first page.</summary>
-    private static readonly string[] EnterpriseReportLines =
+    /// <summary>万花筒广告策划 scan — 2 pages, no person name surfaced at all.</summary>
+    private static readonly string[] WanhautongLines =
     {
+        "征信中心",
+        "N0.2026102111382680088748",
+        "报告说明",
         "企业信用报告",
-        "报告编号:2026102100009876543210 报告时间:2026.10.21 09:12:44",
-        "企业名称 玉林市玉州区草蛮养生馆（个体工商户）",
-        "统一社会信用代码 92450900MA5QH0W491",
-        "机构信用代码 G10104509001234567A",
+        "(自主查询版)",
+        "公共信息",
+        "企业名称:",
+        "玉林市万花筒广告策划有限公司",
+        "中征码:",
+        "4509020002087410",
+        "统一社会信用代码:91450900569070281B",
+        "查询机构:",
+        "中国人民银行玉林市分行",
+        "报告时间:",
+        "2026-10-21T11:38:26",
+        "第1页/共4页",
+        "身份标识",
+        "注册资本及主要出资人信息",
         "信息概要",
-        "已完成业务笔数 3",
-        "中国人民银行征信中心",
+        "法定代表人/非法人组织负责",
+    };
+
+    /// <summary>宏亚电子厂 scan — the company value lands 3 lines BELOW its label.</summary>
+    private static readonly string[] HongyaLines =
+    {
+        "征信中心",
+        "N0.2026101915594786089488",
+        "企业信用报告",
+        "(自主查询版)",
+        "企业名称:",
+        "中征码:",
+        "统一社会信用代码:92450921MADMU4QN9E",
+        "容县宏亚电子厂(个体工商户)",
+        "查询机构;",
+        "中国人民银行玉林市分行",
+        "身份标识",
+        "企业名称",
+        "容县宏亚电子厂(个体工商户)",
+        "实际控制人",
+        "农亚红",
+        "信息概要",
     };
 
     [Fact]
@@ -480,31 +516,22 @@ public class EnterpriseCreditReportNamingTests
     {
         Assert.Equal(
             "enterprise-credit-report",
-            DocumentClassifier.Classify(string.Join("\n", EnterpriseReportLines))?.TypeId);
+            DocumentClassifier.Classify(string.Join("\n", WanhautongLines))?.TypeId);
+        Assert.Equal(
+            "enterprise-credit-report",
+            DocumentClassifier.Classify(string.Join("\n", HongyaLines))?.TypeId);
     }
 
     [Fact]
-    public void Enterprise_report_is_named_from_the_full_company_value()
+    public void Enterprise_report_names_to_the_placeholder_even_when_a_person_name_appears()
     {
-        // 15 chars plus brackets — every character a person-name shape would truncate to 玉林市
-        // or reject. The whole labelled value must survive into the suggested stem.
-        var result = SmartNamingService.TryBuildName(EnterpriseReportLines);
-        Assert.NotNull(result);
-        Assert.Equal("玉林市玉州区草蛮养生馆（个体工商户）企业征信", result.SuggestedStem);
-    }
+        // Hongya's OCR DOES contain 农亚红 — the placeholder stands anyway: a name floating
+        // in a table without its label is not provably the filing person, and a wrong name is
+        // worse than an obvious「谁」the user renames by hand.
+        var wanhua = SmartNamingService.TryBuildName(WanhautongLines);
+        var hongya = SmartNamingService.TryBuildName(HongyaLines);
 
-    [Fact]
-    public void Company_name_run_together_with_the_next_field_is_cut_cleanly()
-    {
-        var lines = new[]
-        {
-            "企业信用报告",
-            "企业名称 广西玉林三和商贸有限公司法定代表人李小明",
-            "统一社会信用代码 91450900MA12345678",
-        };
-
-        var result = SmartNamingService.TryBuildName(lines);
-        Assert.NotNull(result);
-        Assert.Equal("广西玉林三和商贸有限公司企业征信", result.SuggestedStem);
+        Assert.Equal("谁的企业征信", wanhua?.SuggestedStem);
+        Assert.Equal("谁的企业征信", hongya?.SuggestedStem);
     }
 }

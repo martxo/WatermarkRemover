@@ -69,7 +69,10 @@ public class RecognitionReportBuilderTests
         Assert.Equal("business-license", cls.TypeId);
         Assert.Equal("执照", cls.TypeShortName);
         Assert.Equal(12, cls.Score);
-        Assert.Equal(0, cls.RunnerUp);
+        // 统一社会信用代码 is a real enterprise-credit-report anchor too (weight 2), so the
+        // license fixture lights it up as runner-up. Classification is margin-driven (12 vs 2)
+        // — the runner-up is recorded for the training corpus, not a failure condition.
+        Assert.Equal(2, cls.RunnerUp);
 
         FieldObservation field = report.Fields.Single(f => f.Label == "经营者");
         Assert.Equal("林孝明", field.Value);

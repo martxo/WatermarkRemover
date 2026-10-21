@@ -51,6 +51,15 @@ public static class SmartNamingService
             return null;
         }
 
+        if (profile.PlaceholderName is { } placeholder)
+        {
+            // Placeholder naming: this type's subject (a person) is not reliably extractable,
+            // so skip every strategy and hand the user an obvious stem to rename by hand.
+            var placeholderResult = AutoNameResult.Create(placeholder, profile.TypeShortName);
+            trace?.Invoke($"命名：类型={profile.TypeShortName} 按占位命名 → {placeholderResult.SuggestedStem}（待人工改名）", null);
+            return placeholderResult;
+        }
+
         if (profile.NameStrategy == NameExtractionStrategy.FixedRegion)
         {
             // Fixed-layout type: the name is read geometrically from the page image (the

@@ -59,6 +59,15 @@ public sealed class DocumentProfile
     public required IReadOnlyList<ProfileAnchor> Anchors { get; init; }
 
     /// <summary>
+    /// Fixed person-part to name the file with, bypassing all extraction, e.g.「谁的」with
+    /// TypeShortName 企业征信 yields stem 谁的企业征信. For types whose subject is a PERSON the
+    /// OCR cannot reliably find (the enterprise credit report names its subject in table cells
+    /// that may sit on an unscanned page), so the file gets an obviously-placeholder stem the
+    /// user renames by hand instead of a confidently wrong guess.
+    /// </summary>
+    public string? PlaceholderName { get; init; }
+
+    /// <summary>
     /// Labels that introduce the person's name, longest first (e.g. 法定代表人, 经营者, 户主).
     /// The extractor tolerates OCR truncation of these labels.
     /// </summary>

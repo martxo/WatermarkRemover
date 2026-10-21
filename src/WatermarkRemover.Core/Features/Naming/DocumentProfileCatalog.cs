@@ -98,10 +98,12 @@ public static class DocumentProfileCatalog
             NameStrategy = NameExtractionStrategy.FixedRegion,
         },
 
-        // 企业信用报告：人行征信中心出品的企业版。个人版锚词「个人信用报告/被查询者姓名」
-        // 不出现，靠「企业信用报告/企业名称」区分——否则「征信中心/信息概要/报告编号」这些
-        // 两版共有的词会把它误分类成个人版，再被个人版的固定区域定位拖进死路。命名主体是
-        // 企业名称（长名，含括号/字母数字），走 CompanyLabel 整值提取。
+        // 企业信用报告：人行征信中心出品的企业版。锚点按两份真实扫描件（2026-10 万花筒广告/
+        // 宏亚电子厂）校准：「企业信用报告/(自主查询版)/中征码/身份标识/统一社会信用代码」
+        // 是企业版独有——个人版只凑出「征信中心/信息概要/查询机构」的零头，两版互不错分。
+        // 报告主体是自然人（业务按人归档），但人名坐在表格单元格里、还常落在没扫到的页上
+        // （实测两份一份没出人名、一份人名与标签相隔十余行），提取必错——按占位命名
+        // 「谁的企业征信」，人工改。
         new DocumentProfile
         {
             TypeId = "enterprise-credit-report",
@@ -109,15 +111,17 @@ public static class DocumentProfileCatalog
             Anchors = new[]
             {
                 new ProfileAnchor(@"企业信用报告", 5),
+                new ProfileAnchor(@"自主查询版", 3),
+                new ProfileAnchor(@"中征码", 3),
                 new ProfileAnchor(@"企业名称", 4),
-                new ProfileAnchor(@"机构信用代码", 2),
+                new ProfileAnchor(@"统一社会信用代码", 2),
+                new ProfileAnchor(@"身份标识", 2),
                 new ProfileAnchor(@"信息概要", 2),
-                new ProfileAnchor(@"报告编号", 1),
-                // 两版共有：轻权重，仅凑分，永远不该单独决定分类。
+                // 个人/企业版共有：轻权重，仅凑分，永远不该单独决定分类。
                 new ProfileAnchor(@"征信中心", 1),
             },
-            NameLabels = new[] { "企业名称" },
-            NameStrategy = NameExtractionStrategy.CompanyLabel,
+            NameLabels = Array.Empty<string>(), // 占位命名，不做任何提取
+            PlaceholderName = "谁的",
         },
     };
 }
