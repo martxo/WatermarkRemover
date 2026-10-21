@@ -17,11 +17,13 @@ $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $runsDir = Join-Path $tests 'bin\runs'
 New-Item -ItemType Directory -Force -Path $runsDir | Out-Null
 
-# Sweep run dirs older than 2 days; a dir still locked by a frozen testhost just fails
-# the delete silently — it cannot collide with anything anyway (timestamps are unique).
-Get-ChildItem $runsDir -Directory -ErrorAction SilentlyContinue |
-    Where-Object { $_.CreationTime -lt (Get-Date).AddDays(-2) } |
-    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+# Sweep run dirs: keep the newest 3, delete the rest. A dir still locked by a frozen
+# (unkillable kernel-zombie) testhost just fails the delete silently — it cannot collide
+# with anything anyway (timestamps are unique); it vanishes after the next machine reboot.
+$runDirs = Get-ChildItem $runsDir -Directory -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -ne 'trx' } |
+    Sort-Object Name -Descending
+$runDirs | Select-Object -Skip 3 | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 
 $out = Join-Path $env:TEMP "wm-tests-$stamp-out.log"
 $err = Join-Path $env:TEMP "wm-tests-$stamp-err.log"
@@ -52,6 +54,12 @@ if (-not (Test-Path $trx))
     exit 1
 }
 $trxText = Get-Content $trx -Raw
+# Disk visibility: how much the run dirs hold after this pass (and how many are
+# locked by kernel zombies — those clear on the next reboot).
+$leftDirs = Get-ChildItem $runsDir -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -ne 'trx' }
+$runsMb = [int] (($leftDirs | Get-ChildItem -Recurse -File -ErrorAction SilentlyContinue |
+    Measure-Object Length -Sum).Sum / 1MB)
+Write-Output ("run dirs: {0} ({1} MB under bin\runs)" -f @($leftDirs).Count, $runsMb)
 if ($trxText -match 'outcome="Passed"' -and $trxText -notmatch 'failed="[1-9]"') { exit 0 }
 Write-Output 'TRX SAYS NOT PASSED'
 exit 1
