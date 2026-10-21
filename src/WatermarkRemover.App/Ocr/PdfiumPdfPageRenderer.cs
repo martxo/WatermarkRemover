@@ -32,11 +32,20 @@ public sealed class PdfiumPdfPageRenderer : IPdfPageRenderer
     /// <summary>White background for transparent page areas — OCR must see black text on white.</summary>
     private static readonly IImageBytesConverter WhiteBackground = new NaiveTransparencyRemover(255, 255, 255);
 
+    /// <summary>
+    /// Docnet's <see cref="DocLib"/> instance is a process-wide singleton and NOT thread-safe:
+    /// overlapping readers (one scan's naming chain still rendering while the next scan's starts)
+    /// make pdfium cross pages — scan B rendered scan A's pixels, OCR'd A's content and inherited
+    /// A's content-based name. Every pdfium touch (open → render → dispose) serialises here.
+    /// </summary>
+    private static readonly SemaphoreSlim PdfiumGate = new(1, 1);
+
     public Task<IReadOnlyList<byte[]>> RenderPagesAsync(string pdfPath, int dpi)
     {
         ValidateDpi(dpi);
         return Task.Run<IReadOnlyList<byte[]>>(() =>
         {
+            PdfiumGate.Wait();
             try
             {
                 using IDocReader reader = Open(pdfPath, dpi);
@@ -49,6 +58,10 @@ public sealed class PdfiumPdfPageRenderer : IPdfPageRenderer
             {
                 throw Wrap(pdfPath, ex);
             }
+            finally
+            {
+                PdfiumGate.Release();
+            }
         });
     }
 
@@ -57,6 +70,7 @@ public sealed class PdfiumPdfPageRenderer : IPdfPageRenderer
         ValidateDpi(dpi);
         return Task.Run(() =>
         {
+            PdfiumGate.Wait();
             try
             {
                 using IDocReader reader = Open(pdfPath, dpi);
@@ -68,6 +82,10 @@ public sealed class PdfiumPdfPageRenderer : IPdfPageRenderer
             {
                 throw Wrap(pdfPath, ex);
             }
+            finally
+            {
+                PdfiumGate.Release();
+            }
         });
     }
 
@@ -75,6 +93,7 @@ public sealed class PdfiumPdfPageRenderer : IPdfPageRenderer
     {
         return Task.Run(() =>
         {
+            PdfiumGate.Wait();
             try
             {
                 using IDocReader reader = Open(pdfPath, MetadataDpi);
@@ -84,6 +103,10 @@ public sealed class PdfiumPdfPageRenderer : IPdfPageRenderer
             {
                 throw Wrap(pdfPath, ex);
             }
+            finally
+            {
+                PdfiumGate.Release();
+            }
         });
     }
 
@@ -92,6 +115,7 @@ public sealed class PdfiumPdfPageRenderer : IPdfPageRenderer
         ValidateDpi(dpi);
         return Task.Run(() =>
         {
+            PdfiumGate.Wait();
             try
             {
                 using IDocReader reader = Open(pdfPath, dpi);
@@ -104,6 +128,10 @@ public sealed class PdfiumPdfPageRenderer : IPdfPageRenderer
             catch (Exception ex) when (ex is not OperationCanceledException and not ArgumentOutOfRangeException)
             {
                 throw Wrap(pdfPath, ex);
+            }
+            finally
+            {
+                PdfiumGate.Release();
             }
         });
     }

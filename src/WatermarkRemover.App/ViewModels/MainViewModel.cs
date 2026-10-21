@@ -16,6 +16,7 @@ using WatermarkRemover.Core.Features.Naming;
 using WatermarkRemover.Core.Features.Netdisk;
 using WatermarkRemover.Core.Features.Ocr;
 using WatermarkRemover.Core.Features.Scan;
+using WatermarkRemover.Core.Features.Transfer;
 using WatermarkRemover.Core.Netdisk;
 using WatermarkRemover.Core.Settings;
 using WatermarkRemover.Core.Watermarks;
@@ -66,6 +67,7 @@ public sealed class MainViewModel : ObservableObject
             trace: AppLog.Trace),
         new OcrFeature(SharedPdfRenderer, SharedOcrEngine, trace: AppLog.Trace),
         new NetdiskFeature(),
+        new LanTransferFeature(),
     });
 
     private IFeature _selectedFeature;
@@ -127,6 +129,13 @@ public sealed class MainViewModel : ObservableObject
         OpenNetdiskCommand = new RelayCommand(OpenNetdisk);
         QuickUploadCommand = new RelayCommand(() => _ = QuickUploadAsync(), () => !IsBusy);
         RefreshNetdiskSummary();
+
+        // --- 手机传文件 ---
+        // The LAN receiver lives as long as the app; landed files become finished job rows in
+        // the 手机传文件 section (rename / chips / delete / open-folder all work unchanged).
+        Transfer = new TransferPanelViewModel(Settings, _shell, message => AppLog.Trace(message, null));
+        Transfer.FileReceived += OnTransferFileReceived;
+        Transfer.ShareDocumentReceived += OnTransferShareDocumentReceived;
     }
 
     /// <summary>Logs the resolved engine (and every skipped link) once per process and returns
@@ -190,6 +199,7 @@ public sealed class MainViewModel : ObservableObject
         "ocr.text" => "\uE7C3",        // Page
         "scan.page" => "\uE7F4",       // Camera
         "netdisk.page" => "\uE753",   // Cloud
+        "transfer.page" => "\uE8EA",  // CellPhone
         _ => "\uE7C3",
     };
 
@@ -201,6 +211,7 @@ public sealed class MainViewModel : ObservableObject
         "watermark.badge" => "拖入 PDF → 去水印 · 智能命名 · 页面管理",
         "ocr.text" => "拖入 PDF → 逐页识别文字 → 生成同名 txt",
         "netdisk.page" => "网盘账号管理 · 上传下载 · 快捷传",
+        "transfer.page" => "手机扫码 → 浏览器选文件 → 传到电脑",
         _ => string.Empty,
     };
 
@@ -369,7 +380,9 @@ public sealed class MainViewModel : ObservableObject
     public string StatusText => IsBusy
         ? $"处理中… 已完成 {CompletedCount}/{VisibleJobCount}"
         : VisibleJobCount == 0
-            ? $"拖入 PDF 文件即可开始「{SelectedFeature.DisplayName}」"
+            ? SelectedFeature.Id == "transfer.page"
+                ? "手机扫码上传后，接收的文件会显示在这里"
+                : $"拖入 PDF 文件即可开始「{SelectedFeature.DisplayName}」"
             : $"已完成 {CompletedCount} 个文件";
 
     /// <summary>Section switch: swap the view filter without rebuilding the underlying data.</summary>
@@ -855,7 +868,10 @@ public sealed class MainViewModel : ObservableObject
 
     /// <summary>
     /// Renames the generated output file on disk. Name rules come from <see cref="OutputNameEditor"/>;
-    /// a name collision is resolved by counting up, never by overwriting.
+    /// a name collision is resolved by counting up, never by overwriting. The move itself retries
+    /// through short IO backoff: the background naming chain holds the file open in milliseconds-wide
+    /// pdfium render passes while it OCRs, and a move landing inside one used to fail outright —
+    /// the "界面重命名不行" report.
     /// </summary>
     private void RenameJob(FileJobViewModel job, string desiredName)
     {
@@ -867,12 +883,32 @@ public sealed class MainViewModel : ObservableObject
             return;
 
         string directory = Path.GetDirectoryName(job.OutputPath)!;
+        _ = RenameJobCoreAsync(job, directory, newName);
+    }
+
+    private async Task RenameJobCoreAsync(FileJobViewModel job, string directory, string newName)
+    {
         try
         {
             string target = OutputNameGenerator.FindAvailablePath(directory, newName);
-            File.Move(job.OutputPath, target);
+            string currentPath = job.OutputPath!;
+            for (int attempt = 1; ; attempt++)
+            {
+                try
+                {
+                    File.Move(currentPath, target);
+                    break;
+                }
+                catch (IOException) when (attempt < 3)
+                {
+                    // Configured as a throwaway: rebuild from the job's live path each pass —
+                    // the background naming chain may have moved it meanwhile.
+                    currentPath = job.OutputPath ?? currentPath;
+                    await Task.Delay(attempt * 400).ConfigureAwait(true);
+                }
+            }
 
-            AppLog.Info($"重命名输出文件：{currentName} → {Path.GetFileName(target)}");
+            AppLog.Info($"重命名输出文件：{Path.GetFileName(job.OutputPath)} → {Path.GetFileName(target)}");
             job.UpdateRenamed(target);
         }
         catch (Exception ex)
@@ -977,6 +1013,64 @@ public sealed class MainViewModel : ObservableObject
         if (!_shell.TryOpenDirectory(directory, out string? error))
             _dialogs.Info($"无法打开输出目录：{error}", "提示");
     }
+
+    // --- 手机传文件 ---------------------------------------------------
+
+    /// <summary>The 手机传文件 page's state (start/stop, QR, receive tally); wired to the shell.</summary>
+    public TransferPanelViewModel Transfer { get; }
+
+    /// <summary>Socket thread → UI thread: each landed phone file becomes a finished record in
+    /// the 手机传文件 section, so rename, suffix chips, delete and open-folder all work unchanged.</summary>
+    private void OnTransferFileReceived(string path, long bytes)
+    {
+        var dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher is null) return;
+        if (dispatcher.CheckAccess()) AddTransferJob(path, bytes);
+        else dispatcher.Invoke(() => AddTransferJob(path, bytes));
+    }
+
+    private void AddTransferJob(string path, long bytes)
+    {
+        string size = bytes switch
+        {
+            >= 1L << 30 => $"{bytes / 1073741824.0:F2} GB",
+            >= 1L << 20 => $"{bytes / 1048576.0:F1} MB",
+                _ => $"{Math.Max(1, bytes / 1024)} KB",
+        };
+        var job = new FileJobViewModel(path, Settings.QuickSuffixes)
+        {
+            OwnerFeatureId = "transfer.page",
+        };
+        job.RenameRequested += OnJobRenameRequested;
+        job.SuffixToggleRequested += OnJobSuffixToggleRequested;
+        job.Apply(FeatureResult.Success(path, path, $"来自手机 · {size}", 1));
+        Jobs.Add(job);
+        MoveToTop(job);
+        OnPropertyChanged(nameof(VisibleJobCount));
+        OnPropertyChanged(nameof(StatusText));
+    }
+
+    /// <summary>Worker thread → UI thread: the PDF assembled from a CamScanner share link runs
+    /// through the same content-based auto-naming as scans (「扫描全能王 2026-9-30 14.36.pdf」
+    /// becomes 「客户姓名+文件类型.pdf」 when a page is confidently recognised; any failure keeps
+    /// the timestamp name), then joins the job list as a finished record.</summary>
+    private void OnTransferShareDocumentReceived(string path)
+    {
+        var dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher is null) return;
+        _ = dispatcher.InvokeAsync(() => AddTransferJobFromLinkAsync(path));
+    }
+
+    private async Task AddTransferJobFromLinkAsync(string path)
+    {
+        string finalPath = await TryRenameScanByContentAsync(path).ConfigureAwait(true);
+        long bytes = 0;
+        try { bytes = new FileInfo(finalPath).Length; } catch { /* best effort — size display only */ }
+        AddTransferJob(finalPath, bytes);
+    }
+
+    /// <summary>Stops the LAN receiver; the window calls this on close so the port frees at once.</summary>
+    public void Shutdown() => Transfer.Stop();
 
     // --- 网盘 ---------------------------------------------------------
 

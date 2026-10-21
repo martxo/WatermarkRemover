@@ -60,6 +60,25 @@ public static class SmartNamingService
             return null;
         }
 
+        if (profile.NameStrategy == NameExtractionStrategy.CompanyLabel)
+        {
+            // Organisation naming: the value after the name label is a long company name the
+            // person-name shapes would truncate — take the whole labelled value instead. A
+            // private-account customer is still a 2-4 char person, which the whole-value pass
+            // rejects as too short, so the person shapes run as the fallback.
+            string? company = NameExtractor.ExtractCompany(ocrLines, profile)
+                ?? NameExtractor.Extract(ocrLines, profile);
+            if (company is null)
+            {
+                trace?.Invoke($"命名：企业名提取失败（类型={profile.TypeShortName}），跳过自动命名", null);
+                return null;
+            }
+
+            var companyResult = AutoNameResult.Create(company, profile.TypeShortName);
+            trace?.Invoke($"命名：自动命名成功 → {companyResult.SuggestedStem}", null);
+            return companyResult;
+        }
+
         string? personName = NameExtractor.Extract(ocrLines, profile);
         if (personName is null)
         {

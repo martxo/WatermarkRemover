@@ -1,4 +1,4 @@
-﻿using System.Collections.ObjectModel;
+using System.Collections.ObjectModel;
 using System.IO;
 using System.Windows;
 using WatermarkRemover.App.Layout;
@@ -390,6 +390,7 @@ public sealed class SettingsViewModel : ObservableObject
         _target.PreferredLayoutStage = Settings.PreferredLayoutStage;
         _target.ScanColor = Settings.ScanColor;
         _target.ScanOutputDirectory = Settings.ScanOutputDirectory?.Trim() ?? string.Empty;
+        _target.TransferOutputDirectory = Settings.TransferOutputDirectory?.Trim() ?? string.Empty;
     }
 
     private void AddSuffix(object? parameter)

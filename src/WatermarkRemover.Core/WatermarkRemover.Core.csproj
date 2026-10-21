@@ -1,9 +1,14 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Transfer feature internals (multipart helpers) are exercised directly by the test suite. -->
+    <InternalsVisibleTo Include="WatermarkRemover.Tests" />
+  </ItemGroup>
 
 </Project>

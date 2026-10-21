@@ -95,6 +95,21 @@ public partial class SettingsPage : UserControl
     /// <summary>Scan output directory: empty = save to the Pictures folder (the default).</summary>
     private void OnResetScanDirectory(object sender, RoutedEventArgs e) => ScanDirBox.Text = string.Empty;
 
+    private void OnBrowseTransferDirectory(object sender, RoutedEventArgs e)
+    {
+        var dialog = new OpenFolderDialog { Title = "选择手机传文件保存目录" };
+
+        if (!string.IsNullOrWhiteSpace(TransferDirBox.Text) && Directory.Exists(TransferDirBox.Text))
+            dialog.InitialDirectory = TransferDirBox.Text;
+
+        if (Window.GetWindow(this) is not { } window || dialog.ShowDialog(window) != true) return;
+
+        TransferDirBox.Text = dialog.FolderName;
+    }
+
+    /// <summary>Phone-transfer directory: empty = the Desktop 「手机传文件」 folder (the default).</summary>
+    private void OnResetTransferDirectory(object sender, RoutedEventArgs e) => TransferDirBox.Text = string.Empty;
+
     /// <summary>Enter in the new-suffix box: replace the selection or add a new suffix.</summary>
     private void OnSuffixBoxKeyDown(object sender, KeyEventArgs e)
     {

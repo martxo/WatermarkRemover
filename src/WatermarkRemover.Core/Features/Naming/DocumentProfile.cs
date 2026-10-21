@@ -33,6 +33,14 @@ public enum NameExtractionStrategy
     /// sheets scramble.
     /// </summary>
     FixedRegion,
+
+    /// <summary>
+    /// The named party is an organisation, not a person: the value after the name label is a
+    /// long company name (10+ chars, brackets, digits) that the 2-4 char person-name shapes
+    /// would truncate or reject. The whole labelled value is taken verbatim instead (e.g.
+    /// 企业信用报告's「企业名称」, a bank statement's corporate 客户名称).
+    /// </summary>
+    CompanyLabel,
 }
 
 /// <summary>

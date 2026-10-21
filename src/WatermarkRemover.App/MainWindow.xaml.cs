@@ -143,6 +143,16 @@ public partial class MainWindow : Window
         _ = DwmSetWindowAttribute(hwnd, DwmwaWindowCornerPreference, ref preference, sizeof(int));
     }
 
+    /// <summary>
+    /// Stops background services (the LAN receiver frees its port immediately) before the
+    /// process exits.
+    /// </summary>
+    protected override void OnClosed(EventArgs e)
+    {
+        _viewModel.Shutdown();
+        base.OnClosed(e);
+    }
+
     private void SyncListVisibility()
     {
         // Per-section visibility: a full scan history must not hide 去水印's empty state.

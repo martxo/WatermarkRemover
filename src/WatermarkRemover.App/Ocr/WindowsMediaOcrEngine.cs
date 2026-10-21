@@ -17,6 +17,11 @@ public sealed class WindowsMediaOcrEngine : IOcrEngine, IBoundedOcrEngine
 {
     private readonly OcrEngine? _engine;
 
+    /// <summary>WinRT's OcrEngine is not documented as thread-safe and concurrent RecognizeAsync
+    /// calls do misbehave — the same cross-talk class of bug as the pdfium renderer. The other
+    /// engines in the chain gate their native calls; this one serialises the same way.</summary>
+    private readonly SemaphoreSlim _gate = new(1, 1);
+
     public WindowsMediaOcrEngine() => _engine = TryCreateEngine();
 
     public string DisplayName => "Windows原生OCR";
@@ -46,20 +51,28 @@ public sealed class WindowsMediaOcrEngine : IOcrEngine, IBoundedOcrEngine
         if (_engine is null)
             throw new InvalidOperationException("此系统没有可用的 OCR 语言包，请在 Windows 设置中添加中文语言。");
 
-        using var stream = new InMemoryRandomAccessStream();
-        using (var writer = new DataWriter(stream))
+        await _gate.WaitAsync().ConfigureAwait(false);
+        try
         {
-            writer.WriteBytes(imageBytes);
-            await writer.StoreAsync();
-            await writer.FlushAsync();
-            writer.DetachStream();
-        }
+            using var stream = new InMemoryRandomAccessStream();
+            using (var writer = new DataWriter(stream))
+            {
+                writer.WriteBytes(imageBytes);
+                await writer.StoreAsync();
+                await writer.FlushAsync();
+                writer.DetachStream();
+            }
 
-        var decoder = await BitmapDecoder.CreateAsync(stream);
-        using var bitmap = await decoder.GetSoftwareBitmapAsync(
-            BitmapPixelFormat.Bgra8, BitmapAlphaMode.Premultiplied);
-        OcrResult result = await _engine.RecognizeAsync(bitmap);
-        return (result, (int)decoder.PixelWidth, (int)decoder.PixelHeight);
+            var decoder = await BitmapDecoder.CreateAsync(stream);
+            using var bitmap = await decoder.GetSoftwareBitmapAsync(
+                BitmapPixelFormat.Bgra8, BitmapAlphaMode.Premultiplied);
+            OcrResult result = await _engine.RecognizeAsync(bitmap);
+            return (result, (int)decoder.PixelWidth, (int)decoder.PixelHeight);
+        }
+        finally
+        {
+            _gate.Release();
+        }
     }
 
     private static RectD? LineBounds(OcrLine line, int width, int height)

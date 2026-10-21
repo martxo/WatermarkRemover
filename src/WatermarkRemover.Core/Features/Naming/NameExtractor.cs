@@ -164,6 +164,94 @@ public static class NameExtractor
     /// <summary>Calendar/page-number characters a person's name is never made of.</summary>
     private static readonly char[] PageFurnitureChars = "年月日共页号第时".ToCharArray();
 
+    /// <summary>
+    /// Characters a company name may legitimately contain beyond CJK: latin letters and digits
+    /// (中外合资、3D打印), full/half-width brackets, middle dots and dashes. Everything else in
+    /// a captured value is OCR noise or punctuation debris.
+    /// </summary>
+    private static bool IsCompanyNameChar(char c) =>
+        c is >= (char)0x4E00 and <= (char)0x9FFF // CJK
+            or >= 'a' and <= 'z'
+            or >= 'A' and <= 'Z'
+            or >= '0' and <= '9'
+            or '（' or '）' or '(' or ')' or '·' or '-' or '－' or '—';
+
+    /// <summary>
+    /// Field labels long and specific enough to mark where a company name ends when OCR runs
+    /// the next row onto the same line. Deliberately NOT the short generic FieldWords — an
+    /// 「信用合作社」 would be shredded by them.
+    /// </summary>
+    private static readonly string[] CompanyTailWords =
+    {
+        "统一社会信用代码", "机构信用代码", "法定代表人", "注册地址", "成立日期",
+        "登记机关", "注册号", "报告编号", "经营场所", "经营范围", "注册日期", "住所",
+    };
+
+    /// <summary>
+    /// Extracts the whole value after an organisation-name label (CompanyLabel strategy).
+    /// Company names are long and routinely contain digits/brackets that the person-name
+    /// shapes truncate or reject, so the labelled value is read verbatim: the rest of the
+    /// label's line, or the next non-empty line when the label stands alone. A trailing run-on
+    /// field label is stripped, filesystem-hostile characters are dropped, and implausible
+    /// values (too short/long, no CJK at all) return null so the timestamp name survives.
+    /// </summary>
+    public static string? ExtractCompany(IReadOnlyList<string> lines, DocumentProfile profile)
+    {
+        foreach (string label in profile.NameLabels)
+        {
+            for (int i = 0; i < lines.Count; i++)
+            {
+                int at = lines[i].IndexOf(label, StringComparison.Ordinal);
+                if (at < 0) continue;
+
+                string rest = lines[i][(at + label.Length)..].Trim();
+                if (rest.Length == 0)
+                {
+                    // Label alone on its line — the value sits on the next non-empty line.
+                    for (int j = i + 1; j < lines.Count; j++)
+                    {
+                        string next = lines[j].Trim();
+                        if (next.Length == 0) continue;
+                        rest = next;
+                        break;
+                    }
+                }
+
+                string? name = CleanCompanyValue(rest);
+                if (name is not null) return name;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>Normalises one captured company-name candidate, or rejects it.</summary>
+    private static string? CleanCompanyValue(string raw)
+    {
+        string value = raw.Trim();
+
+        // Cut at the first run-on field label ("XX公司法定代表人张三").
+        int end = value.Length;
+        foreach (string word in CompanyTailWords)
+        {
+            int at = value.IndexOf(word, StringComparison.Ordinal);
+            if (at > 0 && at < end) end = at;
+        }
+        value = value[..end];
+
+        // Drop anything that is not name material (spaces, colons, OCR punctuation debris).
+        // Brackets are NOT trimmed from the edges — a trailing （个体工商户） is part of the
+        // registered name — only dash/dot decoration is.
+        var kept = value.Where(IsCompanyNameChar).ToArray();
+        value = new string(kept).Trim('-', '－', '—', '·');
+
+        // A real organisation name: CJK present, bounded length. Pure digits/letters or a
+        // shredded fragment means the label was misread — keep the timestamp name instead.
+        if (value.Length is < 4 or > 40) return null;
+        if (!value.Any(c => c is >= (char)0x4E00 and <= (char)0x9FFF)) return null;
+        return value;
+    }
+
     private static bool MatchesAt(string text, int index, string word) =>
         index + word.Length <= text.Length &&
         string.CompareOrdinal(text, index, word, 0, word.Length) == 0;

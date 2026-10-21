@@ -446,11 +446,41 @@
                                             Style="{StaticResource SmallButton}"
                                             Click="OnBrowseScanDirectory"/>
                                     <Button Grid.Column="2" Content="恢复默认"
+                                        Margin="8,0,0,0"
+                                        VerticalAlignment="Center"
+                                        Style="{StaticResource SmallButton}"
+                                        ToolTip="清空目录，恢复保存到图片文件夹"
+                                        Click="OnResetScanDirectory"/>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+
+                        <TextBlock Text="手机传文件" Style="{StaticResource SectionTitle}" Margin="0,16,0,8"/>
+                        <Border Style="{StaticResource InsetCard}">
+                            <StackPanel>
+                                <TextBlock Text="手机上传的文件和链接自动转出的 PDF 保存到这里；留空则保存到桌面的「手机传文件」文件夹，目录不可用时自动回退。改动随「返回应用」保存生效，下次开始接收时启用新目录。"
+                                           Style="{StaticResource RowCaption}"
+                                           Margin="0,0,0,10"/>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBox x:Name="TransferDirBox" Grid.Column="0"
+                                             Style="{StaticResource InputBox}"
+                                             Text="{Binding Settings.TransferOutputDirectory, UpdateSourceTrigger=PropertyChanged, TargetNullValue=''}"/>
+                                    <Button Grid.Column="1" Content="浏览…"
                                             Margin="8,0,0,0"
                                             VerticalAlignment="Center"
                                             Style="{StaticResource SmallButton}"
-                                            ToolTip="清空目录，恢复保存到图片文件夹"
-                                            Click="OnResetScanDirectory"/>
+                                            Click="OnBrowseTransferDirectory"/>
+                                    <Button Grid.Column="2" Content="恢复默认"
+                                            Margin="8,0,0,0"
+                                            VerticalAlignment="Center"
+                                            Style="{StaticResource SmallButton}"
+                                            ToolTip="清空目录，恢复保存到桌面的「手机传文件」文件夹"
+                                            Click="OnResetTransferDirectory"/>
                                 </Grid>
                             </StackPanel>
                         </Border>

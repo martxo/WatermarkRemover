@@ -58,6 +58,8 @@ public static class DocumentProfileCatalog
         },
 
         // 银行流水：账户交易明细单。客户名称可能是个人或企业名（对公账户），均作为命名主体。
+        // 企业户名超长且带字母数字——person-name shapes truncate them, so the whole labelled
+        // value is taken (CompanyLabel handles both a 3-char person and a 20-char company).
         new DocumentProfile
         {
             TypeId = "bank-statement",
@@ -71,6 +73,7 @@ public static class DocumentProfileCatalog
                 new ProfileAnchor(@"币种", 1),
             },
             NameLabels = new[] { "客户名称" },
+            NameStrategy = NameExtractionStrategy.CompanyLabel,
         },
 
         // 个人信用报告（详细版/本人版）：人行征信中心出品，版式固定——「被查询者姓名」表
@@ -93,6 +96,28 @@ public static class DocumentProfileCatalog
             },
             NameLabels = new[] { "被查询者姓名" },
             NameStrategy = NameExtractionStrategy.FixedRegion,
+        },
+
+        // 企业信用报告：人行征信中心出品的企业版。个人版锚词「个人信用报告/被查询者姓名」
+        // 不出现，靠「企业信用报告/企业名称」区分——否则「征信中心/信息概要/报告编号」这些
+        // 两版共有的词会把它误分类成个人版，再被个人版的固定区域定位拖进死路。命名主体是
+        // 企业名称（长名，含括号/字母数字），走 CompanyLabel 整值提取。
+        new DocumentProfile
+        {
+            TypeId = "enterprise-credit-report",
+            TypeShortName = "企业征信",
+            Anchors = new[]
+            {
+                new ProfileAnchor(@"企业信用报告", 5),
+                new ProfileAnchor(@"企业名称", 4),
+                new ProfileAnchor(@"机构信用代码", 2),
+                new ProfileAnchor(@"信息概要", 2),
+                new ProfileAnchor(@"报告编号", 1),
+                // 两版共有：轻权重，仅凑分，永远不该单独决定分类。
+                new ProfileAnchor(@"征信中心", 1),
+            },
+            NameLabels = new[] { "企业名称" },
+            NameStrategy = NameExtractionStrategy.CompanyLabel,
         },
     };
 }

@@ -80,6 +80,10 @@ public sealed class AppSettings
     /// Independent of the watermark feature's OutputDirectory — scans have no source file.</summary>
     public string ScanOutputDirectory { get; set; } = string.Empty;
 
+    /// <summary>Where phone uploads and share-link PDFs land (手机传文件保存位置). Empty = a
+    /// 「手机传文件」 folder on the Desktop, the pre-setting default.</summary>
+    public string TransferOutputDirectory { get; set; } = string.Empty;
+
     /// <summary>Configured 网盘 accounts (网盘设置); secret values carry the <c>dpapi:</c> prefix
     /// at rest — see <see cref="NetdiskAccountPersistence"/>.</summary>
     public List<PersistedNetdiskAccount> NetdiskAccounts { get; set; } = new();
@@ -101,6 +105,7 @@ public sealed class AppSettings
         ScanDuplex = ScanDuplex,
         ScanColor = ScanColor,
         ScanOutputDirectory = ScanOutputDirectory,
+        TransferOutputDirectory = TransferOutputDirectory,
         NetdiskAccounts = NetdiskAccounts.ToList(),
     };
 }

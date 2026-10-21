@@ -16,6 +16,8 @@
     <PackageReference Include="Docnet.Core" Version="2.6.0" />
     <!-- PP-OCR (PaddleOCR ONNX) recognition for machines without WeChat. -->
     <PackageReference Include="RapidOcrNet" Version="4.2.0" />
+    <!-- QR code for the 手机传文件 page: PngByteQRCode has no System.Drawing dependency. -->
+    <PackageReference Include="QRCoder" Version="1.6.0" />
     <PackageReference Include="SkiaSharp" Version="3.119.1" />
     <!-- Incremental updates (增量推送): vpk-generated delta/full packages on GitHub Releases.
          v1.2.158 was pulled for a severe bug — pin 1.2.161 or newer deliberately. -->
@@ -32,7 +34,7 @@
     <AssemblyName>WatermarkRemover</AssemblyName>
     <RootNamespace>WatermarkRemover.App</RootNamespace>
     <ApplicationIcon Condition="Exists('app.ico')">app.ico</ApplicationIcon>
-    <Version>1.15.34</Version>
+    <Version>1.16.0</Version>
     <AssemblyVersion>$(Version)</AssemblyVersion>
     <FileVersion>$(Version)</FileVersion>
     <Product>Watermark Remover</Product>

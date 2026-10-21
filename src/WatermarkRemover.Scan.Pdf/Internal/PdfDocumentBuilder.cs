@@ -95,6 +95,28 @@ public static class PdfDocumentBuilder
             dpi = FallbackDpi;
         }
 
+        // --- Phase 1: encode every page in parallel ---
+        // Per-page encoding (bilevel detection + G4 pack, or the 高压缩 resize + JPEG encode) is
+        // the CPU-heavy part of a multi-page scan — minutes of wall clock when run serially over
+        // a thick stack of paper. The encoders are thread-safe by construction (every call builds
+        // its own Skia bitmaps / LibTiff writer, RasterImage frames are read-only inputs), so the
+        // fan-out is safe. Capped at 8 workers: each in-flight page holds a ~35 MB raw frame.
+        var encodedPages = new EncodedPage[document.Pages.Count];
+        var parallelism = Math.Min(Environment.ProcessorCount, 8);
+        if (document.Pages.Count > 1 && parallelism > 1)
+        {
+            Parallel.For(0, encodedPages.Length, new ParallelOptions { MaxDegreeOfParallelism = parallelism },
+                index => encodedPages[index] = EncodePage(document.Pages[index], options, encoder, dpi));
+        }
+        else
+        {
+            for (var index = 0; index < encodedPages.Length; index++)
+                encodedPages[index] = EncodePage(document.Pages[index], options, encoder, dpi);
+        }
+
+        // --- Phase 2: assemble the document single-threaded ---
+        // PdfSharp's object graph is not thread-safe, so the assembly just consumes the finished
+        // byte payloads — no pixel work happens here, it only writes dictionaries and streams.
         using var pdf = new PdfDocument();
         pdf.Info.Title = document.BaseName ?? string.Empty;
 
@@ -107,23 +129,17 @@ public static class PdfDocumentBuilder
         for (var index = 0; index < total; index++)
         {
             var source = document.Pages[index];
-            var image = source.Image;
-
-            // Page size derived from the scanned pixels: pt = px * 72 / dpi. Always computed from
-            // the ORIGINAL pixels so the downsampling below never changes the physical page size.
-            var widthPt = PageGeometry.PixelsToPoints(image.Width, dpi);
-            var heightPt = PageGeometry.PixelsToPoints(image.Height, dpi);
+            var encoded = encodedPages[index];
 
             var page = pdf.AddPage();
-            page.Width = XUnit.FromPoint(widthPt);
-            page.Height = XUnit.FromPoint(heightPt);
+            page.Width = XUnit.FromPoint(encoded.WidthPt);
+            page.Height = XUnit.FromPoint(encoded.HeightPt);
 
             // Bilevel frames (engine 黑白 mode) take the official-software route: a raw CCITT G4
-            // image XObject. Lossless, ~10x smaller than JPEG on text, and never downsampled —
-            // which is why the 高压缩 resize below must not run for this branch.
-            if (CcittG4Image.TryEncode(image, out var ccitt))
+            // image XObject, never decoded back to a bitmap in between.
+            if (encoded.Ccitt is { } ccitt)
             {
-                WriteBilevelPage(pdf, page, image.Width, image.Height, widthPt, heightPt, ccitt);
+                WriteBilevelPage(pdf, page, encoded.PixelWidth, encoded.PixelHeight, encoded.WidthPt, encoded.HeightPt, ccitt);
                 if (options.Searchable && source.Words.Count > 0)
                 {
                     // Invisible text under the image: drawn into an earlier content stream, so
@@ -131,52 +147,76 @@ public static class PdfDocumentBuilder
                     using var textGfx = XGraphics.FromPdfPage(page, XGraphicsPdfPageOptions.Prepend);
                     DrawTextLayer(textGfx, source.Words, dpi);
                 }
+            }
+            else
+            {
+                using var gfx = XGraphics.FromPdfPage(page);
 
-                if (options.PageNumbers)
+                // --- searchable text layer, painted BEFORE the image ---
+                // The page bitmap is opaque, so anything drawn after it would be hidden - and would also
+                // hide the text. Drawing the OCR words first (in white) and the image second keeps the
+                // glyphs out of sight on screen and on paper while they still live in the page content
+                // stream: a PDF reader can select, copy and search them.
+                if (options.Searchable && source.Words.Count > 0)
                 {
-                    using var numberGfx = XGraphics.FromPdfPage(page, XGraphicsPdfPageOptions.Append);
-                    DrawPageNumber(numberGfx, index + 1, total, widthPt, heightPt);
+                    DrawTextLayer(gfx, source.Words, dpi);
                 }
 
-                continue;
+                using var stream = new MemoryStream(encoded.Bytes!);
+                using var ximage = XImage.FromStream(stream);
+                gfx.DrawImage(ximage, 0, 0, encoded.WidthPt, encoded.HeightPt);
             }
-
-            if (options.HighCompression)
-            {
-                // 高压缩 PDF: cap the embedded bitmap at HighCompressionDpi; the JPEG below then
-                // streams into the page as DCTDecode, which is where the size win comes from.
-                var maxEdge = (int)Math.Round(Math.Max(widthPt, heightPt) * HighCompressionDpi / 72.0);
-                image = encoder.Resize(image, maxEdge, upscale: false);
-            }
-
-            using var gfx = XGraphics.FromPdfPage(page);
-
-            // --- searchable text layer, painted BEFORE the image ---
-            // The page bitmap is opaque, so anything drawn after it would be hidden - and would also
-            // hide the text. Drawing the OCR words first (in white) and the image second keeps the
-            // glyphs out of sight on screen and on paper while they still live in the page content
-            // stream: a PDF reader can select, copy and search them.
-            if (options.Searchable && source.Words.Count > 0)
-            {
-                DrawTextLayer(gfx, source.Words, dpi);
-            }
-
-            var encoded = options.HighCompression
-                ? encoder.Encode(image, "jpg", HighCompressionJpegQuality)
-                : encoder.Encode(image, "png", 100);
-            using var stream = new MemoryStream(encoded);
-            using var ximage = XImage.FromStream(stream);
-            gfx.DrawImage(ximage, 0, 0, widthPt, heightPt);
 
             if (options.PageNumbers)
             {
-                DrawPageNumber(gfx, index + 1, total, widthPt, heightPt);
+                using var numberGfx = XGraphics.FromPdfPage(page, XGraphicsPdfPageOptions.Append);
+                DrawPageNumber(numberGfx, index + 1, total, encoded.WidthPt, encoded.HeightPt);
             }
         }
 
         using var output = new MemoryStream();
         pdf.Save(output, false);
         return output.ToArray();
+    }
+
+    /// <summary>One page's finished PDF payload: either a raw CCITT G4 fax stream
+    /// (<see cref="Ccitt"/>) or a compressed bitmap (<see cref="Bytes"/>), plus the page
+    /// geometry derived from the ORIGINAL pixels so later work never changes the page size.</summary>
+    private sealed record EncodedPage(
+        byte[]? Bytes,
+        byte[]? Ccitt,
+        int PixelWidth,
+        int PixelHeight,
+        double WidthPt,
+        double HeightPt);
+
+    /// <summary>Everything pixel-related for one page, run on a worker thread: bilevel frames
+    /// take the CCITT G4 route, everything else the 高压缩 resize + JPEG route (or PNG when
+    /// 高压缩 is off). Mirrors the pre-parallelisation per-page logic exactly.</summary>
+    private static EncodedPage EncodePage(ScannedPage source, PdfBuildOptions options, IImageEncoder encoder, double dpi)
+    {
+        var image = source.Image;
+
+        var widthPt = PageGeometry.PixelsToPoints(image.Width, dpi);
+        var heightPt = PageGeometry.PixelsToPoints(image.Height, dpi);
+
+        if (CcittG4Image.TryEncode(image, out var ccitt))
+        {
+            return new EncodedPage(null, ccitt, image.Width, image.Height, widthPt, heightPt);
+        }
+
+        if (options.HighCompression)
+        {
+            // 高压缩 PDF: cap the embedded bitmap at HighCompressionDpi; the JPEG below then
+            // streams into the page as DCTDecode, which is where the size win comes from.
+            var maxEdge = (int)Math.Round(Math.Max(widthPt, heightPt) * HighCompressionDpi / 72.0);
+            image = encoder.Resize(image, maxEdge, upscale: false);
+        }
+
+        var bytes = options.HighCompression
+            ? encoder.Encode(image, "jpg", HighCompressionJpegQuality)
+            : encoder.Encode(image, "png", 100);
+        return new EncodedPage(bytes, null, image.Width, image.Height, widthPt, heightPt);
     }
 
     /// <summary>

@@ -243,6 +243,23 @@ public class CreditReportNamingTests
         Assert.Equal("bank-statement", DocumentClassifier.Classify(string.Join("\n", bankLines))?.TypeId);
     }
 
+    [Fact]
+    public void Bank_statement_with_a_corporate_customer_is_named_from_the_full_value()
+    {
+        var bankLines = new[]
+        {
+            "存款账户明细查询",
+            "客户名称 广西玉林三和商贸有限公司",
+            "卡号/账号 6231330500012349382",
+            "币种 人民币",
+            "交易日期 交易金额 余额",
+        };
+
+        var result = SmartNamingService.TryBuildName(bankLines);
+        Assert.NotNull(result);
+        Assert.Equal("广西玉林三和商贸有限公司流水", result.SuggestedStem);
+    }
+
     /// <summary>Real OCR line order of the 2026-10-19 field scan (landscape, watermark-pressed):
     /// WeChat OCR shredded the header row into per-cell lines and the value cells came back as
     /// garbled address fragments — the subject's name is simply absent from the OCR output.
@@ -433,5 +450,61 @@ public class NameExtractorTests
         var lines = new[] { "营业执照", "登记机关", "月日", "组成形式个人经营" };
 
         Assert.Null(NameExtractor.Extract(lines, License));
+    }
+}
+
+/// <summary>
+/// The enterprise credit report (人民银行征信中心, corporate edition). Its「征信中心 / 信息概要 /
+/// 报告编号」anchors also live on the PERSONAL report, so without its own profile it classified as
+/// credit-report, got dragged into the personal report's「被查询者姓名」fixed-region locator (which
+/// never matches an enterprise report) and could never be named. The subject is an organisation:
+/// a long company name the 2-4 char person shapes truncate — CompanyLabel takes the whole value.
+/// </summary>
+public class EnterpriseCreditReportNamingTests
+{
+    /// <summary>OCR reading order of the report's first page.</summary>
+    private static readonly string[] EnterpriseReportLines =
+    {
+        "企业信用报告",
+        "报告编号:2026102100009876543210 报告时间:2026.10.21 09:12:44",
+        "企业名称 玉林市玉州区草蛮养生馆（个体工商户）",
+        "统一社会信用代码 92450900MA5QH0W491",
+        "机构信用代码 G10104509001234567A",
+        "信息概要",
+        "已完成业务笔数 3",
+        "中国人民银行征信中心",
+    };
+
+    [Fact]
+    public void Enterprise_report_is_classified_as_its_own_type()
+    {
+        Assert.Equal(
+            "enterprise-credit-report",
+            DocumentClassifier.Classify(string.Join("\n", EnterpriseReportLines))?.TypeId);
+    }
+
+    [Fact]
+    public void Enterprise_report_is_named_from_the_full_company_value()
+    {
+        // 15 chars plus brackets — every character a person-name shape would truncate to 玉林市
+        // or reject. The whole labelled value must survive into the suggested stem.
+        var result = SmartNamingService.TryBuildName(EnterpriseReportLines);
+        Assert.NotNull(result);
+        Assert.Equal("玉林市玉州区草蛮养生馆（个体工商户）企业征信", result.SuggestedStem);
+    }
+
+    [Fact]
+    public void Company_name_run_together_with_the_next_field_is_cut_cleanly()
+    {
+        var lines = new[]
+        {
+            "企业信用报告",
+            "企业名称 广西玉林三和商贸有限公司法定代表人李小明",
+            "统一社会信用代码 91450900MA12345678",
+        };
+
+        var result = SmartNamingService.TryBuildName(lines);
+        Assert.NotNull(result);
+        Assert.Equal("广西玉林三和商贸有限公司企业征信", result.SuggestedStem);
     }
 }
