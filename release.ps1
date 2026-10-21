@@ -28,10 +28,12 @@ $Tag = "v$Version"
 # csproj and publishing here makes the whole chain — installer, UI, update feed — agree.
 Write-Host "== 0/4 stamp csproj version $Version + dotnet publish =="
 $Csproj = 'd:\code\src\WatermarkRemover.App\WatermarkRemover.App.csproj'
-$text = Get-Content $Csproj -Raw
+# Explicit UTF-8 via .NET: PS 5.1's Get-Content/Set-Content default to ANSI (GBK), which
+# mangles the file's Chinese comments and swallows quotes — MSB4025 on the next build.
+$text = [IO.File]::ReadAllText($Csproj, [Text.Encoding]::UTF8)
+if ($text -notmatch '<Version>[^<]+</Version>') { throw "version stamp failed — <Version> not found in $Csproj" }
 $stamped = $text -replace '<Version>[^<]+</Version>', "<Version>$Version</Version>"
-if ($stamped -eq $text) { throw "version stamp failed — <Version> not found in $Csproj" }
-Set-Content $Csproj $stamped -NoNewline
+[IO.File]::WriteAllText($Csproj, $stamped, [Text.UTF8Encoding]::new($true))
 & 'C:\Users\dx\.dotnet\dotnet.exe' publish $Csproj -c Release -o d:\code\publish-staging --nologo -v q
 if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed ($LASTEXITCODE)" }
 
