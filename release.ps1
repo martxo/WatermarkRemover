@@ -28,7 +28,11 @@ vpk pack --packId WatermarkRemover --packVersion $Version `
 if ($LASTEXITCODE -ne 0) { throw "vpk pack failed ($LASTEXITCODE)" }
 
 Write-Host "== 2/4 vpk upload github $Tag =="
-$fill = "protocol=https`nhost=github.com`n" | git credential fill
+# git credential fill via a temp file: piping into a native command from a -File child
+# process proved encoding-unreliable (the protocol line could arrive mangled).
+$tmpCredReq = Join-Path $env:TEMP 'credential-request.txt'
+[IO.File]::WriteAllText($tmpCredReq, "protocol=https`nhost=github.com`n")
+$fill = cmd /c "git credential fill < `"$tmpCredReq`" 2>nul"
 $token = ($fill | Select-String '^password=' | Select-Object -First 1)
 if (-not $token) { throw 'no GitHub credential in Windows credential store' }
 vpk upload github --repoUrl "https://github.com/$Repo" --token $token.ToString().Substring(9) `
