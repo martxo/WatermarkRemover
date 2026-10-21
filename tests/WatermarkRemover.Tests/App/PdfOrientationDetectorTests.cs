@@ -12,10 +12,10 @@ public class PdfOrientationDetectorTests
     /// The sideways-naming regression (v1.15.32, 2026-10-21): the watermark (imported PDF)
     /// naming chain rendered the first page and OCR'd it as-is — imported files never pass
     /// through the scan flow's auto-orientation, so a lying-down page read as garbage and
-    /// naming silently kept the timestamp name. The chain now routes the page through an
-    /// injected upright pass built on this detector. Source-level guard: the feature must
-    /// apply the injected orient delegate BEFORE recognition, and the app must wire the
-    /// detector into the watermark registration.
+    /// naming silently kept the timestamp name. The chain now routes starved pages through an
+    /// injected upright pass built on this detector. Source-level guard: the upright pass must
+    /// sit AFTER the first recognition attempt (upright pages must never pay for it) and BEFORE
+    /// the retry recognition, and the app must wire the detector into the watermark registration.
     /// </summary>
     [Fact]
     public void Watermark_naming_orientes_the_page_before_recognising_it()
@@ -25,12 +25,14 @@ public class PdfOrientationDetectorTests
 
         string feature = Read("src", "WatermarkRemover.Core", "Features", "WatermarkFeature.cs");
         Assert.Contains("Func<byte[], Task<byte[]>>? orientPage", feature);
-        // Order matters: the upright pass sits between the render and the OCR call.
+        // Order matters: render → first OCR → orient → retry OCR. An upright page names itself
+        // on the first OCR and never reaches the orient call.
         int render = feature.IndexOf("RenderFirstPageAsync", StringComparison.Ordinal);
+        int firstOcr = feature.IndexOf("RecognizeBoundedOrDefaultAsync", StringComparison.Ordinal);
         int orient = feature.IndexOf("_orientPage(page)", StringComparison.Ordinal);
-        int ocr = feature.IndexOf("RecognizeBoundedOrDefaultAsync", StringComparison.Ordinal);
-        Assert.True(render >= 0 && orient > render && ocr > orient,
-            "WatermarkFeature.TryAutoName must orient the page after rendering and before OCR.");
+        int retryOcr = feature.IndexOf("RecognizeBoundedOrDefaultAsync", firstOcr + 1, StringComparison.Ordinal);
+        Assert.True(render >= 0 && firstOcr > render && orient > firstOcr && retryOcr > orient,
+            "WatermarkFeature.TryAutoName must OCR as-is first, orient only when starved, then OCR again.");
 
         string main = Read("src", "WatermarkRemover.App", "ViewModels", "MainViewModel.cs");
         Assert.Contains("orientPage: image => new PdfOrientationDetector(SharedOcrEngine).OrientAsync(image)", main);

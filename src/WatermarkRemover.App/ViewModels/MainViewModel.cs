@@ -482,7 +482,12 @@ public sealed class MainViewModel : ObservableObject
         {
             // Snapshot once per batch: background threads read this copy, the settings window
             // keeps editing the live object — the two can never interfere.
-            var context = FeatureContext.Capture(Settings);
+            var context = FeatureContext.Capture(Settings, (inputPath, stage) =>
+            {
+                // 工作线程回调：把阶段文案路由到属主行，行内再 marshal 回 UI 线程。
+                jobs.FirstOrDefault(j => string.Equals(j.InputPath, inputPath, StringComparison.OrdinalIgnoreCase))
+                    ?.ReportStage(stage);
+            });
             int maxConcurrency = Math.Clamp(Settings.MaxConcurrency, 1, 8);
 
             await _queue.RunAsync(jobs, feature, context, maxConcurrency, job =>

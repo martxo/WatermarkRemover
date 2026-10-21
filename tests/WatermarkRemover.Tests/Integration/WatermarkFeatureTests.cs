@@ -1,4 +1,6 @@
 using WatermarkRemover.Core.Features;
+using WatermarkRemover.Core.Features.Naming;
+using WatermarkRemover.Core.Features.Ocr;
 using WatermarkRemover.Core.Settings;
 using WatermarkRemover.Core.Watermarks;
 using WatermarkRemover.Pdf;
@@ -23,6 +25,51 @@ public class WatermarkFeatureTests : IDisposable
 
     private WatermarkFeature CreateFeature() =>
         new(new PdfDocumentSource(), new IWatermarkStrategy[] { new BottomRightBadgeStrategy() });
+
+    /// <summary>Naming-enabled feature: stub renderer + stub engine, and an orient delegate that
+    /// counts its calls so the tests can pin the "pay for straightening only when starved"
+    /// contract (v1.15.34: naming used to orient EVERY page, which users read as a slowdown).</summary>
+    private (WatermarkFeature Feature, StubOcrEngine Engine, StubPageRenderer Renderer) CreateNamingFeature(
+        AppSettings? settings = null)
+    {
+        var engine = new StubOcrEngine();
+        var renderer = new StubPageRenderer();
+        var feature = new WatermarkFeature(
+            new PdfDocumentSource(),
+            new IWatermarkStrategy[] { new BottomRightBadgeStrategy() },
+            renderer, engine,
+            orientPage: page =>
+            {
+                renderer.OrientCalls++;
+                return Task.FromResult(page);
+            });
+        return (feature, engine, renderer);
+    }
+
+    private sealed class StubPageRenderer : IPdfPageRenderer
+    {
+        public int OrientCalls { get; set; }
+
+        public Task<IReadOnlyList<byte[]>> RenderPagesAsync(string pdfPath, int dpi) =>
+            Task.FromResult<IReadOnlyList<byte[]>>(new[] { Array.Empty<byte>() });
+
+        public Task<byte[]> RenderFirstPageAsync(string pdfPath, int dpi) => Task.FromResult(Array.Empty<byte>());
+
+        public Task<int> GetPageCountAsync(string pdfPath) => Task.FromResult(1);
+
+        public Task<byte[]> RenderPageAsync(string pdfPath, int pageIndex, int dpi) =>
+            Task.FromResult(Array.Empty<byte>());
+    }
+
+    private sealed class StubOcrEngine : IOcrEngine
+    {
+        public string[] Lines { get; set; } = Array.Empty<string>();
+
+        public string DisplayName => "stub";
+
+        public Task<IReadOnlyList<string>> RecognizeAsync(byte[] imageBytes) =>
+            Task.FromResult<IReadOnlyList<string>>(Lines);
+    }
 
     private string WriteInput(byte[] bytes, string name = "input.pdf")
     {
@@ -73,6 +120,55 @@ public class WatermarkFeatureTests : IDisposable
         Assert.Equal(FeatureStatus.NoChange, result.Status);
         Assert.Null(result.OutputPath);
         Assert.Contains("未检测到水印", result.Summary);
+    }
+
+    [Fact]
+    public void Naming_skips_the_orientation_pass_for_text_rich_pages()
+    {
+        // 4 junk lines: text is plentiful, so a failed classification is a classifier gap —
+        // straightening cannot help and must not be paid for (this was the v1.15.32 slowdown).
+        string input = WriteInput(PdfFixture.CamScannerLike().WithContent("q Q\n").Build(), "rich.pdf");
+        var (feature, engine, renderer) = CreateNamingFeature();
+        engine.Lines = new[] { "行一", "行二", "行三", "行四" };
+
+        var settings = new AppSettings { AutoNameByContent = true };
+        feature.Run(input, FeatureContext.Capture(settings));
+
+        Assert.Equal(0, renderer.OrientCalls);
+    }
+
+    [Fact]
+    public void Naming_pays_the_orientation_pass_only_for_text_starved_pages()
+    {
+        // Empty OCR: the lying-down signature — the detector must run exactly once, then the
+        // retry OCR still names nothing and the pipeline keeps its original skip behaviour.
+        string input = WriteInput(PdfFixture.CamScannerLike().WithContent("q Q\n").Build(), "starved.pdf");
+        var (feature, engine, renderer) = CreateNamingFeature();
+        engine.Lines = Array.Empty<string>();
+
+        var settings = new AppSettings { AutoNameByContent = true };
+        var result = feature.Run(input, FeatureContext.Capture(settings));
+
+        Assert.Equal(1, renderer.OrientCalls);
+        Assert.Equal(FeatureStatus.NoChange, result.Status);
+        Assert.Null(result.OutputPath);
+    }
+
+    [Fact]
+    public void Naming_reports_each_stage_through_the_context_progress()
+    {
+        string input = WriteInput(PdfFixture.CamScannerLike().WithContent("q Q\n").Build(), "stages.pdf");
+        var (feature, engine, _) = CreateNamingFeature();
+        engine.Lines = Array.Empty<string>(); // force the full stage ladder
+
+        var stages = new List<string>();
+        var settings = new AppSettings { AutoNameByContent = true };
+        feature.Run(input, FeatureContext.Capture(settings, (_, stage) => stages.Add(stage)));
+
+        Assert.Contains("正在检测水印…", stages);
+        Assert.Contains("正在识别文字以命名…", stages);
+        Assert.Contains("正在检查页面朝向…", stages);
+        Assert.Contains("正在重新识别文字…", stages);
     }
 
     [Fact]

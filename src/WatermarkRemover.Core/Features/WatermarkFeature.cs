@@ -55,22 +55,30 @@ public sealed class WatermarkFeature : IFeature
     {
         ArgumentNullException.ThrowIfNull(context);
 
+        // 状态分站：把每个阶段如实推给记录行，避免"检测水印 / 识别文字 / 检查朝向"混成一团。
+        void Stage(string text) => context.Progress?.Invoke(inputPath, text);
+
+        Stage("正在检测水印…");
         // Built per call so the feature always reads the job's settings snapshot.
         var processor = new WatermarkProcessor(
             _source, _strategies, context.Settings,
-            context.Settings.AutoNameByContent ? TryAutoName : null);
+            context.Settings.AutoNameByContent ? _ => TryAutoName(inputPath, Stage) : null);
         ProcessingResult result = processor.Process(inputPath);
 
         return FeatureResult.From(result, DisplayName, $"已去除 {result.Marks.Count} 处水印");
     }
 
     /// <summary>
-    /// Content-based name for the output file. Renders only the first page, recognises it and
-    /// classifies it. Returns null whenever anything goes wrong — removal must never fail
-    /// because of naming — but every skip is reported through the trace callback so a
-    /// non-renaming machine leaves evidence in the log.
+    /// Content-based name for the output file. Renders only the first page and OCRs it as-is —
+    /// upright documents (the overwhelming majority) name themselves right there, at the old
+    /// speed. Only a text-starved page (too few lines — the signature of a lying-down scan)
+    /// pays for the orientation pass and a second OCR; a text-rich page that still fails to
+    /// classify is simply a type the classifier doesn't know, and straightening won't help.
+    /// Returns null whenever anything goes wrong — removal must never fail because of naming —
+    /// but every skip is reported through the trace callback so a non-renaming machine leaves
+    /// evidence in the log.
     /// </summary>
-    private AutoNameResult? TryAutoName(string pdfPath)
+    private AutoNameResult? TryAutoName(string pdfPath, Action<string> stage)
     {
         if (_namingRenderer is null || _namingEngine is null)
         {
@@ -82,15 +90,29 @@ public sealed class WatermarkFeature : IFeature
         {
             byte[] page = _namingRenderer.RenderFirstPageAsync(pdfPath, NamingRenderDpi)
                 .GetAwaiter().GetResult();
-            // 摆正后再识别：导入的 PDF 不走扫描的自动调正，躺倒页会让 OCR 读不出有效文字
-            // （与扫描命名链 MainViewModel.TryRenameScanByContentAsync 同一条摆正实现）。
-            if (_orientPage is not null)
-                page = _orientPage(page).GetAwaiter().GetResult();
+
+            stage("正在识别文字以命名…");
             var lines = _namingEngine.RecognizeBoundedOrDefaultAsync(page).GetAwaiter().GetResult();
+            var named = SmartNamingService.TryBuildName(lines, _trace);
+            if (named is not null) return named;
+
+            if (lines.Count >= 3 || _orientPage is null)
+            {
+                _trace?.Invoke(
+                    $"命名：首页识别 {lines.Count} 行仍无法分类，跳过自动命名（文字充足，摆正无益）", null);
+                return null;
+            }
+
+            // 摆正后再识别：导入的 PDF 不走扫描的自动调正，躺倒页 OCR 读不出有效文字
+            // （与扫描命名链 MainViewModel.TryRenameScanByContentAsync 同一条摆正实现）。
+            stage("正在检查页面朝向…");
+            byte[] upright = _orientPage(page).GetAwaiter().GetResult();
+            stage("正在重新识别文字…");
+            var retry = _namingEngine.RecognizeBoundedOrDefaultAsync(upright).GetAwaiter().GetResult();
             _trace?.Invoke(
-                $"命名：首页渲染 {page.Length / 1024} KB，OCR 识别 {lines.Count} 行：{string.Join(" / ", lines.Select(l => l.Text))}",
+                $"命名：摆正后识别 {retry.Count} 行：{string.Join(" / ", retry.Select(l => l.Text))}",
                 null);
-            return SmartNamingService.TryBuildName(lines, _trace);
+            return SmartNamingService.TryBuildName(retry, _trace);
         }
         catch (Exception ex)
         {

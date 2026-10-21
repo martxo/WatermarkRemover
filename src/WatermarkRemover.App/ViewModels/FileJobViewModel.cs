@@ -290,6 +290,24 @@ public sealed class FileJobViewModel : ObservableObject
         Detail = processingText;
     }
 
+    /// <summary>Live stage text while the row is processing (检测水印 / 识别文字 / 检查朝向 …).
+    /// Called from queue worker threads, so it marshals to the UI thread; once the row has a
+    /// terminal state, late stage callbacks are ignored.</summary>
+    public void ReportStage(string stage)
+    {
+        if (State != JobState.Processing) return;
+
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (dispatcher is null || dispatcher.CheckAccess())
+        {
+            Detail = stage;
+        }
+        else
+        {
+            dispatcher.Invoke(() => Detail = stage);
+        }
+    }
+
     public void Apply(FeatureResult result)
     {
         ProcessedAt = DateTime.Now;
