@@ -154,13 +154,13 @@ public sealed class PdfPreviewViewModel : ObservableObject
             () => ThumbnailScale > MinThumbScale + 0.001);
         AutoOrientCommand = new RelayCommand(
             () => _ = AutoOrientAsync(),
-            () => _ocrEngine is not null && !_isOrienting && !IsRotating && PageCount > 0);
+            () => _ocrEngine is not null && !IsOrienting && !IsRotating && PageCount > 0);
         // Any document with at least one page accepts a scan at any slot — front, middle or
         // end. A one-page scan is exactly the case that needs the bookends most (the missing
         // page is usually the one before or after), so PageCount > 0, never > 1.
         InsertScanAfterCommand = new RelayCommand<int>(
             index => _ = InsertScanAfterAsync(index),
-            _ => _scanProvider is not null && !_isRotating && !_isOrienting && PageCount > 0);
+            _ => _scanProvider is not null && !IsRotating && !IsOrienting && PageCount > 0);
     }
 
     /// <summary>Multiplier on the base tile size, driven by the grid's zoom rail (0.6–2.0).</summary>
@@ -271,7 +271,13 @@ public sealed class PdfPreviewViewModel : ObservableObject
         get => _pageCount;
         private set
         {
-            if (SetProperty(ref _pageCount, value)) RaisePagingChanged();
+            if (SetProperty(ref _pageCount, value))
+            {
+                RaisePagingChanged();
+                // The gap buttons' CanExecute reads PageCount: a scan that just produced the
+                // first pages must enable the plus slots right away, not on the next click.
+                CommandManager.InvalidateRequerySuggested();
+            }
         }
     }
 
@@ -317,9 +323,6 @@ public sealed class PdfPreviewViewModel : ObservableObject
         private set => SetProperty(ref _isLoading, value);
     }
 
-    /// <summary>True while the orientation pass (detect + rewrite) is running; tests drain on it.</summary>
-    internal bool IsOrienting => _isOrienting;
-
     /// <summary>Bottom strip tiles, one per page, built as soon as the page count is known.</summary>
     public ObservableCollection<PdfPreviewThumbnailViewModel> Thumbnails { get; } = new();
 
@@ -343,7 +346,26 @@ public sealed class PdfPreviewViewModel : ObservableObject
         private set
         {
             if (SetProperty(ref _isRotating, value))
+            {
                 foreach (var thumb in Thumbnails) thumb.RefreshCommands();
+                // The gap buttons' CanExecute reads this flag, and WPF re-queries commands
+                // only on some input events — without this nudge a finished scan left the
+                // plus slots dead until the user's next click anywhere.
+                CommandManager.InvalidateRequerySuggested();
+            }
+        }
+    }
+
+    /// <summary>True while the OCR orientation pass is reading the document. Exposed as a
+    /// notifying property (the gap buttons' CanExecute reads it) — a bare field left the
+    /// buttons disabled after orientation finished until the next click re-queried commands.</summary>
+    public bool IsOrienting
+    {
+        get => _isOrienting;
+        private set
+        {
+            if (SetProperty(ref _isOrienting, value))
+                CommandManager.InvalidateRequerySuggested();
         }
     }
 
@@ -680,7 +702,7 @@ public sealed class PdfPreviewViewModel : ObservableObject
     /// </summary>
     internal async Task InsertScanAfterAsync(int insertAfterIndex)
     {
-        if (IsCancelled || IsRotating || _isOrienting) return;
+        if (IsCancelled || IsRotating || IsOrienting) return;
         if (_scanProvider is null) return;
         if (insertAfterIndex < -1 || insertAfterIndex >= PageCount) return; // -1 = in front of page one
 
@@ -827,10 +849,10 @@ public sealed class PdfPreviewViewModel : ObservableObject
     /// </summary>
     internal async Task AutoOrientAsync()
     {
-        if (IsCancelled || _ocrEngine is null || _isOrienting) return;
+        if (IsCancelled || _ocrEngine is null || IsOrienting) return;
         if (PageCount <= 0 || _isLoading) return; // let the initial paint finish first
 
-        _isOrienting = true;
+        IsOrienting = true;
         StatusText = "正在检测页面方向…";
         try
         {
@@ -881,7 +903,7 @@ public sealed class PdfPreviewViewModel : ObservableObject
         }
         finally
         {
-            _isOrienting = false;
+            IsOrienting = false;
         }
     }
 

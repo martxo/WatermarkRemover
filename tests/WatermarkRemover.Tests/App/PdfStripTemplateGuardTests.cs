@@ -45,6 +45,47 @@ public class PdfStripTemplateGuardTests
             .SingleOrDefault()
         ?? throw new Xunit.Sdk.XunitException($"{label} must set the Glyph's Opacity.");
 
+    /// <summary>
+    /// The dead-plus regression (v1.15.31, 2026-10-21): the gap buttons' CanExecute reads
+    /// IsRotating / IsOrienting / PageCount, but WPF re-queries commands only on some input
+    /// events — a mouse click being one. A finished scan or orientation pass that changed
+    /// those flags without invalidating command state left the plus slots dead until the
+    /// user's next click anywhere, which felt like "hover does nothing until I click".
+    /// Guards: every flag the CanExecute reads must nudge
+    /// CommandManager.InvalidateRequerySuggested() when it changes.
+    /// </summary>
+    [Fact]
+    public void Flags_read_by_the_gap_buttons_CanExecute_invalidate_command_state_on_change()
+    {
+        string src = File.ReadAllText(Path.Combine(
+            SolutionRoot, "src", "WatermarkRemover.App", "ViewModels", "PdfPreviewViewModel.cs"));
+
+        static string PropertyBody(string src, string declaration)
+        {
+            int start = src.IndexOf(declaration, StringComparison.Ordinal);
+            Assert.True(start >= 0, $"{declaration} must exist in PdfPreviewViewModel.cs.");
+            int end = src.IndexOf("\n    public ", start + declaration.Length, StringComparison.Ordinal);
+            Assert.True(end > start, $"Could not isolate the body of {declaration}.");
+            return src[start..end];
+        }
+
+        // Each notifying flag feeds CanExecute, so each setter must requery commands.
+        Assert.Contains(
+            "CommandManager.InvalidateRequerySuggested()",
+            PropertyBody(src, "public bool IsOrienting"));
+        Assert.Contains(
+            "CommandManager.InvalidateRequerySuggested()",
+            PropertyBody(src, "public bool IsRotating"));
+        Assert.Contains(
+            "CommandManager.InvalidateRequerySuggested()",
+            PropertyBody(src, "public int PageCount"));
+
+        // The orientation flag must be a notifying property — a bare field write never
+        // reaches the command system at all.
+        Assert.Contains("SetProperty(ref _isOrienting, value)", src);
+        Assert.DoesNotContain("_isOrienting = ", src);
+    }
+
     [Fact]
     public void Interior_units_collapse_their_null_tail_so_two_pages_never_get_two_pluses()
     {
