@@ -9,9 +9,9 @@ bin3/
 bin_t1/
 obj/
 logs/
+testrun.*.log
 
 # Throwaway detached-test-run logs (deleted when a run finishes; may be file-locked)
-testrun.*.log
 
 # Local tools (portable git/gh)
 .tools/
