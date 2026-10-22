@@ -460,6 +460,10 @@
                         <DataTrigger Binding="{Binding SelectedFeature.Id}" Value="transfer.page">
                             <Setter Property="Visibility" Value="Collapsed"/>
                         </DataTrigger>
+                        <!-- The search page hosts its own query box and result list. -->
+                        <DataTrigger Binding="{Binding SelectedFeature.Id}" Value="search.page">
+                            <Setter Property="Visibility" Value="Collapsed"/>
+                        </DataTrigger>
                     </Style.Triggers>
                 </Style>
             </ContentControl.Style>
@@ -581,6 +585,175 @@
                            FontSize="13"
                            Foreground="{StaticResource TextSecondaryBrush}"/>
             </StackPanel>
+        </Border>
+
+        <!-- Quick search panel (快速搜索): Everything index. On this page it takes over both the
+             drop zone and the file-list area, because results need the full height. -->
+        <Border Grid.Row="1" Grid.RowSpan="2" x:Name="SearchPanel" Margin="0,0,0,16">
+            <Border.Style>
+                <Style TargetType="Border" BasedOn="{StaticResource CardBorder}">
+                    <Setter Property="Visibility" Value="Collapsed"/>
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding SelectedFeature.Id}" Value="search.page">
+                            <Setter Property="Visibility" Value="Visible"/>
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </Border.Style>
+
+            <Grid Margin="20,16">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+
+                <!-- Query row: Enter searches immediately, typing searches after a short pause. -->
+                <Grid Grid.Row="0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <Grid>
+                        <TextBox Style="{StaticResource InputBox}"
+                                 Padding="34,8,10,8"
+                                 FontSize="14"
+                                 Text="{Binding Search.SearchText, UpdateSourceTrigger=PropertyChanged}">
+                            <TextBox.InputBindings>
+                                <KeyBinding Key="Enter" Command="{Binding Search.SearchCommand}"/>
+                            </TextBox.InputBindings>
+                        </TextBox>
+                        <TextBlock Text="&#xE721;"
+                                   FontFamily="Segoe MDL2 Assets"
+                                   FontSize="14"
+                                   Foreground="{StaticResource TextSecondaryBrush}"
+                                   VerticalAlignment="Center"
+                                   Margin="12,0,0,0"
+                                   IsHitTestVisible="False"/>
+                    </Grid>
+                    <Button Grid.Column="1"
+                            Content="搜索"
+                            Style="{StaticResource PrimaryButton}"
+                            Command="{Binding Search.SearchCommand}"
+                            MinWidth="90" Margin="12,0,0,0"/>
+                </Grid>
+
+                <!-- Status + install hint when the client is absent. -->
+                <Grid Grid.Row="1" Margin="0,10,0,8">
+                    <TextBlock Text="{Binding Search.StatusText}"
+                               FontSize="12"
+                               Foreground="{StaticResource TextSecondaryBrush}"
+                               VerticalAlignment="Center"/>
+                    <Button Content="下载 Everything"
+                            Style="{StaticResource SmallButton}"
+                            Command="{Binding Search.InstallProviderCommand}"
+                            HorizontalAlignment="Right"
+                            Visibility="{Binding Search.IsUnavailable, Converter={StaticResource BoolToVis}}"/>
+                </Grid>
+
+                <!-- Hits: double-click opens, single click selects for the action row below. -->
+                <ListBox Grid.Row="2"
+                         ItemsSource="{Binding Search.Results}"
+                         SelectedItem="{Binding Search.SelectedResult, Mode=TwoWay}"
+                         BorderThickness="0"
+                         Background="Transparent"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                    <ListBox.ItemContainerStyle>
+                        <Style TargetType="ListBoxItem">
+                            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                            <Setter Property="Padding" Value="0"/>
+                            <Setter Property="Margin" Value="0,0,0,6"/>
+                            <Setter Property="Cursor" Value="Hand"/>
+                            <Setter Property="Template">
+                                <Setter.Value>
+                                    <ControlTemplate TargetType="ListBoxItem">
+                                        <Border x:Name="Root" CornerRadius="8">
+                                            <ContentPresenter/>
+                                        </Border>
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="IsMouseOver" Value="True">
+                                                <Setter TargetName="Root" Property="Background" Value="#F5F6F8"/>
+                                            </Trigger>
+                                            <Trigger Property="IsSelected" Value="True">
+                                                <Setter TargetName="Root" Property="Background" Value="{StaticResource AccentSoftBrush}"/>
+                                            </Trigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </Setter.Value>
+                            </Setter>
+                        </Style>
+                    </ListBox.ItemContainerStyle>
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <Border Background="{StaticResource SurfaceBrush}"
+                                    BorderBrush="{StaticResource BorderBrushLight}"
+                                    BorderThickness="1"
+                                    CornerRadius="8"
+                                    Padding="12,9">
+                                <Border.InputBindings>
+                                    <MouseBinding MouseAction="LeftDoubleClick" Command="{Binding OpenCommand}"/>
+                                </Border.InputBindings>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="{Binding Glyph}"
+                                               FontFamily="Segoe MDL2 Assets"
+                                               FontSize="16"
+                                               Foreground="{StaticResource AccentBrush}"
+                                               VerticalAlignment="Center"/>
+                                    <StackPanel Grid.Column="1" Margin="10,0,12,0">
+                                        <TextBlock Text="{Binding Name}"
+                                                   FontSize="13" FontWeight="SemiBold"
+                                                   Foreground="{StaticResource TextPrimaryBrush}"
+                                                   TextTrimming="CharacterEllipsis"/>
+                                        <TextBlock Text="{Binding Directory}"
+                                                   FontSize="11"
+                                                   Foreground="{StaticResource TextSecondaryBrush}"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   Margin="0,2,0,0"/>
+                                    </StackPanel>
+                                    <TextBlock Grid.Column="2"
+                                               Text="{Binding SizeText}"
+                                               FontSize="11"
+                                               Foreground="{StaticResource TextSecondaryBrush}"
+                                               VerticalAlignment="Center"
+                                               Margin="0,0,12,0"/>
+                                    <TextBlock Grid.Column="3"
+                                               Text="{Binding ModifiedText}"
+                                               FontSize="11"
+                                               Foreground="{StaticResource TextSecondaryBrush}"
+                                               VerticalAlignment="Center"/>
+                                </Grid>
+                            </Border>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+
+                <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="0,12,0,0">
+                    <Button Content="打开"
+                            Style="{StaticResource PrimaryButton}"
+                            Command="{Binding Search.OpenCommand}"
+                            MinWidth="90"/>
+                    <Button Content="打开所在文件夹"
+                            Style="{StaticResource SmallButton}"
+                            Command="{Binding Search.OpenFolderCommand}"
+                            Margin="10,0,0,0"/>
+                    <Button Content="复制路径"
+                            Style="{StaticResource SmallButton}"
+                            Command="{Binding Search.CopyPathCommand}"
+                            Margin="10,0,0,0"/>
+                    <TextBlock Text="双击结果也可直接打开"
+                               FontSize="11"
+                               Foreground="{StaticResource TextSecondaryBrush}"
+                               VerticalAlignment="Center"
+                               Margin="16,0,0,0"/>
+                </StackPanel>
+            </Grid>
         </Border>
 
         <!-- Netdisk panel (网盘): entry hub — open the management window or quick-upload. Replaces
@@ -809,7 +982,17 @@
         </Border>
 
         <!-- File list -->
-        <Border Grid.Row="2" Style="{StaticResource CardBorder}">
+        <Border Grid.Row="2">
+            <Border.Style>
+                <Style TargetType="Border" BasedOn="{StaticResource CardBorder}">
+                    <Style.Triggers>
+                        <!-- The search page owns this row: its result list replaces the job list. -->
+                        <DataTrigger Binding="{Binding SelectedFeature.Id}" Value="search.page">
+                            <Setter Property="Visibility" Value="Collapsed"/>
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </Border.Style>
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>

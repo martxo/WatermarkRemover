@@ -16,6 +16,7 @@ using WatermarkRemover.Core.Features.Naming;
 using WatermarkRemover.Core.Features.Netdisk;
 using WatermarkRemover.Core.Features.Ocr;
 using WatermarkRemover.Core.Features.Scan;
+using WatermarkRemover.Core.Features.Search;
 using WatermarkRemover.Core.Features.Transfer;
 using WatermarkRemover.Core.Netdisk;
 using WatermarkRemover.Core.Settings;
@@ -58,6 +59,9 @@ public sealed class MainViewModel : ObservableObject
         // without touching navigation. Registration order drives both the sidebar and the
         // default selection (NavItems[0] below).
         new ScanFeature(),
+        // 快速搜索 sits next to the default page: it is a tool, not a processor (CanHandle=false),
+        // so it never interferes with first-match routing in FindForFile.
+        new QuickSearchFeature(),
         new WatermarkFeature(
             new PdfDocumentSource(),
             new IWatermarkStrategy[] { new BottomRightBadgeStrategy() },
@@ -136,6 +140,11 @@ public sealed class MainViewModel : ObservableObject
         Transfer = new TransferPanelViewModel(Settings, _shell, message => AppLog.Trace(message, null));
         Transfer.FileReceived += OnTransferFileReceived;
         Transfer.ShareDocumentReceived += OnTransferShareDocumentReceived;
+
+        // --- 快速搜索 ---
+        // The page queries a RUNNING Everything through its SDK IPC wrapper; no index is built
+        // or cached here, so absence of Everything only disables this page.
+        Search = new SearchPanelViewModel(new EverythingSearchProvider(), _shell);
     }
 
     /// <summary>Logs the resolved engine (and every skipped link) once per process and returns
@@ -198,6 +207,7 @@ public sealed class MainViewModel : ObservableObject
         "watermark.badge" => "\uE75C", // Erase
         "ocr.text" => "\uE7C3",        // Page
         "scan.page" => "\uE7F4",       // Camera
+        "search.page" => "\uE721",     // Search
         "netdisk.page" => "\uE753",   // Cloud
         "transfer.page" => "\uE8EA",  // CellPhone
         _ => "\uE7C3",
@@ -208,6 +218,7 @@ public sealed class MainViewModel : ObservableObject
     public string FeatureTagline => _selectedFeature.Id switch
     {
         "scan.page" => "自动命名 · 自动调正 · 自动删白",
+        "search.page" => "Everything 索引 · 文件名秒搜 · 打开/定位",
         "watermark.badge" => "拖入 PDF → 去水印 · 智能命名 · 页面管理",
         "ocr.text" => "拖入 PDF → 逐页识别文字 → 生成同名 txt",
         "netdisk.page" => "网盘账号管理 · 上传下载 · 快捷传",
@@ -382,7 +393,9 @@ public sealed class MainViewModel : ObservableObject
         : VisibleJobCount == 0
             ? SelectedFeature.Id == "transfer.page"
                 ? "手机扫码上传后，接收的文件会显示在这里"
-                : $"拖入 PDF 文件即可开始「{SelectedFeature.DisplayName}」"
+                : SelectedFeature.Id == "search.page"
+                    ? "输入文件名搜索全盘文件，选中后可直接打开或定位"
+                    : $"拖入 PDF 文件即可开始「{SelectedFeature.DisplayName}」"
             : $"已完成 {CompletedCount} 个文件";
 
     /// <summary>Section switch: swap the view filter without rebuilding the underlying data.</summary>
@@ -1018,6 +1031,9 @@ public sealed class MainViewModel : ObservableObject
 
     /// <summary>The 手机传文件 page's state (start/stop, QR, receive tally); wired to the shell.</summary>
     public TransferPanelViewModel Transfer { get; }
+
+    /// <summary>快速搜索 page state (query, hits, open/reveal/copy actions).</summary>
+    public SearchPanelViewModel Search { get; }
 
     /// <summary>Socket thread → UI thread: each landed phone file becomes a finished record in
     /// the 手机传文件 section, so rename, suffix chips, delete and open-folder all work unchanged.</summary>

@@ -47,6 +47,7 @@
        publish gate then fails loudly instead of shipping a broken layout. -->
   <ItemGroup>
     <SidecarAsset Include="wcocr.dll" />
+    <SidecarAsset Include="Everything64.dll" />
     <SidecarAsset Include="Models\ch_PP-OCRv5_det_mobile.onnx" />
     <SidecarAsset Include="Models\ch_PP-LCNet_x0_25_textline_ori_cls_mobile.onnx" />
     <SidecarAsset Include="Models\ch_PP-OCRv5_rec_mobile.onnx" />
@@ -70,6 +71,13 @@
   <ItemGroup>
     <None Include="Native\wcocr.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true">
       <Link>wcocr.dll</Link>
+    </None>
+    <!-- Everything SDK IPC wrapper (voidtools, MIT-style licence). The 快速搜索 page talks to a
+         running Everything through it; it is NOT the search engine itself, so the page degrades
+         to a hint when Everything is absent. Kept beside the exe for the same reason as wcocr:
+         P/Invoke inside the single-file bundle cannot find it reliably. -->
+    <None Include="Native\Everything64.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true">
+      <Link>Everything64.dll</Link>
     </None>
   </ItemGroup>
 
