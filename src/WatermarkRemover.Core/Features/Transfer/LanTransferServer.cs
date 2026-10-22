@@ -208,8 +208,10 @@ public sealed class LanTransferServer : IDisposable
     {
         try
         {
+            // `verbose` is mandatory: the plain listing never prints the Program line, so the
+            // path check below always failed and every start re-ran the UAC provisioning.
             var psi = new ProcessStartInfo("netsh.exe",
-                $"advfirewall firewall show rule name=\"{FirewallRuleName}\"")
+                $"advfirewall firewall show rule name=\"{FirewallRuleName}\" verbose")
             {
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
