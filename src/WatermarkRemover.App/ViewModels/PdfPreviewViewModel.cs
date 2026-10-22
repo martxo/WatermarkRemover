@@ -107,6 +107,15 @@ public sealed class PdfPreviewViewModel : ObservableObject
     /// must never be driven from two threads at once anyway.</summary>
     private readonly SemaphoreSlim _renderGate = new(1, 1);
 
+    /// <summary>
+    /// Bumped whenever a page edit (rotate/delete/insert) makes rendered bytes stale. A render
+    /// already in flight when the file changed still returns pre-edit pixels; without this epoch
+    /// it would land in the cache AFTER the clear and both surfaces would keep showing the old
+    /// page (the stale-cache class of bug the insert path hit in v1.15.8). Renders started under
+    /// an older epoch return their bytes to their (already discarded) caller but never cache them.
+    /// </summary>
+    private int _cacheEpoch;
+
     private int _pageCount;
     private int _pageIndex;
     private int _displayedPageIndex = -1;
@@ -420,11 +429,11 @@ public sealed class PdfPreviewViewModel : ObservableObject
         BuildThumbnails();
         await RenderAsync(0);
 
-        // Scan rows self-heal in a fixed order: first the blank pages a duplex feeder produced
-        // are dropped (they must not take part in any later step), then orientation is corrected
-        // on what remains. Started BEFORE the tile fill on purpose — the blank scan renders the
-        // same 150dpi bitmaps the tiles need, so its render cache feeds the strip instead of
-        // racing it through the pdfium gate.
+        // Scan rows self-heal as soon as the canvas is painted: the orientation verdict only
+        // needs page one, so it must not queue behind the blank-page pass (whose renders are the
+        // same 150dpi bitmaps the tiles need — that shared pass is why the turn used to start
+        // only after the last thumbnail). Blank cleanup follows (or leads, when the first sheet
+        // itself is blank) and its cached renders still feed the strip.
         if (_autoCleanBlank || (_autoOrient && _ocrEngine is not null))
             _ = RunScanPostProcessAsync();
 
@@ -434,13 +443,45 @@ public sealed class PdfPreviewViewModel : ObservableObject
         _ = LoadThumbnailsAsync(Thumbnails.ToList());
     }
 
-    /// <summary>The scan row's after-load pipeline: blank-page cleanup, then auto-orientation.
-    /// Serial by construction — both steps rewrite the same file and must not race.</summary>
+    /// <summary>
+    /// The scan row's after-load pipeline. Serial by construction — both steps rewrite the same
+    /// file and must not race. Ordering, though, is deliberate: the direction verdict only needs
+    /// page one, so it runs as soon as the canvas is painted. Blank cleanup walks every page and
+    /// its renders are exactly the rasters the strip needs, so running it first made the turn
+    /// appear to start only after the last thumbnail. A blank first sheet is the one case that
+    /// must wait: its verdict is meaningless and the page that should be probed (the first
+    /// content page) only exists after the blank pages are dropped.
+    /// </summary>
     private async Task RunScanPostProcessAsync()
     {
-        await CleanBlankPagesAsync();
-        if (_autoOrient && _ocrEngine is not null)
-            await AutoOrientAsync();
+        if (!_autoOrient || _ocrEngine is null)
+        {
+            await CleanBlankPagesAsync();
+            return;
+        }
+
+        bool blankFirstPage = _autoCleanBlank && await IsPageBlankAsync(0);
+
+        if (blankFirstPage) await CleanBlankPagesAsync();
+
+        await AutoOrientAsync();
+
+        if (_autoCleanBlank && !blankFirstPage) await CleanBlankPagesAsync();
+    }
+
+    /// <summary>Blank verdict for one cached page; an unreadable page counts as content so the
+    /// orientation probe (which is silent on unusable input) still gets its chance.</summary>
+    private async Task<bool> IsPageBlankAsync(int pageIndex)
+    {
+        try
+        {
+            byte[] pagePng = await GetPageBytesAsync(pageIndex, PreviewDpi, priority: true);
+            return await Task.Run(() => BlankPageDetector.IsBlank(pagePng));
+        }
+        catch (Exception)
+        {
+            return false;
+        }
     }
 
     /// <summary>
@@ -472,14 +513,15 @@ public sealed class PdfPreviewViewModel : ObservableObject
             }
             if (blankPages.Count == 0) return;
 
-            int removed = await Task.Run(() => PdfPageRotator.DeletePages(_pdfPath, blankPages));
+            int removed = 0;
+            await WritePdfAsync(() => removed = PdfPageRotator.DeletePages(_pdfPath, blankPages));
             if (IsCancelled || removed == 0) return;
             RememberFileStamp(force: true);
             AppLog.Info($"预览已自动删除空白页：{Path.GetFileName(_pdfPath)} 共 {removed} 页");
 
             // Indexes shifted for every page after the first removed one — the whole render
             // cache is keyed by index, so it all goes; the strip rebuilds below anyway.
-            _renderedPages.Clear();
+            InvalidateAllPages();
             PageCount -= removed;
             BuildThumbnails();
             _ = LoadThumbnailsAsync(Thumbnails.ToList());
@@ -658,7 +700,7 @@ public sealed class PdfPreviewViewModel : ObservableObject
 
             // Every page after the deleted one shifts down an index — the render cache keys by
             // index, so all of it must go, not just the deleted page's entries.
-            _renderedPages.Clear();
+            InvalidateAllPages();
             PageCount--;
             BuildThumbnails();
             _ = LoadThumbnailsAsync(Thumbnails.ToList());
@@ -873,11 +915,7 @@ public sealed class PdfPreviewViewModel : ObservableObject
                 return;
             }
 
-            await Task.Run(() =>
-            {
-                EnsurePdfReadable();
-                PdfPageRotator.RotateAll(_pdfPath, steps);
-            });
+            await WritePdfAsync(() => PdfPageRotator.RotateAll(_pdfPath, steps));
             if (IsCancelled) return; // the file is fixed; nothing is on screen any more
             RememberFileStamp(force: true);
 
@@ -885,7 +923,7 @@ public sealed class PdfPreviewViewModel : ObservableObject
 
             // Every /Rotate changed but the content streams did not — only the rotation metadata
             // is stale in the caches, yet page bytes differ per (page, dpi) key, so drop it all.
-            _renderedPages.Clear();
+            InvalidateAllPages();
             BuildThumbnails();
             _ = LoadThumbnailsAsync(Thumbnails.ToList());
             await RenderAsync(PageIndex, force: true);
@@ -960,6 +998,7 @@ public sealed class PdfPreviewViewModel : ObservableObject
         var remapped = new Dictionary<(int Page, int Dpi), byte[]>();
         foreach (var ((page, dpi), bytes) in _renderedPages)
             remapped[(page <= insertAfterIndex ? page : page + added, dpi)] = bytes;
+        Interlocked.Increment(ref _cacheEpoch); // in-flight pre-insert renders stay uncached
         _renderedPages.Clear();
         foreach (var (key, bytes) in remapped)
             _renderedPages[key] = bytes;
@@ -980,6 +1019,7 @@ public sealed class PdfPreviewViewModel : ObservableObject
         {
             if (_renderedPages.TryGetValue(key, out cached)) return cached;
 
+            int epoch = Volatile.Read(ref _cacheEpoch);
             byte[] bytes;
             try
             {
@@ -993,7 +1033,10 @@ public sealed class PdfPreviewViewModel : ObservableObject
                 bytes = await _renderer.RenderPageAsync(_pdfPath, pageIndex, dpi, priority);
             }
             RememberFileStamp();
-            _renderedPages[key] = bytes;
+            // A page edit during the render invalidates these bytes; caching them now would
+            // resurrect the pre-edit raster the edit's clear just dropped.
+            if (Volatile.Read(ref _cacheEpoch) == epoch)
+                _renderedPages[key] = bytes;
             return bytes;
         }
         finally
@@ -1091,6 +1134,29 @@ public sealed class PdfPreviewViewModel : ObservableObject
         }
     }
 
+    /// <summary>
+    /// Runs one in-place PDF edit with the render gate held: the strip's tile fill is live while
+    /// the automatic passes run, and swapping the file under an in-flight pdfium read both risks
+    /// a sharing violation and lets pre-edit pixels reach the cache. Reads wait for the write,
+    /// then start from the edited file.
+    /// </summary>
+    private async Task WritePdfAsync(Action edit)
+    {
+        await _renderGate.WaitAsync(_cancellationToken);
+        try
+        {
+            await Task.Run(() =>
+            {
+                EnsurePdfReadable();
+                edit();
+            });
+        }
+        finally
+        {
+            _renderGate.Release();
+        }
+    }
+
     /// <summary>Edit guard: resolves a renamed file first, then fails with a message the user
     /// can act on instead of a raw path error.</summary>
     private void EnsurePdfReadable()
@@ -1100,9 +1166,19 @@ public sealed class PdfPreviewViewModel : ObservableObject
         RememberFileStamp();
     }
 
+    /// <summary>Drops every cached render — used when page indexes shift or every page's bytes
+    /// change (blank deletion, page deletion, document-wide rotation). Bumps the epoch so a
+    /// render that was already in flight cannot write pre-edit pixels back into the fresh cache.</summary>
+    private void InvalidateAllPages()
+    {
+        Interlocked.Increment(ref _cacheEpoch);
+        _renderedPages.Clear();
+    }
+
     /// <summary>Drops every cached render of a page — used after its bytes changed on disk (rotation).</summary>
     private void InvalidatePage(int pageIndex)
     {
+        Interlocked.Increment(ref _cacheEpoch);
         foreach ((int page, int dpi) in _renderedPages.Keys.Where(key => key.Page == pageIndex).ToList())
             _renderedPages.TryRemove((page, dpi), out _);
     }

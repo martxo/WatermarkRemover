@@ -1,4 +1,4 @@
-﻿using PdfSharpCore.Pdf.IO;
+using PdfSharpCore.Pdf.IO;
 using SkiaSharp;
 using WatermarkRemover.App.ViewModels;
 using WatermarkRemover.Core.Features.Ocr;
@@ -17,10 +17,15 @@ public class PdfAutoOrientTests
     /// <summary>Never throws; hands back a small plain PNG so decode/detect work for real.</summary>
     private sealed class FakeRenderer(int pageCount) : IPdfPageRenderer
     {
+        /// <summary>Pages rendered at the preview DPI — what the strip's tiles consume.</summary>
+        public int PreviewRenderCount { get; private set; }
+
         public Task<int> GetPageCountAsync(string pdfPath) => Task.FromResult(pageCount);
 
         public Task<byte[]> RenderPageAsync(string pdfPath, int pageIndex, int dpi, bool priority = false)
         {
+            if (dpi == 150) PreviewRenderCount++;
+
             // Portrait canvas — the orientation detector exempts landscape pages outright.
             var info = new SKImageInfo(30, 40, SKColorType.Bgra8888, SKAlphaType.Premul);
             using var bitmap = new SKBitmap(info);
@@ -59,6 +64,27 @@ public class PdfAutoOrientTests
 
         public Task<IReadOnlyList<string>> RecognizeAsync(byte[] imageBytes) =>
             throw new InvalidOperationException("本机没有可用的 OCR 引擎");
+    }
+
+    /// <summary>Holds the first recognition call open until the test releases it, so the
+    /// ordering of orientation vs. tile filling can be observed without timing luck.</summary>
+    private sealed class GatedOcr : IOcrEngine
+    {
+        private readonly TaskCompletionSource _started = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task Started => _started.Task;
+
+        public void Release() => _release.TrySetResult();
+
+        public string DisplayName => "Gated";
+
+        public async Task<IReadOnlyList<string>> RecognizeAsync(byte[] imageBytes)
+        {
+            _started.TrySetResult();
+            await _release.Task;
+            return Array.Empty<string>();
+        }
     }
 
     /// <summary>LoadAsync's orientation pass is fire-and-forget: wait for it to start, then to
@@ -117,6 +143,36 @@ public class PdfAutoOrientTests
 
             Assert.Equal(0, RotationOf(pdf));
             Assert.Equal(string.Empty, vm.StatusText);
+        }
+        finally
+        {
+            File.Delete(pdf);
+        }
+    }
+
+    [Fact]
+    public async Task Orientation_starts_while_the_strip_is_still_filling()
+    {
+        string pdf = Path.Combine(Path.GetTempPath(), "wm-orient-" + Guid.NewGuid().ToString("N") + ".pdf");
+        File.WriteAllBytes(pdf, PdfFixture.CamScannerLike().Build());
+        try
+        {
+            var renderer = new FakeRenderer(8);
+            var ocr = new GatedOcr();
+            var vm = new PdfPreviewViewModel(pdf, "scan.pdf", renderer,
+                ocrEngine: ocr, autoOrient: true, autoCleanBlank: true);
+
+            await vm.LoadAsync();
+            await ocr.Started.WaitAsync(TimeSpan.FromSeconds(5));
+
+            // The blank pass used to walk every page before the verdict; the strip consumed the
+            // same renders, so the turn only began once the last tile was visible.
+            Assert.True(renderer.PreviewRenderCount < 8,
+                $"朝向检测在 {renderer.PreviewRenderCount}/8 页渲染后才开始");
+            Assert.Contains(vm.Thumbnails, tile => tile.Image is null);
+
+            ocr.Release();
+            await DrainAsync(vm);
         }
         finally
         {
