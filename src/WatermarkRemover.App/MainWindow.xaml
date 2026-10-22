@@ -587,8 +587,8 @@
             </StackPanel>
         </Border>
 
-        <!-- Quick search panel (快速搜索): Everything index. On this page it takes over both the
-             drop zone and the file-list area, because results need the full height. -->
+        <!-- Quick search panel (快速搜索): built-in NTFS index. On this page it takes over both
+             the drop zone and the file-list area, because results need the full height. -->
         <Border Grid.Row="1" Grid.RowSpan="2" x:Name="SearchPanel" Margin="0,0,0,16">
             <Border.Style>
                 <Style TargetType="Border" BasedOn="{StaticResource CardBorder}">
@@ -639,13 +639,13 @@
                             MinWidth="90" Margin="12,0,0,0"/>
                 </Grid>
 
-                <!-- Status + install hint when the client is absent. -->
+                <!-- Status + setup button when the index engine is absent or needs updating. -->
                 <Grid Grid.Row="1" Margin="0,10,0,8">
                     <TextBlock Text="{Binding Search.StatusText}"
                                FontSize="12"
                                Foreground="{StaticResource TextSecondaryBrush}"
                                VerticalAlignment="Center"/>
-                    <Button Content="下载 Everything"
+                    <Button Content="{Binding Search.InstallButtonText}"
                             Style="{StaticResource SmallButton}"
                             Command="{Binding Search.InstallProviderCommand}"
                             HorizontalAlignment="Right"

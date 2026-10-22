@@ -27,6 +27,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\WatermarkRemover.Core\WatermarkRemover.Core.csproj" />
+    <!-- File index engine (快速搜索): store / query / USN parsing / snapshot. -->
+    <ProjectReference Include="..\..\src\WatermarkRemover.Index\WatermarkRemover.Index.csproj" />
     <!-- Netdisk feature (网盘): provider extension point / persistence / Aliyun token flow. -->
     <ProjectReference Include="..\..\src\WatermarkRemover.Netdisk\WatermarkRemover.Netdisk.csproj" />
     <ProjectReference Include="..\..\src\WatermarkRemover.Pdf\WatermarkRemover.Pdf.csproj" />

@@ -5,9 +5,9 @@ using WatermarkRemover.Core.Features.Search;
 namespace WatermarkRemover.Tests.App;
 
 /// <summary>
-/// The 快速搜索 page is a thin shell over an <see cref="IFileSearchProvider"/>: the real one asks
-/// a running Everything client, so tests drive a fake and pin down the page's own contract —
-/// empty queries never reach the provider, hits are formatted, and an absent client degrades to
+/// The 快速搜索 page is a thin shell over an <see cref="IFileSearchProvider"/>: the real one talks
+/// to the privileged index host, so tests drive a fake and pin down the page's own contract —
+/// empty queries never reach the provider, hits are formatted, and an absent engine degrades to
 /// an install hint instead of an exception.
 /// </summary>
 public class SearchPanelTests
@@ -18,7 +18,7 @@ public class SearchPanelTests
 
         public List<FileSearchResult> Results { get; } = new();
 
-        public string DisplayName => "Everything";
+        public string DisplayName => "内置索引";
 
         public bool IsAvailable { get; set; } = true;
 
@@ -104,7 +104,7 @@ public class SearchPanelTests
 
         Assert.Empty(provider.Calls);
         Assert.Empty(vm.Results);
-        Assert.Contains("未检测到 Everything", vm.StatusText);
+        Assert.Contains("未检测到 内置索引", vm.StatusText);
     }
 
     [Fact]

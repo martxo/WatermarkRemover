@@ -21,6 +21,7 @@ using WatermarkRemover.Core.Features.Transfer;
 using WatermarkRemover.Core.Netdisk;
 using WatermarkRemover.Core.Settings;
 using WatermarkRemover.Core.Watermarks;
+using WatermarkRemover.Index;
 using WatermarkRemover.Pdf;
 using WatermarkRemover.Scan.Core.Models;
 
@@ -142,9 +143,9 @@ public sealed class MainViewModel : ObservableObject
         Transfer.ShareDocumentReceived += OnTransferShareDocumentReceived;
 
         // --- 快速搜索 ---
-        // The page queries a RUNNING Everything through its SDK IPC wrapper; no index is built
-        // or cached here, so absence of Everything only disables this page.
-        Search = new SearchPanelViewModel(new EverythingSearchProvider(), _shell);
+        // The page asks the local index host over a named pipe. The index itself lives in a
+        // privileged background process, so this app never needs elevation to search.
+        Search = new SearchPanelViewModel(new IndexServiceSearchProvider(), _shell);
     }
 
     /// <summary>Logs the resolved engine (and every skipped link) once per process and returns
@@ -218,7 +219,7 @@ public sealed class MainViewModel : ObservableObject
     public string FeatureTagline => _selectedFeature.Id switch
     {
         "scan.page" => "自动命名 · 自动调正 · 自动删白",
-        "search.page" => "Everything 索引 · 文件名秒搜 · 打开/定位",
+        "search.page" => "NTFS 索引 · 文件名秒搜 · 打开/定位",
         "watermark.badge" => "拖入 PDF → 去水印 · 智能命名 · 页面管理",
         "ocr.text" => "拖入 PDF → 逐页识别文字 → 生成同名 txt",
         "netdisk.page" => "网盘账号管理 · 上传下载 · 快捷传",

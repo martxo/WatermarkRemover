@@ -12,13 +12,13 @@ public sealed record FileSearchResult(
 }
 
 /// <summary>
-/// A name index the 快速搜索 page can query (Everything today). Implementations must never throw
-/// for an absent or stopped client: report <see cref="IsAvailable"/> false and return no results,
-/// so the page degrades to an install hint instead of an error dialog.
+/// A name index the 快速搜索 page can query (the built-in NTFS index). Implementations must never
+/// throw for an absent or stopped engine: report <see cref="IsAvailable"/> false and return no
+/// results, so the page degrades to a setup hint instead of an error dialog.
 /// </summary>
 public interface IFileSearchProvider
 {
-    /// <summary>Name shown in the page hint, e.g. "Everything".</summary>
+    /// <summary>Name shown in the page hint, e.g. "内置索引".</summary>
     string DisplayName { get; }
 
     /// <summary>True when the backing client is installed AND running.</summary>

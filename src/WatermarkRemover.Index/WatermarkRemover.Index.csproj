@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>WatermarkRemover.Index</RootNamespace>
+    <AssemblyName>WatermarkRemover.Index</AssemblyName>
+    <!-- The engine is Windows-only by design: it reads NTFS through DeviceIoControl. -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\WatermarkRemover.Core\WatermarkRemover.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="WatermarkRemover.Tests" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>WatermarkRemover.Indexer</AssemblyName>
+    <RootNamespace>WatermarkRemover.Indexer</RootNamespace>
+    <!-- Fallback for a standalone build; PublishFileIndexer in the App passes the app's Version so
+         the sidecar always matches the release and NeedsUpdate can see sidecar↔installed drift. -->
+    <Version>1.16.7</Version>
+    <!-- No console window: this runs as a hidden logon task and as the elevated installer.
+         Hosted by the app as a sidecar beside WatermarkRemover.exe. -->
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\WatermarkRemover.Index\WatermarkRemover.Index.csproj" />
+  </ItemGroup>
+
+</Project>

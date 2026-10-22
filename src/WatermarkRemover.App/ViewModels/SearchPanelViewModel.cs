@@ -4,6 +4,8 @@ using System.IO;
 using System.Windows;
 using WatermarkRemover.App.Services;
 using WatermarkRemover.Core.Features.Search;
+using WatermarkRemover.Index;
+using WatermarkRemover.Index.Contracts;
 
 namespace WatermarkRemover.App.ViewModels;
 
@@ -15,30 +17,35 @@ namespace WatermarkRemover.App.ViewModels;
 public sealed class SearchPanelViewModel : ObservableObject
 {
     private const int MaxResults = 200;
-    private const string ProviderSite = "https://www.voidtools.com/";
 
     private readonly IFileSearchProvider _provider;
+    private readonly IIndexSetup? _setup;
     private readonly IShellOpenService _shell;
     private CancellationTokenSource? _debounceCts;
     private string _searchText = string.Empty;
     private string _statusText = string.Empty;
     private bool _isSearching;
     private bool _isAvailable;
+    private bool _isInstalling;
     private SearchResultItemViewModel? _selectedResult;
 
     public SearchPanelViewModel(IFileSearchProvider provider, IShellOpenService shell)
     {
         _provider = provider ?? throw new ArgumentNullException(nameof(provider));
         _shell = shell ?? throw new ArgumentNullException(nameof(shell));
+        _setup = provider as IIndexSetup;
 
         SearchCommand = new RelayCommand(() => _ = RunSearchAsync(), () => !IsSearching);
         OpenCommand = new RelayCommand(() => OpenSelected(SelectedResult), () => SelectedResult is not null);
         OpenFolderCommand = new RelayCommand(RevealSelected, () => SelectedResult is not null);
         CopyPathCommand = new RelayCommand(CopySelectedPath, () => SelectedResult is not null);
-        InstallProviderCommand = new RelayCommand(OpenProviderSite);
+        InstallProviderCommand = new RelayCommand(() => _ = InstallAsync(), () => !IsInstalling);
 
         _isAvailable = _provider.IsAvailable;
-        _statusText = DefaultStatus(_isAvailable);
+        _statusText = _isAvailable ? AvailableStatus() : UnavailableStatus();
+
+        // The pipe is the only truth; the synchronous IsAvailable above is just an initial hint.
+        if (provider is IIndexAvailability) _ = RefreshAvailabilityAsync();
     }
 
     /// <summary>Live search waits for typing to settle; tests shorten it to zero.</summary>
@@ -93,6 +100,27 @@ public sealed class SearchPanelViewModel : ObservableObject
 
     public bool IsUnavailable => !IsAvailable;
 
+    /// <summary>Text on the setup button, which is shown whenever the engine is unavailable.</summary>
+    public string InstallButtonText
+    {
+        get
+        {
+            if (_setup is null) return "启用索引";
+            if (_setup.NeedsUpdate) return "更新索引引擎";
+            if (_setup.IsInstalled) return "启动索引引擎";
+            return "启用全盘索引（一次授权）";
+        }
+    }
+
+    public bool IsInstalling
+    {
+        get => _isInstalling;
+        private set
+        {
+            if (SetProperty(ref _isInstalling, value)) InstallProviderCommand.RaiseCanExecuteChanged();
+        }
+    }
+
     public SearchResultItemViewModel? SelectedResult
     {
         get => _selectedResult;
@@ -129,16 +157,18 @@ public sealed class SearchPanelViewModel : ObservableObject
         if (query.Length == 0)
         {
             ReplaceResults(Array.Empty<FileSearchResult>());
-            StatusText = DefaultStatus(IsAvailable);
+            StatusText = IsAvailable ? AvailableStatus() : UnavailableStatus();
             return;
         }
 
-        // Everything may have been started (or closed) since the page was built.
-        IsAvailable = _provider.IsAvailable;
+        // The engine may have been started (or closed) since the page was built.
+        IsAvailable = _provider is IIndexAvailability availability
+            ? await availability.CheckAvailableAsync(cancellationToken)
+            : _provider.IsAvailable;
         if (!IsAvailable)
         {
             ReplaceResults(Array.Empty<FileSearchResult>());
-            StatusText = $"未检测到 {ProviderName}，请安装并保持其在后台运行";
+            StatusText = UnavailableStatus();
             return;
         }
 
@@ -218,19 +248,73 @@ public sealed class SearchPanelViewModel : ObservableObject
         }
     }
 
-    private static void OpenProviderSite()
+    private async Task RefreshAvailabilityAsync()
     {
+        if (_provider is not IIndexAvailability availability) return;
+
         try
         {
-            Process.Start(new ProcessStartInfo(ProviderSite) { UseShellExecute = true });
+            bool available = await availability.CheckAvailableAsync();
+            IsAvailable = available;
+            StatusText = available ? AvailableStatus() : UnavailableStatus();
         }
-        catch
+        catch (OperationCanceledException)
         {
-            // The hint text already carries the address; a failed browser launch is not fatal.
+            // The page is going away; the last status text is still correct.
         }
     }
 
-    private string DefaultStatus(bool available) => available
-        ? $"输入文件名即时搜索（{ProviderName} 索引，最多 {MaxResults} 条）"
-        : $"未检测到 {ProviderName}：安装并保持其在后台运行后可全盘秒搜";
+    private async Task InstallAsync()
+    {
+        // Only the built-in provider ships an installer; a foreign provider has nothing to set up.
+        if (_setup is null) return;
+
+        IsInstalling = true;
+        StatusText = "正在请求管理员授权…";
+        try
+        {
+            bool installed = await _setup.InstallAsync();
+            if (!installed)
+            {
+                StatusText = "未获得管理员授权，索引未启用";
+                return;
+            }
+
+            StatusText = "索引引擎已启动，正在建立索引…";
+            await RefreshAvailabilityAsync();
+        }
+        catch (Exception ex)
+        {
+            StatusText = "启用失败：" + ex.Message;
+        }
+        finally
+        {
+            IsInstalling = false;
+        }
+    }
+
+    /// <summary>Status line while the engine answers.</summary>
+    private string AvailableStatus()
+    {
+        IndexStatusDto? status = (_provider as IIndexAvailability)?.LastStatus;
+        if (status is null)
+            return $"输入文件名即时搜索（{ProviderName}，最多 {MaxResults} 条）";
+
+        if (!string.IsNullOrEmpty(status.Error))
+            return status.Error!;
+
+        string counts = $"已索引 {status.Files:N0} 个文件、{status.Folders:N0} 个文件夹";
+        return status.Scanning
+            ? $"正在建立索引… {counts}"
+            : $"{counts} · 输入文件名即时搜索（最多 {MaxResults} 条）";
+    }
+
+    /// <summary>Status line when the engine is absent: a setup hint, not an ad for another product.</summary>
+    private string UnavailableStatus()
+    {
+        if (_setup is { NeedsUpdate: true }) return "索引引擎需要更新：点击右侧按钮授权一次";
+        if (_setup is { IsInstalled: true }) return "索引引擎未运行：点击右侧按钮启动";
+        if (_setup is not null) return $"尚未启用{ProviderName}：授权一次后开机自动运行";
+        return $"未检测到 {ProviderName}，请安装并保持其在后台运行";
+    }
 }

@@ -2,6 +2,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\WatermarkRemover.Core\WatermarkRemover.Core.csproj" />
+    <!-- File index engine (快速搜索): NTFS/USN index, pipe client, install/update lifecycle. -->
+    <ProjectReference Include="..\WatermarkRemover.Index\WatermarkRemover.Index.csproj" />
     <!-- Netdisk feature (网盘): product providers (Aliyun Drive first), discovered at runtime. -->
     <ProjectReference Include="..\WatermarkRemover.Netdisk\WatermarkRemover.Netdisk.csproj" />
     <ProjectReference Include="..\WatermarkRemover.Pdf\WatermarkRemover.Pdf.csproj" />
@@ -47,7 +49,9 @@
        publish gate then fails loudly instead of shipping a broken layout. -->
   <ItemGroup>
     <SidecarAsset Include="wcocr.dll" />
-    <SidecarAsset Include="Everything64.dll" />
+    <!-- Privileged index host for 快速搜索. Published by PublishFileIndexer below; the app copies
+         it to ProgramData once, so the logon task never points into the versioned app folder. -->
+    <SidecarAsset Include="WatermarkRemover.Indexer.exe" />
     <SidecarAsset Include="Models\ch_PP-OCRv5_det_mobile.onnx" />
     <SidecarAsset Include="Models\ch_PP-LCNet_x0_25_textline_ori_cls_mobile.onnx" />
     <SidecarAsset Include="Models\ch_PP-OCRv5_rec_mobile.onnx" />
@@ -71,13 +75,6 @@
   <ItemGroup>
     <None Include="Native\wcocr.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true">
       <Link>wcocr.dll</Link>
-    </None>
-    <!-- Everything SDK IPC wrapper (voidtools, MIT-style licence). The 快速搜索 page talks to a
-         running Everything through it; it is NOT the search engine itself, so the page degrades
-         to a hint when Everything is absent. Kept beside the exe for the same reason as wcocr:
-         P/Invoke inside the single-file bundle cannot find it reliably. -->
-    <None Include="Native\Everything64.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true">
-      <Link>Everything64.dll</Link>
     </None>
   </ItemGroup>
 
@@ -129,6 +126,25 @@
     </ItemGroup>
     <Copy SourceFiles="@(_BridgeExe)" DestinationFolder="$(PublishDir)BrotherEngine\" SkipUnchangedFiles="true" />
     <Copy SourceFiles="@(_BridgeExe)" DestinationFolder="$(TargetDir)BrotherEngine\" SkipUnchangedFiles="true" />
+  </Target>
+
+  <!-- Index host publish (快速搜索): a separate self-contained single-file exe. It must run as an
+       elevated logon task on its own, so it cannot share the app's bundle. Published once into
+       obj\IndexerPublish, then copied beside the app (publish tree + build tree). -->
+  <Target Name="PublishFileIndexer" BeforeTargets="VerifyPublishLayout">
+    <PropertyGroup>
+      <_IndexerProject>..\WatermarkRemover.Indexer\WatermarkRemover.Indexer.csproj</_IndexerProject>
+      <_IndexerPublishDir>$(MSBuildThisFileDirectory)$(IntermediateOutputPath)IndexerPublish\</_IndexerPublishDir>
+    </PropertyGroup>
+    <MSBuild Projects="$(_IndexerProject)" Targets="Restore"
+             Properties="RuntimeIdentifier=win-x64;SelfContained=true" />
+    <MSBuild Projects="$(_IndexerProject)" Targets="Publish"
+             Properties="Configuration=$(Configuration);RuntimeIdentifier=win-x64;SelfContained=true;PublishSingleFile=true;PublishDir=$(_IndexerPublishDir);Version=$(Version)" />
+    <ItemGroup>
+      <_IndexerExe Include="$(_IndexerPublishDir)WatermarkRemover.Indexer.exe" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_IndexerExe)" DestinationFolder="$(PublishDir)" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(_IndexerExe)" DestinationFolder="$(TargetDir)" SkipUnchangedFiles="true" />
   </Target>
 
   <!-- PUBLISH GATE — turns "asset missing on the user's machine" (a runtime failure discovered on
