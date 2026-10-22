@@ -100,6 +100,12 @@ public sealed class SearchPanelViewModel : ObservableObject
 
     public bool IsUnavailable => !IsAvailable;
 
+    /// <summary>
+    /// The setup button is visible when the engine is missing AND when a newer sidecar is
+    /// shipped: an already-running (older) host would otherwise never be upgraded.
+    /// </summary>
+    public bool ShowInstallButton => IsUnavailable || _setup?.NeedsUpdate == true;
+
     /// <summary>Text on the setup button, which is shown whenever the engine is unavailable.</summary>
     public string InstallButtonText
     {
@@ -257,6 +263,9 @@ public sealed class SearchPanelViewModel : ObservableObject
             bool available = await availability.CheckAvailableAsync();
             IsAvailable = available;
             StatusText = available ? AvailableStatus() : UnavailableStatus();
+            // Install/upgrade status is derived from the filesystem, so re-read it after a ping.
+            OnPropertyChanged(nameof(InstallButtonText));
+            OnPropertyChanged(nameof(ShowInstallButton));
         }
         catch (OperationCanceledException)
         {

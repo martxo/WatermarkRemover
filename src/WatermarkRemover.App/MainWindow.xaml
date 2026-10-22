@@ -649,7 +649,7 @@
                             Style="{StaticResource SmallButton}"
                             Command="{Binding Search.InstallProviderCommand}"
                             HorizontalAlignment="Right"
-                            Visibility="{Binding Search.IsUnavailable, Converter={StaticResource BoolToVis}}"/>
+                            Visibility="{Binding Search.ShowInstallButton, Converter={StaticResource BoolToVis}}"/>
                 </Grid>
 
                 <!-- Hits: double-click opens, single click selects for the action row below. -->

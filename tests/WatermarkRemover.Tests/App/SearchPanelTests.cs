@@ -1,6 +1,8 @@
 using WatermarkRemover.App.Services;
 using WatermarkRemover.App.ViewModels;
 using WatermarkRemover.Core.Features.Search;
+using WatermarkRemover.Index;
+using WatermarkRemover.Index.Contracts;
 
 namespace WatermarkRemover.Tests.App;
 
@@ -40,6 +42,55 @@ public class SearchPanelTests
             error = null;
             return true;
         }
+    }
+
+    private sealed class UpdatableProvider : IFileSearchProvider, IIndexAvailability, IIndexSetup
+    {
+        public string DisplayName => "内置索引";
+
+        public bool IsAvailable => true;
+
+        public bool IsInstalled => true;
+
+        public bool NeedsUpdate { get; private set; } = true;
+
+        public string InstalledVersion => "1.16.6";
+
+        public int Installs { get; private set; }
+
+        public IndexStatusDto? LastStatus => new(true, false, 100, 10, new[] { @"C:\" }, null);
+
+        public Task<bool> CheckAvailableAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(true);
+
+        public Task<bool> InstallAsync(CancellationToken cancellationToken = default)
+        {
+            Installs++;
+            NeedsUpdate = false;
+            return Task.FromResult(true);
+        }
+
+        public Task<IReadOnlyList<FileSearchResult>> SearchAsync(
+            string query, int maxResults, CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<FileSearchResult>>(Array.Empty<FileSearchResult>());
+    }
+
+    [Fact]
+    public async Task A_pending_engine_update_is_offered_even_while_the_engine_runs()
+    {
+        var provider = new UpdatableProvider();
+        var vm = new SearchPanelViewModel(provider, new FakeShell());
+        for (int i = 0; i < 100 && !vm.ShowInstallButton; i++) await Task.Delay(10);
+
+        Assert.True(vm.IsAvailable);
+        Assert.True(vm.ShowInstallButton);
+        Assert.Equal("更新索引引擎", vm.InstallButtonText);
+
+        vm.InstallProviderCommand.Execute(null);
+        for (int i = 0; i < 200 && vm.ShowInstallButton; i++) await Task.Delay(10);
+
+        Assert.Equal(1, provider.Installs);
+        Assert.False(vm.ShowInstallButton);
     }
 
     private static (SearchPanelViewModel Vm, FakeProvider Provider, FakeShell Shell) NewPanel(bool available = true)
