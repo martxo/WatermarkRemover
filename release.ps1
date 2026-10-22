@@ -40,8 +40,11 @@ $stamped = $text -replace '<Version>[^<]+</Version>', "<Version>$Version</Versio
 if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed ($LASTEXITCODE)" }
 
 Write-Host "== 1/3 vpk pack $Version =="
+# --noPortable: the Portable zip is a second 236MB copy of the same payload, uploaded only for
+# people who unzip instead of installing — which we no longer support (Setup installs get
+# deltas; an unzipped copy never can). Skipping it cuts ~1/5 of every release upload.
 vpk pack --packId WatermarkRemover --packVersion $Version `
-    --packDir d:\code\publish-staging --mainExe WatermarkRemover.exe
+    --packDir d:\code\publish-staging --mainExe WatermarkRemover.exe --noPortable
 if ($LASTEXITCODE -ne 0) { throw "vpk pack failed ($LASTEXITCODE)" }
 
 Write-Host "== 2/3 vpk upload github $Tag =="
