@@ -2,6 +2,8 @@ using System.Collections.ObjectModel;
 using System.IO;
 using System.Text;
 using System.Windows;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using WatermarkRemover.App.Logging;
 using WatermarkRemover.Core.Features;
 using WatermarkRemover.Core.Settings;
@@ -68,9 +70,9 @@ public sealed class FileJobViewModel : ObservableObject
     /// <summary>Raised when a quick-suffix chip is clicked; carries the suffix label.</summary>
     public event EventHandler<string>? SuffixToggleRequested;
 
-    public string InputPath { get; }
+    public string InputPath { get; private set; }
 
-    public string FileName { get; }
+    public string FileName { get; private set; }
 
     /// <summary>
     /// Name shown on the card: the output file's name once generated (that is the file the user
@@ -96,6 +98,7 @@ public sealed class FileJobViewModel : ObservableObject
                 OnPropertyChanged(nameof(StateText));
                 OnPropertyChanged(nameof(ShowStatusChip));
                 OnPropertyChanged(nameof(ShowCopyError));
+                OnPropertyChanged(nameof(ShowLiveStrip));
             }
         }
     }
@@ -154,6 +157,55 @@ public sealed class FileJobViewModel : ObservableObject
 
     /// <summary>Preview button wording follows the strip: open it, or fold it away.</summary>
     public string PreviewToggleText => StripOpen ? "收起" : "预览";
+
+    /// <summary>Pages that have arrived while the scanner is still feeding the document. The
+    /// finished PDF strip takes over once the scan lands.</summary>
+    public ObservableCollection<ImageSource> LiveThumbnails { get; } = new();
+
+    /// <summary>Whether the live strip is visible: a processing scan row with at least one page.</summary>
+    public bool ShowLiveStrip =>
+        State == JobState.Processing &&
+        OwnerFeatureId == "scan.page" &&
+        LiveThumbnails.Count > 0;
+
+    /// <summary>Adds one page thumbnail that arrived mid-scan (UI thread; late callbacks after
+    /// finalisation are ignored).</summary>
+    internal void AddLiveThumbnail(byte[] png)
+    {
+        if (State != JobState.Processing) return;
+
+        try
+        {
+            LiveThumbnails.Add(DecodeThumbnail(png));
+            OnPropertyChanged(nameof(ShowLiveStrip));
+        }
+        catch (Exception ex)
+        {
+            // A thumbnail is cosmetic — never let a decode failure abort the scan row.
+            AppLog.Trace("扫描缩略图解码失败，已跳过该页预览", ex);
+        }
+    }
+
+    /// <summary>Releases the live thumbnails once the real PDF strip is available.</summary>
+    internal void ClearLiveThumbnails()
+    {
+        if (LiveThumbnails.Count == 0) return;
+
+        LiveThumbnails.Clear();
+        OnPropertyChanged(nameof(ShowLiveStrip));
+    }
+
+    private static ImageSource DecodeThumbnail(byte[] png)
+    {
+        using var stream = new MemoryStream(png);
+        var image = new BitmapImage();
+        image.BeginInit();
+        image.CacheOption = BitmapCacheOption.OnLoad;
+        image.StreamSource = stream;
+        image.EndInit();
+        image.Freeze();
+        return image;
+    }
 
     /// <summary>Owner side (coordinator): attach a freshly built strip and expand it.</summary>
     internal void AttachStrip(PdfPreviewViewModel strip)
@@ -364,6 +416,20 @@ public sealed class FileJobViewModel : ObservableObject
         {
             Detail = $"复制失败：{ex.Message}";
         }
+    }
+
+    /// <summary>
+    /// Adopts the real file once an in-progress job (e.g. the scan placeholder, which starts
+    /// without a path) has produced it. Keeps <see cref="FileName"/> consistent for the delete
+    /// prompt and diagnostics.
+    /// </summary>
+    internal void AdoptSource(string inputPath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(inputPath);
+        InputPath = inputPath;
+        FileName = Path.GetFileName(inputPath);
+        OnPropertyChanged(nameof(InputPath));
+        OnPropertyChanged(nameof(FileName));
     }
 
     /// <summary>Called by the coordinator after the output file was successfully moved.</summary>

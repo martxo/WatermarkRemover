@@ -237,6 +237,11 @@
                         Style="{StaticResource PrimaryButton}"
                         Command="{Binding ScanCommand}"
                         MinWidth="110" Margin="24,0,0,0"/>
+                <Button Content="取消扫描"
+                        Style="{StaticResource SmallButton}"
+                        Command="{Binding CancelScanCommand}"
+                        Visibility="{Binding IsScanning, Converter={StaticResource BoolToVis}}"
+                        Margin="10,0,0,0"/>
                 <TextBlock Text="{Binding ScanStatus}"
                            Margin="14,0,0,0"
                            VerticalAlignment="Center"
@@ -1270,6 +1275,37 @@
                                                 ToolTip="删除这条记录，已生成的文件移入回收站（源文件保留）"/>
                                     </StackPanel>
                                 </Grid>
+
+                                <!-- Live scan pages: thumbnails appear as each page leaves the
+                                     scanner, then the finished PDF strip replaces them. -->
+                                <Border Margin="0,12,0,0"
+                                        Padding="0,12,0,0"
+                                        BorderBrush="{StaticResource BorderBrushLight}"
+                                        BorderThickness="0,1,0,0"
+                                        Visibility="{Binding ShowLiveStrip, Converter={StaticResource BoolToVis}}">
+                                    <ScrollViewer HorizontalScrollBarVisibility="Auto"
+                                                  VerticalScrollBarVisibility="Disabled"
+                                                  Focusable="False">
+                                        <ItemsControl ItemsSource="{Binding LiveThumbnails}">
+                                            <ItemsControl.ItemsPanel>
+                                                <ItemsPanelTemplate>
+                                                    <StackPanel Orientation="Horizontal"/>
+                                                </ItemsPanelTemplate>
+                                            </ItemsControl.ItemsPanel>
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Border Width="64" Height="86" Margin="0,0,8,0"
+                                                            Background="White"
+                                                            BorderBrush="{StaticResource BorderBrushLight}"
+                                                            BorderThickness="1"
+                                                            CornerRadius="4">
+                                                        <Image Source="{Binding}" Stretch="Uniform" Margin="3"/>
+                                                    </Border>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </ScrollViewer>
+                                </Border>
 
                                 <!-- Inline thumbnail grid, browser-style: one small tile per
                                      page on white, flowing in a wrap layout (no canvas, no

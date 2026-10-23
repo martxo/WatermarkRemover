@@ -112,6 +112,12 @@ public sealed class JobBoard : ObservableObject
     /// <summary>Starts a new batch: the completion tally resets with the first files.</summary>
     public void ResetCompleted() => CompletedCount = 0;
 
+    /// <summary>Drops an in-progress placeholder row without touching any file.</summary>
+    public void Remove(FileJobViewModel job)
+    {
+        if (Jobs.Remove(job)) RefreshCounters();
+    }
+
     /// <summary>One job finished (worker thread): count it and float its row to the top.</summary>
     public void MarkCompleted(FileJobViewModel job)
     {

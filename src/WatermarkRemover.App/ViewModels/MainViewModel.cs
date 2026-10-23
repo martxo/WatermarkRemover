@@ -6,6 +6,7 @@ using WatermarkRemover.App.Ocr;
 using WatermarkRemover.App.Services;
 using WatermarkRemover.App.Settings;
 using WatermarkRemover.Core.Features;
+using WatermarkRemover.Core.Features.Naming;
 using WatermarkRemover.Core.Features.Netdisk;
 using WatermarkRemover.Core.Features.Ocr;
 using WatermarkRemover.Core.Features.Scan;
@@ -75,6 +76,7 @@ public sealed class MainViewModel : ObservableObject
     private readonly JobRenamer _renamer;
     private readonly PreviewStripCoordinator _preview;
     private bool _isBusy;
+    private bool _isScanning;
     private bool _isSettingsOpen;
     private SettingsViewModel? _settingsPage;
 
@@ -110,6 +112,7 @@ public sealed class MainViewModel : ObservableObject
         OpenOutputCommand = new RelayCommand(p => OpenOutput(p as string), p => p is string path && File.Exists(path));
         SaveSettingsCommand = new RelayCommand(SaveSettings);
         ScanCommand = new RelayCommand(() => _ = RunScanAsync(), () => IsIdle);
+        CancelScanCommand = new RelayCommand(() => _scan.CancelScan(), () => IsScanning);
         PreviewCommand = new RelayCommand(p => _preview.Toggle(p as FileJobViewModel), p => p is FileJobViewModel);
 
         // --- 手机传文件 ---
@@ -185,6 +188,20 @@ public sealed class MainViewModel : ObservableObject
     public RelayCommand SaveSettingsCommand { get; }
 
     public RelayCommand ScanCommand { get; }
+
+    /// <summary>Cancels the running scan; pages already captured are saved as a partial PDF.</summary>
+    public RelayCommand CancelScanCommand { get; }
+
+    /// <summary>True only while the scanner session is running — gates the cancel button.</summary>
+    public bool IsScanning
+    {
+        get => _isScanning;
+        private set
+        {
+            if (SetProperty(ref _isScanning, value))
+                CancelScanCommand.RaiseCanExecuteChanged();
+        }
+    }
 
     /// <summary>Expands / folds the thumbnail strip under the finished record; the parameter is the row.</summary>
     public RelayCommand PreviewCommand { get; }
@@ -436,55 +453,94 @@ public sealed class MainViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Runs one scan with the layout chosen on the scan page, then files the produced PDF into
-    /// the job list as a completed record so rename / suffix chips / delete all work unchanged.
+    /// Runs one scan with the layout chosen on the scan page. The row exists from the start and
+    /// updates per page (扫描中 · 已读 N 页); once the PDF lands the same row is adopted as the
+    /// completed record, so rename / suffix chips / delete all keep working unchanged.
     /// </summary>
     private async Task RunScanAsync()
     {
         if (IsBusy) return;
 
+        FileJobViewModel job = AddScanningJob();
+        bool scanFinished = false;
+        Task<AutoNameResult?>? earlyNaming = null;
+        var pageProgress = new Progress<ScannedPageInfo>(page =>
+        {
+            job.AddLiveThumbnail(page.ThumbnailPng);
+            job.ReportStage($"正在扫描… 已读 {page.PageNumber} 页");
+
+            // Page 1 carries a naming-resolution image: OCR it now, while the scanner keeps
+            // feeding the remaining pages, instead of after the finished PDF.
+            if (!scanFinished && earlyNaming is null && page.NamingImage is { Length: > 0 } namingImage)
+                earlyNaming = Task.Run(() => _naming.TrySuggestFromImageAsync(namingImage));
+        });
+
+        IsScanning = true;
         ScanOutcome outcome;
         try
         {
-            outcome = await _scan.ScanOnceAsync(progressSink: null).ConfigureAwait(true);
+            outcome = await _scan.ScanOnceAsync(progressSink: null, pageProgress).ConfigureAwait(true);
         }
         catch (ScannerBusyException ex)
         {
+            Board.Remove(job);
             _dialogs.Info(ex.Message, "提示");
             return;
+        }
+        finally
+        {
+            IsScanning = false;
+            scanFinished = true;
         }
 
         if (!outcome.Success)
         {
+            if (outcome.Cancelled && outcome.PageCount == 0)
+            {
+                AppLog.Info("扫描已取消（未读取到页面）");
+                Board.Remove(job);
+                return;
+            }
+
             AppLog.Error($"扫描失败：{outcome.Error}");
+            job.Apply(FeatureResult.FailWithDetails(
+                job.InputPath, outcome.Error ?? "扫描失败", outcome.ErrorDetails));
+            job.ClearLiveThumbnails();
             _dialogs.Error(outcome.Error ?? "扫描失败", "扫描失败");
             return;
         }
 
-        // The row (and its unfolded thumbnail strip) lands the moment the scan saves —
-        // naming/OCR must never hold the result hostage. The rename runs behind it; the
-        // open strip tracks the rename of its own file by fingerprint when it next
-        // needs the path.
-        FileJobViewModel job = AddScanJob(outcome.OutputPath!, outcome.PageCount);
-        _ = RenameScanInBackgroundAsync(job, outcome.OutputPath!);
+        // The PDF is both input and output of the record; adopting the real path keeps the
+        // row's file name (delete prompt, diagnostics) consistent with what landed on disk.
+        string path = outcome.OutputPath!;
+        job.AdoptSource(path);
+        string summary = outcome.Cancelled
+            ? $"已取消，保留 {outcome.PageCount} 页"
+            : $"扫描 {outcome.PageCount} 页";
+        job.Apply(FeatureResult.Success(path, path, summary, outcome.PageCount));
+        job.ClearLiveThumbnails(); // the PDF strip now owns the page previews
+        Board.MoveToTop(job);
+        // Zero-click preview: the strip unfolds the moment the scan lands.
+        _preview.Open(job);
+        // Naming may already have finished from page 1 while the scan continued; the rename
+        // still waits for the PDF (and the strip's writes) before moving the file.
+        _ = RenameScanInBackgroundAsync(job, path, earlyNaming);
     }
 
-    /// <summary>Files a finished scan into the job list. The PDF is both input and output of the
-    /// record, so every existing interaction (rename, chips, delete) applies without changes.
-    /// Returns the row so the (async) content-naming chain can follow it.</summary>
-    private FileJobViewModel AddScanJob(string pdfPath, int pageCount)
+    /// <summary>A row that exists for the whole scan: live page count first, the finished PDF
+    /// record once <see cref="FileJobViewModel.AdoptSource"/> hands it the real path.</summary>
+    private FileJobViewModel AddScanningJob()
     {
-        var job = new FileJobViewModel(pdfPath, Settings.QuickSuffixes)
+        var job = new FileJobViewModel("扫描中", Settings.QuickSuffixes)
         {
             OwnerFeatureId = "scan.page",
         };
         job.RenameRequested += OnJobRenameRequested;
         job.SuffixToggleRequested += OnJobSuffixToggleRequested;
-        job.Apply(FeatureResult.Success(pdfPath, pdfPath, $"扫描 {pageCount} 页", pageCount));
+        job.MarkProcessing("正在准备扫描…");
+        Board.ResetCompleted();
         Board.Add(job);
         Board.MoveToTop(job);
-        // Zero-click preview: the strip unfolds the moment the scan lands.
-        _preview.Open(job);
         return job;
     }
 
@@ -494,14 +550,30 @@ public sealed class MainViewModel : ObservableObject
     /// (the open strip re-finds its file by fingerprint when it next needs the path). Naming
     /// must never fail the scan — every exception lands in the log, the timestamp name stays.
     /// </summary>
-    private async Task RenameScanInBackgroundAsync(FileJobViewModel job, string pdfPath)
+    private async Task RenameScanInBackgroundAsync(
+        FileJobViewModel job,
+        string pdfPath,
+        Task<AutoNameResult?>? earlyNaming = null)
     {
         try
         {
             // The open strip auto-orients / rewrites the file right after landing; a rename
             // (File.Move) during that write throws, so drain the strip's busy passes first.
             await (job.Strip?.WaitForSettledAsync() ?? Task.CompletedTask).ConfigureAwait(false);
-            string finalPath = await _naming.TryRenameAsync(pdfPath).ConfigureAwait(false);
+
+            // Use the page-1 suggestion when it produced one. Otherwise fall back to probing the
+            // PDF — but not when page 1 was already probed and the settings pin naming to it.
+            AutoNameResult? suggestion = earlyNaming is null
+                ? null
+                : await earlyNaming.ConfigureAwait(false);
+            string finalPath;
+            if (suggestion is not null)
+                finalPath = await _naming.ApplyAsync(pdfPath, suggestion).ConfigureAwait(false);
+            else if (earlyNaming is not null && Settings.NameFromFirstPageOnly)
+                finalPath = pdfPath;
+            else
+                finalPath = await _naming.TryRenameAsync(pdfPath).ConfigureAwait(false);
+
             if (string.Equals(finalPath, pdfPath, StringComparison.OrdinalIgnoreCase)) return;
             AppLog.Info($"后台命名完成：{Path.GetFileName(pdfPath)} → {Path.GetFileName(finalPath)}");
             var dispatcher = Application.Current?.Dispatcher;

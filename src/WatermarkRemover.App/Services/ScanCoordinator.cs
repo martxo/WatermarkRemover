@@ -17,6 +17,7 @@ public sealed class ScanCoordinator
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly Action<bool> _setBusy;
     private readonly Action<string> _setStatus;
+    private CancellationTokenSource? _cts;
 
     public ScanCoordinator(AppSettings settings, Action<bool> setBusy, Action<string> setStatus)
     {
@@ -31,11 +32,15 @@ public sealed class ScanCoordinator
     /// status line and (when given) the caller's sink. Throws <see cref="ScannerBusyException"/>
     /// when another scan still holds the hardware.
     /// </summary>
-    public async Task<ScanOutcome> ScanOnceAsync(IProgress<string>? progressSink)
+    public async Task<ScanOutcome> ScanOnceAsync(
+        IProgress<string>? progressSink,
+        IProgress<ScannedPageInfo>? pageSink = null)
     {
         if (!await _gate.WaitAsync(0).ConfigureAwait(true))
             throw new ScannerBusyException();
 
+        using var cts = new CancellationTokenSource();
+        _cts = cts;
         _setBusy(true);
         _setStatus("正在准备扫描…");
         var progress = new Progress<string>(message =>
@@ -46,16 +51,23 @@ public sealed class ScanCoordinator
         try
         {
             var (duplex, color) = ScanModes();
-            return await _scanService.ScanAsync(duplex, color, progress, CancellationToken.None)
+            return await _scanService.ScanAsync(duplex, color, progress, cts.Token, pageSink)
                 .ConfigureAwait(true);
         }
         finally
         {
+            _cts = null;
             _gate.Release();
             _setBusy(false);
             _setStatus(string.Empty);
         }
     }
+
+    /// <summary>
+    /// Requests cancellation of the running scan. Pages already captured are still assembled into
+    /// a partial PDF by <see cref="ScanService"/>; with no pages yet nothing is written.
+    /// </summary>
+    public void CancelScan() => _cts?.Cancel();
 
     /// <summary>
     /// The preview strip's gap-button scan: one pass handed back as the scanned PDF's path for the
