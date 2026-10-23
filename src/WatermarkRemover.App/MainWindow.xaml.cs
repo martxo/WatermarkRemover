@@ -42,24 +42,13 @@ public partial class MainWindow : Window
             Interval = TimeSpan.FromMilliseconds(180),
         };
         _dragWatchdog.Tick += OnDragWatchdogTick;
-        _viewModel.Jobs.CollectionChanged += (_, _) => SyncListVisibility();
+        _viewModel.Board.Jobs.CollectionChanged += (_, _) => SyncListVisibility();
         // Section switches don't touch the Jobs collection — follow the count property instead.
-        _viewModel.PropertyChanged += (_, e) =>
+        _viewModel.Board.PropertyChanged += (_, e) =>
         {
-            if (e.PropertyName == nameof(MainViewModel.VisibleJobCount)) SyncListVisibility();
+            if (e.PropertyName == nameof(JobBoard.VisibleJobCount)) SyncListVisibility();
         };
         Loaded += OnWindowLoaded;
-
-        // Reflect the persisted scan layout on the scan panel. The Checked handler no-ops when
-        // the value matches what is already stored.
-        int initial = Math.Clamp(_viewModel.Settings.ScanDuplex, 0, 2);
-        RadioButton radio = initial switch
-        {
-            1 => ScanDuplexLongEdge,
-            2 => ScanDuplexShortEdge,
-            _ => ScanDuplexSimplex,
-        };
-        radio.IsChecked = true;
     }
 
     /// <summary>
@@ -106,13 +95,6 @@ public partial class MainWindow : Window
         return null;
     }
 
-    /// <summary>Persists the scan layout choice the moment a radio is checked (no save button).</summary>
-    private void OnScanDuplexChecked(object sender, RoutedEventArgs e)
-    {
-        if (sender is RadioButton radio && int.TryParse(radio.Tag as string, out int duplex))
-            _viewModel.ApplyScanDuplex(duplex);
-    }
-
     /// <summary>
     /// Quiet update check on startup; never disturbs normal work.
     /// </summary>
@@ -156,7 +138,7 @@ public partial class MainWindow : Window
     private void SyncListVisibility()
     {
         // Per-section visibility: a full scan history must not hide 去水印's empty state.
-        bool hasJobs = _viewModel.VisibleJobCount > 0;
+        bool hasJobs = _viewModel.Board.VisibleJobCount > 0;
         JobList.Visibility = hasJobs ? Visibility.Visible : Visibility.Collapsed;
         EmptyStateText.Visibility = hasJobs ? Visibility.Collapsed : Visibility.Visible;
     }
@@ -319,7 +301,7 @@ public partial class MainWindow : Window
             !IsWithin(e.OriginalSource as DependencyObject, UserEntryButton))
             UserMenuPopup.IsOpen = false;
 
-        if (!_viewModel.Jobs.Any(j => j.IsEditing)) return;
+        if (!_viewModel.Board.Jobs.Any(j => j.IsEditing)) return;
 
         // A click inside the edit box (text area, selection, caret) must not commit.
         if (IsWithinRenameBox(e.OriginalSource as DependencyObject)) return;
@@ -340,7 +322,7 @@ public partial class MainWindow : Window
 
     private void CommitActiveRenames()
     {
-        foreach (var job in _viewModel.Jobs.Where(j => j.IsEditing).ToList())
+        foreach (var job in _viewModel.Board.Jobs.Where(j => j.IsEditing).ToList())
             job.CommitEditCommand.Execute(null);
     }
 

@@ -1,3 +1,4 @@
+using WatermarkRemover.Core.Features;
 using WatermarkRemover.Core.Features.Ocr;
 
 namespace WatermarkRemover.Tests.Core;
@@ -12,7 +13,7 @@ public class OcrEngineChainTests
             Task.FromResult<IReadOnlyList<string>>(new[] { name });
     }
 
-    private sealed class FakeFactory(string name, bool available, bool throws = false) : IOcrEngineFactory
+    private sealed class FakeFactory(string name, bool available, bool throws = false) : IProbeFactory<IOcrEngine>
     {
         public string Name => name;
 
@@ -28,7 +29,7 @@ public class OcrEngineChainTests
     [Fact]
     public void PicksFirstAvailableEngineAndRecordsSkippedLinks()
     {
-        var chain = new OcrEngineChain(new IOcrEngineFactory[]
+        var chain = new OcrEngineChain(new IProbeFactory<IOcrEngine>[]
         {
             new FakeFactory("first", available: false),
             new FakeFactory("second", available: true),
@@ -44,7 +45,7 @@ public class OcrEngineChainTests
     [Fact]
     public async Task FallbackStubCarriesAllFailureReasonsWhenNothingUsable()
     {
-        var chain = new OcrEngineChain(new IOcrEngineFactory[]
+        var chain = new OcrEngineChain(new IProbeFactory<IOcrEngine>[]
         {
             new FakeFactory("first", available: false),
             new FakeFactory("second", available: false),
@@ -60,7 +61,7 @@ public class OcrEngineChainTests
     [Fact]
     public void ThrowingEngineIsRecordedAndChainKeepsDegrading()
     {
-        var chain = new OcrEngineChain(new IOcrEngineFactory[]
+        var chain = new OcrEngineChain(new IProbeFactory<IOcrEngine>[]
         {
             new FakeFactory("broken", available: true, throws: true),
             new FakeFactory("healthy", available: true),
@@ -73,7 +74,7 @@ public class OcrEngineChainTests
     [Fact]
     public void DescribeListsEveryProbedLink()
     {
-        var chain = new OcrEngineChain(new IOcrEngineFactory[]
+        var chain = new OcrEngineChain(new IProbeFactory<IOcrEngine>[]
         {
             new FakeFactory("first", available: false),
             new FakeFactory("second", available: true),
@@ -87,7 +88,7 @@ public class OcrEngineChainTests
     [Fact]
     public async Task EmptyChainYieldsStubMentioningNoRegistration()
     {
-        var chain = new OcrEngineChain(Array.Empty<IOcrEngineFactory>());
+        var chain = new OcrEngineChain(Array.Empty<IProbeFactory<IOcrEngine>>());
 
         Assert.False(chain.HasEngine);
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(
@@ -98,7 +99,7 @@ public class OcrEngineChainTests
     [Fact]
     public void SelectReturnsPinnedEngineAndProbesRemainingFactories()
     {
-        var chain = new OcrEngineChain(new IOcrEngineFactory[]
+        var chain = new OcrEngineChain(new IProbeFactory<IOcrEngine>[]
         {
             new FakeFactory("first", available: true),
             new FakeFactory("second", available: true),
@@ -115,7 +116,7 @@ public class OcrEngineChainTests
     [Fact]
     public void SelectFallsBackToAutomaticChainWhenPreferenceIsUnusable()
     {
-        var chain = new OcrEngineChain(new IOcrEngineFactory[]
+        var chain = new OcrEngineChain(new IProbeFactory<IOcrEngine>[]
         {
             new FakeFactory("first", available: true),
             new FakeFactory("second", available: false),
@@ -132,14 +133,14 @@ public class OcrEngineChainTests
     public void EnsureAllProbedProbesEveryFactoryExactlyOnce()
     {
         int probes = 0;
-        var chain = new OcrEngineChain(new IOcrEngineFactory[]
+        var chain = new OcrEngineChain(new IProbeFactory<IOcrEngine>[]
         {
-            new DelegateOcrEngineFactory("usable", () =>
+            new DelegateProbeFactory<IOcrEngine>("usable", () =>
             {
                 probes++;
                 return (true, new FakeEngine("usable"), string.Empty);
             }),
-            new DelegateOcrEngineFactory("missing", () =>
+            new DelegateProbeFactory<IOcrEngine>("missing", () =>
             {
                 probes++;
                 return (false, null, "not on this machine");

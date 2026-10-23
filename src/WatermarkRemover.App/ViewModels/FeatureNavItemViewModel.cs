@@ -7,16 +7,13 @@ public sealed class FeatureNavItemViewModel : ObservableObject
 {
     private bool _isSelected;
 
-    public FeatureNavItemViewModel(IFeature feature, string glyph)
-    {
-        Feature = feature;
-        Glyph = glyph;
-    }
+    public FeatureNavItemViewModel(IFeature feature) =>
+        Feature = feature ?? throw new ArgumentNullException(nameof(feature));
 
     public IFeature Feature { get; }
 
-    /// <summary>Segoe MDL2 Assets glyph shown left of the feature name.</summary>
-    public string Glyph { get; }
+    /// <summary>Segoe MDL2 Assets glyph shown left of the feature name; owned by the feature.</summary>
+    public string Glyph => Feature.Glyph;
 
     public string DisplayName => Feature.DisplayName;
 

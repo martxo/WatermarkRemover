@@ -20,6 +20,18 @@ public interface IFeature
     /// </summary>
     string ProcessingText => $"正在处理「{DisplayName}」…";
 
+    /// <summary>Segoe MDL2 glyph shown in the sidebar; unknown features get a generic page icon.</summary>
+    string Glyph => "\uE7C3";
+
+    /// <summary>One-line capability note shown beside the page title.</summary>
+    string Tagline => string.Empty;
+
+    /// <summary>
+    /// Which shell page hosts this feature. The ViewLocator maps the value to a DataTemplate, so
+    /// a new feature only declares its page kind instead of editing the shell's visual tree.
+    /// </summary>
+    FeaturePageKind PageKind => FeaturePageKind.Files;
+
     /// <summary>Whether this feature can process the given file (typically by extension).</summary>
     bool CanHandle(string filePath);
 
@@ -28,4 +40,23 @@ public interface IFeature
     /// <see cref="FeatureResult.Status"/>.
     /// </summary>
     FeatureResult Run(string inputPath, FeatureContext context);
+}
+
+/// <summary>The shell page a feature is rendered in. Files and Scan also own the job list.</summary>
+public enum FeaturePageKind
+{
+    /// <summary>Drop zone + job list (file processors: watermark, OCR).</summary>
+    Files,
+
+    /// <summary>Scanner strip + job list.</summary>
+    Scan,
+
+    /// <summary>Full-height search page (no job list).</summary>
+    Search,
+
+    /// <summary>Netdisk entry hub + job list.</summary>
+    Netdisk,
+
+    /// <summary>Phone receiver panel + job list.</summary>
+    Transfer,
 }

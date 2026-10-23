@@ -1,4 +1,5 @@
 using System.IO;
+using Velopack.Locators;
 using WatermarkRemover.Core.Updates;
 
 namespace WatermarkRemover.App.Updates;
@@ -15,7 +16,10 @@ public sealed record UpdateResidueLocation(
 /// <summary>
 /// Where the two update channels park their packages, and what of that is safe to clean.
 ///
-/// The Velopack channel keeps full/delta nupkgs in <c>&lt;root&gt;\packages</c>. The latest full
+/// The Velopack channel keeps full/delta nupkgs in its package cache (usually
+/// <c>&lt;root&gt;\packages</c>, or <c>%LOCALAPPDATA%\&lt;AppId&gt;\packages</c> when the install
+/// root is not writable — always ask <see cref="GetVelopackPackagesDirectory"/> rather than
+/// guessing). The latest full
 /// package is the diff base every future delta needs (UpdateManager.CreateDeltaUpdateStrategy:
 /// without it deltas are disabled and every update becomes a full download), so cleanup keeps
 /// the CURRENT and the LATEST full and treats everything else — old versions, deltas already
@@ -28,10 +32,22 @@ public static class UpdateStorage
 {
     private const string PackageId = UpdateConfig.VelopackPackId;
 
-    /// <summary>Velopack's package cache: <c>&lt;install-root&gt;\packages</c> when the exe sits in
-    /// <c>&lt;install-root&gt;\current</c>; null for green directories (they have no package cache).</summary>
+    /// <summary>Velopack's package cache. Asks Velopack first: it redirects the cache to
+    /// <c>%LOCALAPPDATA%\&lt;AppId&gt;\packages</c> when the install root is not writable, so
+    /// <c>&lt;install-root&gt;\packages</c> is only the common case. Null for green directories
+    /// (they have no package cache).</summary>
     public static string? GetVelopackPackagesDirectory()
     {
+        try
+        {
+            string? authoritative = VelopackLocator.Current.PackagesDir;
+            if (!string.IsNullOrEmpty(authoritative)) return authoritative;
+        }
+        catch (Exception)
+        {
+            // startup hooks not run (tests, dev tools) → fall through to the path heuristic
+        }
+
         try
         {
             string? exeDir = Path.GetDirectoryName(Environment.ProcessPath);

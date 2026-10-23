@@ -524,32 +524,21 @@
         </Button>
     </DataTemplate>
 
-    <!-- One atomic strip unit: [left plus | page tile | (right plus, last unit only)]. The
-         wrap panel can only break BETWEEN units, so every row — including a wrapped second
-         row — opens with its own plus slot and the columns stay vertically aligned. Between
-         two adjacent pages a single plus serves both edges, so the interior tail must be
-         COLLAPSED here, not merely null: a ContentControl instantiates its ContentTemplate
-         even for null content, and an uncollapsed interior tail paints a second, dead plus
-         between every pair of pages (the hover-reveal design exposed exactly that). -->
+    <!-- One atomic strip unit: [left plus | page tile]. The wrap panel can only break BETWEEN
+         units, so every row — including a wrapped second row — opens with its own plus slot
+         and the columns stay vertically aligned.
+         FLOW INVARIANT: every unit is exactly this wide (gap + tile), the last page included.
+         A third part here — e.g. the old trailing "append after the last page" plus, which
+         only the last unit carried — makes that unit 14px wider than its siblings; a row with
+         room for a tile but not for tile+14 then pushes the whole last page to the next row
+         and leaves a cell-sized hole (2026-10-22 report). The append action lives in the
+         strip's zoom rail instead. Never add a width-bearing decoration to one unit only. -->
     <DataTemplate x:Key="PdfStripUnitTemplate">
         <StackPanel Orientation="Horizontal">
             <ContentControl Content="{Binding Gap}"
                             ContentTemplate="{StaticResource PdfGapInsertTemplate}"/>
             <ContentControl Content="{Binding Tile}"
                             ContentTemplate="{StaticResource PdfThumbnailTileTemplate}"/>
-            <!-- Trailing bookend: exists only on the last unit; null = collapsed. -->
-            <ContentControl Content="{Binding Tail}"
-                            ContentTemplate="{StaticResource PdfGapInsertTemplate}">
-                <ContentControl.Style>
-                    <Style TargetType="ContentControl">
-                        <Style.Triggers>
-                            <DataTrigger Binding="{Binding Tail}" Value="{x:Null}">
-                                <Setter Property="Visibility" Value="Collapsed"/>
-                            </DataTrigger>
-                        </Style.Triggers>
-                    </Style>
-                </ContentControl.Style>
-            </ContentControl>
         </StackPanel>
     </DataTemplate>
 

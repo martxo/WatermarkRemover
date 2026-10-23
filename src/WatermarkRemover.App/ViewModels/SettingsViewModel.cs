@@ -7,6 +7,7 @@ using WatermarkRemover.App.Ocr;
 using WatermarkRemover.App.Recognition;
 using WatermarkRemover.App.Services;
 using WatermarkRemover.App.Updates;
+using WatermarkRemover.Core.Features;
 using WatermarkRemover.Core.Features.Layout;
 using WatermarkRemover.Core.Features.Ocr;
 using WatermarkRemover.Core.Logging;
@@ -391,7 +392,7 @@ public sealed class SettingsViewModel : ObservableObject
     {
         try
         {
-            OcrEngineLink[] links = await Task.Run(() =>
+            ProbeLink<IOcrEngine>[] links = await Task.Run(() =>
             {
                 AppOcrEngineChain.Instance.EnsureAllProbed();
                 AppLayoutStageChain.Instance.EnsureAllProbed();
@@ -400,7 +401,7 @@ public sealed class SettingsViewModel : ObservableObject
 
             foreach (var option in OcrOptions.Where(o => o.Name.Length > 0))
             {
-                OcrEngineLink? link = links.FirstOrDefault(
+                ProbeLink<IOcrEngine>? link = links.FirstOrDefault(
                     l => string.Equals(l.Name, option.Name, StringComparison.Ordinal));
                 option.UpdateAvailability(
                     link?.Available == true,
@@ -421,10 +422,10 @@ public sealed class SettingsViewModel : ObservableObject
     /// <summary>Maps the layout chain's probe results onto the radio rows (UI-thread only).</summary>
     private void UpdateLayoutStatuses()
     {
-        LayoutStageLink[] links = AppLayoutStageChain.Instance.Links.ToArray();
+        ProbeLink<ILayoutStage>[] links = AppLayoutStageChain.Instance.Links.ToArray();
         foreach (var option in LayoutOptions)
         {
-            LayoutStageLink? link = links.FirstOrDefault(
+            ProbeLink<ILayoutStage>? link = links.FirstOrDefault(
                 l => string.Equals(l.Name, option.Name, StringComparison.Ordinal));
             option.UpdateAvailability(
                 link?.Available == true,

@@ -89,25 +89,21 @@ public class PdfStripInsertTests : IDisposable
             await vm.LoadAsync();
             await DrainAsync(vm);
 
-            // One atomic [gap | tile | tail] unit per page: the strip's wrap panel can only
-            // break between units, so every row — including a wrapped one — opens with a plus
-            // slot (a flat gap/tile list used to let the wrap fall between a tile and its next
-            // plus, leaving the second row's first tile bare and the columns misaligned).
-            // Unit i opens with gap(i-1); only the last unit closes with the trailing gap,
-            // because between two adjacent pages one plus serves both edges.
+            // One atomic [gap | tile] unit per page: the strip's wrap panel can only break
+            // between units, so every row — including a wrapped one — opens with a plus slot
+            // (a flat gap/tile list used to let the wrap fall between a tile and its next plus,
+            // leaving the second row's first tile bare and the columns misaligned). Unit i opens
+            // with gap(i-1); between two adjacent pages one plus serves both edges.
             Assert.Equal(3, vm.StripItems.Count);
             var first = Assert.IsType<PdfPreviewStripUnitViewModel>(vm.StripItems[0]);
             Assert.Equal(-1, first.Gap.InsertAfterIndex);
             Assert.Same(vm.Thumbnails[0], first.Tile);
-            Assert.Null(first.Tail);
             var middle = Assert.IsType<PdfPreviewStripUnitViewModel>(vm.StripItems[1]);
             Assert.Equal(0, middle.Gap.InsertAfterIndex);
             Assert.Same(vm.Thumbnails[1], middle.Tile);
-            Assert.Null(middle.Tail);
             var last = Assert.IsType<PdfPreviewStripUnitViewModel>(vm.StripItems[2]);
             Assert.Equal(1, last.Gap.InsertAfterIndex);
             Assert.Same(vm.Thumbnails[2], last.Tile);
-            Assert.Equal(2, last.Tail!.InsertAfterIndex); // the trailing bookend lives here
         }
         finally
         {
@@ -300,11 +296,11 @@ public class PdfStripInsertTests : IDisposable
     }
 
     [Fact]
-    public async Task A_single_page_document_keeps_both_bookend_gaps_enabled()
+    public async Task A_single_page_document_keeps_both_bookends_live()
     {
-        // The user's real case: a one-page scan (a blank sheet, one loose page). Both bookend
-        // gaps must be live — the missing page is usually the one before or after it. An
-        // earlier "PageCount > 1" guard hid every plus in this document via the template's
+        // The user's real case: a one-page scan (a blank sheet, one loose page). Both ends must
+        // be live — the missing page is usually the one before or after it. An earlier
+        // "PageCount > 1" guard hid every plus in this document via the template's
         // IsEnabled=False → Hidden trigger, which reads as "no insert feature at all".
         string pdf = WritePdf("target.pdf", 100);
         var vm = new PdfPreviewViewModel(pdf, "scan.pdf", new FakeRenderer(1),
@@ -314,12 +310,44 @@ public class PdfStripInsertTests : IDisposable
             await vm.LoadAsync();
             await DrainAsync(vm);
 
-            var unit = Assert.Single(vm.StripItems); // one unit carrying both bookends
-            var single = Assert.IsType<PdfPreviewStripUnitViewModel>(unit);
+            var single = Assert.IsType<PdfPreviewStripUnitViewModel>(Assert.Single(vm.StripItems));
             Assert.Equal(-1, single.Gap.InsertAfterIndex);
-            Assert.Equal(0, single.Tail!.InsertAfterIndex);
             Assert.True(vm.InsertScanAfterCommand.CanExecute(-1), "front slot of a one-page document");
-            Assert.True(vm.InsertScanAfterCommand.CanExecute(0), "back slot of a one-page document");
+            Assert.True(vm.AppendScanCommand.CanExecute(null), "back slot of a one-page document");
+        }
+        finally
+        {
+            File.Delete(pdf);
+        }
+    }
+
+    [Fact]
+    public async Task Append_entry_scans_after_the_last_page_without_widening_its_cell()
+    {
+        // The end-of-document slot used to be a trailing plus inside the last unit, which made
+        // that unit 14px wider than every other one. A row with room for a tile but not for
+        // tile+14 bumped the whole last page to the next row and left a cell-sized hole
+        // (2026-10-22 report). The entry is now a rail button outside the wrap flow: every unit
+        // stays [gap | tile] of equal width, and appending still lands at the end of the file.
+        string pdf = WritePdf("target.pdf", 100, 110);
+        string scanned = WritePdf("scanned.pdf", 210);
+        var vm = new PdfPreviewViewModel(pdf, "scan.pdf", new FakeRenderer(2),
+            scanProvider: _ => Task.FromResult<string?>(scanned));
+        try
+        {
+            await vm.LoadAsync();
+            await DrainAsync(vm);
+
+            Assert.True(vm.AppendScanCommand.CanExecute(null));
+            vm.AppendScanCommand.Execute(null);
+            for (int i = 0; i < 300 && vm.PageCount < 3; i++)
+                await Task.Delay(10);
+
+            Assert.Equal(3, vm.PageCount);
+            Assert.Equal(new double[] { 100, 110, 210 }, WidthsOf(pdf));
+            Assert.Equal(3, vm.StripItems.Count);
+            Assert.All(vm.StripItems,
+                item => Assert.NotNull(Assert.IsType<PdfPreviewStripUnitViewModel>(item).Tile));
         }
         finally
         {

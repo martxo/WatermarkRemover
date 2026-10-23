@@ -107,7 +107,7 @@ public partial class SettingsPage : UserControl
         TransferDirBox.Text = dialog.FolderName;
     }
 
-    /// <summary>Phone-transfer directory: empty = the Desktop 「手机传文件」 folder (the default).</summary>
+    /// <summary>Phone-transfer directory: empty = the Desktop itself (the default).</summary>
     private void OnResetTransferDirectory(object sender, RoutedEventArgs e) => TransferDirBox.Text = string.Empty;
 
     /// <summary>Enter in the new-suffix box: replace the selection or add a new suffix.</summary>

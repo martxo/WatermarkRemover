@@ -1,48 +1,35 @@
-using System.Net;
 using WatermarkRemover.Core.Features.Transfer;
 
 namespace WatermarkRemover.Tests;
 
 /// <summary>
 /// Covers the parts of the LAN receiver that can be asserted without network I/O: URL/token
-/// shape, lifecycle guards, and the two pure helpers (filename hygiene, boundary parsing).
-/// The full HTTP round trips (page serving, multipart upload) are verified against a real
-/// phone on the LAN — the test host on the dev box breaks async socket I/O, so end-to-end
-/// socket tests cannot run reliably here.
+/// shape and the pure helpers (filename hygiene, boundary parsing, sender labels).
+///
+/// No test binds a listener — deliberately. Starting a real <c>HttpListener</c> from the test
+/// host made Windows Firewall pop "是否要允许公共网络和专用网络访问此应用？ … testhost" on
+/// every run, and every run gets a fresh timestamped binary path, so the remembered decision
+/// never applied. The full HTTP round trips (page serving, multipart upload) are verified
+/// against a real phone on the LAN.
 /// </summary>
-public sealed class LanTransferServerTests : IDisposable
+public sealed class LanTransferServerTests
 {
-    private readonly string _directory;
-    private readonly LanTransferServer _server;
-
-    public LanTransferServerTests()
+    [Fact]
+    public void Url_carries_the_session_token_in_the_query()
     {
-        _directory = Path.Combine(Path.GetTempPath(), $"transfer-tests-{Guid.NewGuid():N}");
-        _server = new LanTransferServer(new LanTransferServerOptions { PreferredPort = 0 });
-        _server.Start(_directory);
-    }
+        string url = LanTransferServer.ComposeUrl("192.168.10.31", 52125, "86ea65f9");
 
-    public void Dispose()
-    {
-        _server.Dispose();
-        try { Directory.Delete(_directory, recursive: true); } catch { /* best effort */ }
+        Assert.Equal("http://192.168.10.31:52125/?t=86ea65f9", url);
+        Assert.Contains("t=", new Uri(url).Query);
     }
 
     [Fact]
-    public void Start_PublishesUrlWithTokenAndPort()
+    public void Tokens_are_eight_lowercase_hex_chars_and_unique_per_session()
     {
-        Assert.True(_server.Port > 0);
-        var uri = new Uri(_server.Url);
-        Assert.StartsWith($"http://", _server.Url);
-        Assert.Contains("t=", uri.Query);
-    }
+        var tokens = Enumerable.Range(0, 20).Select(_ => LanTransferServer.NewToken()).ToList();
 
-    [Fact]
-    public void Start_Twice_Throws()
-    {
-        using var second = new LanTransferServer(new LanTransferServerOptions { PreferredPort = 0 });
-        second.Start(Path.Combine(_directory, "second"));
-        Assert.Throws<InvalidOperationException>(() => second.Start(Path.Combine(_directory, "third")));
+        Assert.All(tokens, token => Assert.Matches("^[0-9a-f]{8}$", token));
+        Assert.Equal(tokens.Count, tokens.Distinct().Count());
     }
 
     [Theory]

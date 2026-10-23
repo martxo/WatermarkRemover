@@ -107,6 +107,16 @@ public sealed class PdfPreviewViewModel : ObservableObject
     /// must never be driven from two threads at once anyway.</summary>
     private readonly SemaphoreSlim _renderGate = new(1, 1);
 
+    /// <summary>Upper bound for one strip's rendered-page byte cache. Full-page PNGs are
+    /// multi-megabyte LOH objects, and the cache lives as long as the row does, so an unbounded
+    /// one kept every page of every document previewed in a session (measured ~1.5 GB LOH on a
+    /// 15-page scan workflow). Over budget the cache is dropped wholesale — a miss only costs a
+    /// re-render of the page actually being shown.</summary>
+    private const long RenderCacheBudgetBytes = 48L * 1024 * 1024;
+
+    /// <summary>Cached byte count for <see cref="RenderCacheBudgetBytes"/>; reset on clear.</summary>
+    private long _renderCacheBytes;
+
     /// <summary>
     /// Bumped whenever a page edit (rotate/delete/insert) makes rendered bytes stale. A render
     /// already in flight when the file changed still returns pre-edit pixels; without this epoch
@@ -170,6 +180,13 @@ public sealed class PdfPreviewViewModel : ObservableObject
         InsertScanAfterCommand = new RelayCommand<int>(
             index => _ = InsertScanAfterAsync(index),
             _ => _scanProvider is not null && !IsRotating && !IsOrienting && PageCount > 0);
+        // The "append after the last page" entry lives OUTSIDE the wrap flow (the strip's zoom
+        // rail). As a trailing plus slot inside the flow it widened only the last unit by 14px;
+        // a row with room for a tile but not for tile+14 bumped the whole last page to the next
+        // row and left a cell-sized hole (2026-10-22). Out here it costs the flow nothing.
+        AppendScanCommand = new RelayCommand(
+            () => _ = InsertScanAfterAsync(PageCount - 1),
+            () => _scanProvider is not null && !IsRotating && !IsOrienting && PageCount > 0);
     }
 
     /// <summary>Multiplier on the base tile size, driven by the grid's zoom rail (0.6–2.0).</summary>
@@ -260,6 +277,12 @@ public sealed class PdfPreviewViewModel : ObservableObject
     /// <summary>Gap button between two pages: scans fresh pages and splices them into the PDF
     /// right after the page the gap follows. Without a host scanner the gaps never enable.</summary>
     public RelayCommand<int> InsertScanAfterCommand { get; }
+
+    /// <summary>Scans one pass and appends it after the last page — the end-of-document slot
+    /// that used to be a trailing plus inside the strip. It is a rail button, outside the wrap
+    /// flow, so the last page's cell is exactly as wide as every other page's cell and rows
+    /// always pack tight (the widened last cell was the "hole" bug of 2026-10-22).</summary>
+    public RelayCommand AppendScanCommand { get; }
 
     /// <summary>Raised by the close button (and by Esc, handled by the viewer window) to leave
     /// the screen-level image viewer.</summary>
@@ -554,11 +577,12 @@ public sealed class PdfPreviewViewModel : ObservableObject
         RebuildStripItems();
     }
 
-    /// <summary>Rebuilds the display sequence: one atomic unit per page — [gap | tile | tail].
-    /// Unit i opens with the gap after page i-1 (-1 = in front of page one) and only the last
-    /// unit closes with the trailing gap, so every slot of the document (front, between, end)
-    /// still takes a scan while the wrap panel can only break between units — a wrapped row
-    /// never starts with a bare tile, and the columns line up across rows.</summary>
+    /// <summary>Rebuilds the display sequence: one atomic unit per page — [gap | tile]. Unit i
+    /// opens with the gap after page i-1 (-1 = in front of page one), so every slot between
+    /// pages still takes a scan while the wrap panel can only break between units — a wrapped
+    /// row never starts with a bare tile, and the columns line up across rows. Every unit keeps
+    /// the same shape (gap + tile) on purpose: a wider last unit is what pushed the last page
+    /// to its own row and left a hole; see <see cref="PdfPreviewStripUnitViewModel"/>.</summary>
     private void RebuildStripItems()
     {
         StripItems.Clear();
@@ -567,11 +591,8 @@ public sealed class PdfPreviewViewModel : ObservableObject
             string gapToolTip = i == 0
                 ? "点击扫描，把新页插到第一页前面"
                 : "点击扫描，把新页插到这两页之间";
-            var tail = i == Thumbnails.Count - 1
-                ? new PdfPreviewGapViewModel(i, "点击扫描，把新页接着扫到最后一页后面")
-                : null;
             StripItems.Add(new PdfPreviewStripUnitViewModel(
-                new PdfPreviewGapViewModel(i - 1, gapToolTip), Thumbnails[i], tail));
+                new PdfPreviewGapViewModel(i - 1, gapToolTip), Thumbnails[i]));
         }
     }
 
@@ -1036,7 +1057,14 @@ public sealed class PdfPreviewViewModel : ObservableObject
             // A page edit during the render invalidates these bytes; caching them now would
             // resurrect the pre-edit raster the edit's clear just dropped.
             if (Volatile.Read(ref _cacheEpoch) == epoch)
+            {
                 _renderedPages[key] = bytes;
+                if (Interlocked.Add(ref _renderCacheBytes, bytes.Length) > RenderCacheBudgetBytes)
+                {
+                    _renderedPages.Clear();
+                    Interlocked.Exchange(ref _renderCacheBytes, 0);
+                }
+            }
             return bytes;
         }
         finally
@@ -1173,6 +1201,7 @@ public sealed class PdfPreviewViewModel : ObservableObject
     {
         Interlocked.Increment(ref _cacheEpoch);
         _renderedPages.Clear();
+        Interlocked.Exchange(ref _renderCacheBytes, 0);
     }
 
     /// <summary>Drops every cached render of a page — used after its bytes changed on disk (rotation).</summary>
@@ -1180,7 +1209,20 @@ public sealed class PdfPreviewViewModel : ObservableObject
     {
         Interlocked.Increment(ref _cacheEpoch);
         foreach ((int page, int dpi) in _renderedPages.Keys.Where(key => key.Page == pageIndex).ToList())
-            _renderedPages.TryRemove((page, dpi), out _);
+            if (_renderedPages.TryRemove((page, dpi), out byte[]? bytes))
+                Interlocked.Add(ref _renderCacheBytes, -bytes.Length);
+    }
+
+    /// <summary>
+    /// Drops this strip's rendered-page byte cache. The bytes are only a speed cache — a miss
+    /// re-renders the page on demand — while each full-page PNG is multi-megabyte LOH. The host
+    /// calls this for strips that are folded or off screen, so a session that previewed many
+    /// documents no longer keeps every page of every one of them resident.
+    /// </summary>
+    public void TrimRenderCache()
+    {
+        _renderedPages.Clear();
+        Interlocked.Exchange(ref _renderCacheBytes, 0);
     }
 
     /// <summary>PDFium hands back PNG bytes; WPF wants a frozen bitmap it can bind from any thread.</summary>

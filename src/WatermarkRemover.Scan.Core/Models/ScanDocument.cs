@@ -1,4 +1,4 @@
-﻿namespace WatermarkRemover.Scan.Core.Models;
+namespace WatermarkRemover.Scan.Core.Models;
 
 /// <summary>
 /// The document handed to output targets: ordered pages, the naming decision and the scan context.
@@ -27,7 +27,7 @@ public sealed class ScanDocument
 }
 
 /// <summary>
-/// A name proposed by an <c>IDocumentTypeProfile</c>, with the evidence that produced it so the user
-/// can audit (and override) the automation.
+/// A name proposed by a naming profile, with the evidence that produced it so the user can audit
+/// (and override) the automation.
 /// </summary>
 public sealed record NamingSuggestion(string ProfileId, string FileName, double Score, string Reason);

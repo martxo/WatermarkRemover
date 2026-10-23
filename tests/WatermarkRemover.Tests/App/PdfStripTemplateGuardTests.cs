@@ -4,13 +4,15 @@ namespace WatermarkRemover.Tests.App;
 
 /// <summary>
 /// The duplicated-plus regression (v1.15.16, 2026-10-20): the strip unit's trailing bookend
-/// is null for every interior unit, but a ContentControl instantiates its ContentTemplate
+/// was null for every interior unit, but a ContentControl instantiates its ContentTemplate
 /// even for null content — so every pair of adjacent pages carried a second, dead plus slot.
 /// That stayed invisible while the old design revealed the plus only through hover opacity,
 /// and surfaced the moment the plus went always-visible. The plus visibility itself flipped
 /// twice by user request (always-visible 1.15.15 → hover-revealed 1.15.17), so both shapes
 /// are guarded here. Source-level guards like ScrollBarTemplateGuardTests:
-///  1. the unit template must collapse the tail slot when Tail is null;
+///  1. every strip unit is exactly one gap plus one tile — the trailing bookend is gone
+///     (it widened only the last unit and bumped that page to its own row, the 2026-10-22
+///     hole report), and a third slot must never come back;
 ///  2. the gap plus must be hidden at rest, lit on hover, and while a scan/rotate/orient
 ///     pass holds the file (IsEnabled=False): hidden at rest, dimmed under hover — declared
 ///     last so the dim wins.
@@ -87,24 +89,22 @@ public class PdfStripTemplateGuardTests
     }
 
     [Fact]
-    public void Interior_units_collapse_their_null_tail_so_two_pages_never_get_two_pluses()
+    public void Every_strip_unit_is_exactly_one_gap_and_one_tile()
     {
         var (doc, ns, x) = LoadControls();
         var unit = TemplateWithKey(doc, ns, x, "PdfStripUnitTemplate");
 
-        var tail = unit.Descendants(ns + "ContentControl")
-            .Single(c => (string?)c.Attribute("Content") == "{Binding Tail}");
-
-        var collapse = tail.Descendants(ns + "DataTrigger")
-            .SingleOrDefault(t => (string?)t.Attribute("Binding") == "{Binding Tail}" && (string?)t.Attribute("Value") == "{x:Null}")
-            ?? throw new Xunit.Sdk.XunitException(
-                "The strip unit's tail slot must carry a DataTrigger collapsing it when Tail is null — " +
-                "a ContentControl instantiates its ContentTemplate even for null content, and an " +
-                "uncollapsed interior tail paints a second, dead plus between every pair of pages.");
-
-        var setter = collapse.Element(ns + "Setter");
-        Assert.Equal("Visibility", (string?)setter?.Attribute("Property"));
-        Assert.Equal("Collapsed", (string?)setter?.Attribute("Value"));
+        // FLOW INVARIANT (the 2026-10-22 hole bug): the wrap panel packs whole units, so every
+        // unit must measure the same — one plus slot plus one tile. The old trailing bookend, a
+        // third slot only the last unit carried, made that unit 14px wider than its siblings; a
+        // row that had room for a tile but not for tile+14 pushed the whole last page to the
+        // next row and left a cell-sized hole where it should have been. The append action now
+        // lives in the zoom rail, outside the flow. Never add a width-bearing part to one unit.
+        var unitStack = unit.Descendants(ns + "StackPanel").Single();
+        Assert.Equal(2, unitStack.Elements().Count());
+        Assert.Contains(unitStack.Elements(), e => (string?)e.Attribute("Content") == "{Binding Gap}");
+        Assert.Contains(unitStack.Elements(), e => (string?)e.Attribute("Content") == "{Binding Tile}");
+        Assert.DoesNotContain(unitStack.Elements(), e => (string?)e.Attribute("Content") == "{Binding Tail}");
     }
 
     [Fact]

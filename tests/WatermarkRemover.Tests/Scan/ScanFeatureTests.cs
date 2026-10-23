@@ -39,67 +39,6 @@ public class ScanFileNameTests
     }
 }
 
-public class ScanOutputDirectoryTests : IDisposable
-{
-    private readonly string _root = Path.Combine(Path.GetTempPath(), "wm-scanout-" + Guid.NewGuid().ToString("N"));
-
-    public ScanOutputDirectoryTests() => Directory.CreateDirectory(_root);
-
-    public void Dispose()
-    {
-        if (Directory.Exists(_root)) Directory.Delete(_root, true);
-    }
-
-    [Fact]
-    public void Uses_and_creates_the_configured_directory_when_set()
-    {
-        string configured = Path.Combine(_root, "out");
-
-        Assert.Equal(configured, ScanOutputDirectory.Resolve(configured, "pics", _root));
-        Assert.True(Directory.Exists(configured));
-    }
-
-    [Fact]
-    public void Falls_back_to_pictures_when_not_configured()
-    {
-        string pictures = Path.Combine(_root, "pics");
-
-        Assert.Equal(pictures, ScanOutputDirectory.Resolve(null, pictures, _root));
-        Assert.Equal(pictures, ScanOutputDirectory.Resolve("   ", pictures, _root));
-    }
-
-    [Fact]
-    public void Falls_back_to_the_app_root_when_pictures_is_unavailable()
-    {
-        // An existing FILE path makes CreateDirectory fail, standing in for an unwritable folder.
-        string dead = Path.Combine(_root, "occupied.txt");
-        File.WriteAllBytes(dead, Array.Empty<byte>());
-
-        Assert.Equal(_root, ScanOutputDirectory.Resolve(null, "", _root));
-        Assert.Equal(_root, ScanOutputDirectory.Resolve(null, dead, _root));
-    }
-
-    [Fact]
-    public void Reads_the_scan_specific_setting_not_the_watermark_output_directory()
-    {
-        // Scans have their own output directory; the watermark feature's fields must not leak in
-        // (they used to — scans silently followed OutputMode/OutputDirectory).
-        var settings = new AppSettings
-        {
-            OutputMode = OutputMode.CustomDirectory,
-            OutputDirectory = Path.Combine(_root, "watermark-out"),
-            ScanOutputDirectory = Path.Combine(_root, "scan-out"),
-        };
-
-        Assert.Equal(Path.Combine(_root, "scan-out"), ScanOutputDirectory.Resolve(settings));
-        Assert.True(Directory.Exists(Path.Combine(_root, "scan-out")));
-
-        settings.ScanOutputDirectory = "   ";
-        Assert.Equal(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
-            ScanOutputDirectory.Resolve(settings));
-    }
-}
-
 public class PageOrderNormalizerTests
 {
     private static RasterImage Page(int marker)

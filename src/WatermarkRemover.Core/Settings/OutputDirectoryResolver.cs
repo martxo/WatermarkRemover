@@ -1,20 +1,20 @@
 using System.IO;
-using WatermarkRemover.Core.Settings;
 
-namespace WatermarkRemover.Core.Features.Scan;
+namespace WatermarkRemover.Core.Settings;
 
 /// <summary>
-/// Resolves where scanned PDFs are written. Scans have no input file to sit beside, so the chain
-/// is: the scan-configured output directory (when set), then the Desktop, then the application
-/// root. Every step is best-effort — an unwritable candidate is skipped silently.
+/// Resolves a writable directory for products that have no source file to sit beside (scans,
+/// phone uploads): the configured directory, then the Desktop, then the application root.
+/// Every step is best-effort — an unwritable candidate is skipped silently.
 /// </summary>
-public static class ScanOutputDirectory
+public static class OutputDirectoryResolver
 {
-    public static string Resolve(AppSettings settings) =>
-        Resolve(settings.ScanOutputDirectory, AppFolders.Root);
-
+    /// <summary>Resolves the configured directory, falling back to the Desktop and then <paramref name="fallbackRoot"/>.</summary>
     public static string Resolve(string? configuredDirectory, string fallbackRoot) =>
-        Resolve(configuredDirectory, Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), fallbackRoot);
+        Resolve(
+            configuredDirectory,
+            Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
+            fallbackRoot);
 
     /// <summary>Pure resolution logic; exposed for tests.</summary>
     public static string Resolve(string? configuredDirectory, string desktopDirectory, string fallbackRoot)

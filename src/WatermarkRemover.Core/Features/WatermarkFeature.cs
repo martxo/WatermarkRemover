@@ -14,6 +14,10 @@ namespace WatermarkRemover.Core.Features;
 /// </summary>
 public sealed class WatermarkFeature : IFeature
 {
+    public string Glyph => "\uE75C"; // Erase
+
+    public string Tagline => "拖入 PDF → 去水印 · 智能命名 · 页面管理";
+
     /// <summary>Render resolution for the naming OCR pass; low is enough to read labels.</summary>
     private const int NamingRenderDpi = 150;
 
@@ -104,7 +108,7 @@ public sealed class WatermarkFeature : IFeature
             }
 
             // 摆正后再识别：导入的 PDF 不走扫描的自动调正，躺倒页 OCR 读不出有效文字
-            // （与扫描命名链 MainViewModel.TryRenameScanByContentAsync 同一条摆正实现）。
+            // （与扫描命名链 ContentNamingService 同一条摆正实现）。
             stage("正在检查页面朝向…");
             byte[] upright = _orientPage(page).GetAwaiter().GetResult();
             stage("正在重新识别文字…");

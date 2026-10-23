@@ -151,7 +151,7 @@ public sealed class ScanService
             });
         }
 
-        string directory = ScanOutputDirectory.Resolve(_settings);
+        string directory = OutputDirectoryResolver.Resolve(_settings.ScanOutputDirectory, AppFolders.Root);
         string fileName = ScanFileName.Create(DateTime.Now);
         string path = OutputNameGenerator.FindAvailablePath(directory, fileName);
 

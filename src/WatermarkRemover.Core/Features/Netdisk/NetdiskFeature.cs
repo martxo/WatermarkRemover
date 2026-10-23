@@ -13,6 +13,12 @@ public sealed class NetdiskFeature : IFeature
 
     public string ProcessingText => "正在传输…";
 
+    public FeaturePageKind PageKind => FeaturePageKind.Netdisk;
+
+    public string Glyph => "\uE753"; // Cloud
+
+    public string Tagline => "网盘账号管理 · 上传下载 · 快捷传";
+
     /// <summary>No existing file is ever handled by the netdisk feature.</summary>
     public bool CanHandle(string filePath) => false;
 

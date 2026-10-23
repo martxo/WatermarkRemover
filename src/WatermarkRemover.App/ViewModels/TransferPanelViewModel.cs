@@ -107,14 +107,14 @@ public sealed class TransferPanelViewModel : ObservableObject, IDisposable
 
     /// <summary>
     /// Starts the receiver. Files land in the transfer directory (custom output directory when
-    /// configured, otherwise a 「手机传文件」 folder on the Desktop). A first-run Windows firewall
-    /// prompt is expected — allowing it once is what lets the phone reach this machine.
+    /// configured, otherwise the Desktop itself). A first-run Windows firewall prompt is
+    /// expected — allowing it once is what lets the phone reach this machine.
     /// </summary>
     private void Start()
     {
         if (IsRunning) return;
 
-        string directory = TransferOutputDirectory.Resolve(_settings);
+        string directory = OutputDirectoryResolver.Resolve(_settings.TransferOutputDirectory, AppFolders.Root);
         _targetDirectory = directory;
         try
         {

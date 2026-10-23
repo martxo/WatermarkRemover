@@ -80,8 +80,8 @@ public sealed class AppSettings
     /// Independent of the watermark feature's OutputDirectory — scans have no source file.</summary>
     public string ScanOutputDirectory { get; set; } = string.Empty;
 
-    /// <summary>Where phone uploads and share-link PDFs land (手机传文件保存位置). Empty = a
-    /// 「手机传文件」 folder on the Desktop, the pre-setting default.</summary>
+    /// <summary>Where phone uploads and share-link PDFs land (手机传文件保存位置). Empty = the
+    /// Desktop itself, the pre-setting default — no 「手机传文件」 subfolder is created.</summary>
     public string TransferOutputDirectory { get; set; } = string.Empty;
 
     /// <summary>Configured 网盘 accounts (网盘设置); secret values carry the <c>dpapi:</c> prefix

@@ -1,6 +1,7 @@
 using SkiaSharp;
 using WatermarkRemover.App.Layout;
 using WatermarkRemover.App.Logging;
+using WatermarkRemover.Core.Features;
 using WatermarkRemover.Core.Features.Layout;
 using WatermarkRemover.Core.Features.Ocr;
 using WatermarkRemover.Core.Geometry;
@@ -11,14 +12,14 @@ namespace WatermarkRemover.App.Ocr;
 /// The app's OCR engine chain, probed once per process. Registration order is priority order:
 /// WeChat's local engine recognises Chinese documents best, then the bundled offline PP-OCR
 /// models (for machines without WeChat), then the OCR built into Windows. Adding an engine =
-/// implement <see cref="IOcrEngineFactory"/> and append a line here (name + description + probe);
+/// implement <see cref="IProbeFactory{TProduct}"/> and append a line here (name + description + probe);
 /// selection, safe fallback, the settings OCR section and diagnostics all follow automatically.
 /// </summary>
 internal static class AppOcrEngineChain
 {
-    public static OcrEngineChain Instance { get; } = new(new IOcrEngineFactory[]
+    public static OcrEngineChain Instance { get; } = new(new IProbeFactory<IOcrEngine>[]
     {
-        new DelegateOcrEngineFactory(
+        new DelegateProbeFactory<IOcrEngine>(
             "微信 OCR",
             () =>
             {
@@ -27,7 +28,7 @@ internal static class AppOcrEngineChain
                 return (false, null, reason);
             },
             "微信内置的本地引擎，中文证照 / 票据识别效果最佳；识别时不联网，但需要本机已安装微信。"),
-        new DelegateOcrEngineFactory(
+        new DelegateProbeFactory<IOcrEngine>(
             "PP-OCR",
             () =>
             {
@@ -36,7 +37,7 @@ internal static class AppOcrEngineChain
                 return (false, null, reason);
             },
             "随软件内置的离线引擎（约 21MB 模型），不依赖微信和系统组件，任何 Windows 都能用。"),
-        new DelegateOcrEngineFactory(
+        new DelegateProbeFactory<IOcrEngine>(
             "Windows 原生 OCR",
             () =>
             {

@@ -46,45 +46,45 @@ public class JobsViewTests
     public void Each_section_lists_only_its_own_records()
     {
         var vm = NewVm();
-        vm.Jobs.Add(Job(@"C:\t\scan1.pdf", "scan.page"));
-        vm.Jobs.Add(Job(@"C:\t\wm1.pdf", "watermark.badge"));
-        vm.Jobs.Add(Job(@"C:\t\ocr1.pdf", "ocr.text"));
+        vm.Board.Jobs.Add(Job(@"C:\t\scan1.pdf", "scan.page"));
+        vm.Board.Jobs.Add(Job(@"C:\t\wm1.pdf", "watermark.badge"));
+        vm.Board.Jobs.Add(Job(@"C:\t\ocr1.pdf", "ocr.text"));
 
         // The app opens on the scan page: exactly one record there, none of the others leak in.
-        Assert.Equal(new[] { "scan1.pdf" }, vm.JobsView.Cast<FileJobViewModel>().Select(j => j.FileName));
-        Assert.Equal(1, vm.VisibleJobCount);
+        Assert.Equal(new[] { "scan1.pdf" }, vm.Board.JobsView.Cast<FileJobViewModel>().Select(j => j.FileName));
+        Assert.Equal(1, vm.Board.VisibleJobCount);
 
         vm.SelectedNavItem = vm.NavItems.First(n => n.Feature.Id == "watermark.badge");
-        Assert.Equal(new[] { "wm1.pdf" }, vm.JobsView.Cast<FileJobViewModel>().Select(j => j.FileName));
-        Assert.Equal(1, vm.VisibleJobCount);
+        Assert.Equal(new[] { "wm1.pdf" }, vm.Board.JobsView.Cast<FileJobViewModel>().Select(j => j.FileName));
+        Assert.Equal(1, vm.Board.VisibleJobCount);
 
         vm.SelectedNavItem = vm.NavItems.First(n => n.Feature.Id == "ocr.text");
-        Assert.Equal(new[] { "ocr1.pdf" }, vm.JobsView.Cast<FileJobViewModel>().Select(j => j.FileName));
+        Assert.Equal(new[] { "ocr1.pdf" }, vm.Board.JobsView.Cast<FileJobViewModel>().Select(j => j.FileName));
     }
 
     [Fact]
     public void Clear_removes_only_the_current_sections_records()
     {
         var vm = NewVm();
-        vm.Jobs.Add(Job(@"C:\t\scan1.pdf", "scan.page"));
-        vm.Jobs.Add(Job(@"C:\t\wm1.pdf", "watermark.badge"));
+        vm.Board.Jobs.Add(Job(@"C:\t\scan1.pdf", "scan.page"));
+        vm.Board.Jobs.Add(Job(@"C:\t\wm1.pdf", "watermark.badge"));
 
-        vm.ClearCommand.Execute(null);
+        vm.Board.ClearCommand.Execute(null);
 
-        Assert.Equal(1, vm.Jobs.Count);
-        Assert.Equal("watermark.badge", vm.Jobs[0].OwnerFeatureId);
+        Assert.Equal(1, vm.Board.Jobs.Count);
+        Assert.Equal("watermark.badge", vm.Board.Jobs[0].OwnerFeatureId);
     }
 
     [Fact]
     public void Clear_is_disabled_when_the_current_section_has_no_records()
     {
         var vm = NewVm();
-        vm.Jobs.Add(Job(@"C:\t\wm1.pdf", "watermark.badge"));
+        vm.Board.Jobs.Add(Job(@"C:\t\wm1.pdf", "watermark.badge"));
 
         // Opened on the scan page: the scan section is empty, so its 清除 stays off.
-        Assert.False(vm.ClearCommand.CanExecute(null));
+        Assert.False(vm.Board.ClearCommand.CanExecute(null));
 
         vm.SelectedNavItem = vm.NavItems.First(n => n.Feature.Id == "watermark.badge");
-        Assert.True(vm.ClearCommand.CanExecute(null));
+        Assert.True(vm.Board.ClearCommand.CanExecute(null));
     }
 }

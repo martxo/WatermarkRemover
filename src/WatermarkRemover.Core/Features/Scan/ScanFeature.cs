@@ -13,6 +13,12 @@ public sealed class ScanFeature : IFeature
 
     public string ProcessingText => "正在扫描…";
 
+    public FeaturePageKind PageKind => FeaturePageKind.Scan;
+
+    public string Glyph => "\uE7F4"; // Camera
+
+    public string Tagline => "自动命名 · 自动调正 · 自动删白";
+
     /// <summary>No existing file is ever handled by the scan feature.</summary>
     public bool CanHandle(string filePath) => false;
 

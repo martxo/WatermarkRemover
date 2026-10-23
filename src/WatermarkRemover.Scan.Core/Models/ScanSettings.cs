@@ -1,4 +1,4 @@
-﻿using System.Text.Json.Serialization;
+using System.Text.Json.Serialization;
 
 namespace WatermarkRemover.Scan.Core.Models;
 
@@ -88,23 +88,9 @@ public sealed class ScanSettings
 
     public bool AutoRotate { get; set; }
 
-    /// <summary>
-    /// Opt-in: turns a duplex rear image 180° so it reads upright, mirroring the target's
-    /// 「将背面图像自动旋转 180 度」（SCN_ROTATE_IMAGE_AUTO_ROTATE REAR_IMAGE_180）. Default off: the
-    /// target ships its 自动图像旋转 (SetAutoRotate) engine parameter off, it never blind-rotates rear
-    /// pages in the app, and this device's driver already delivers rear pages upright (verified on a
-    /// DCP-B7658DW) - enabling it there would flip a correct page upside down.
-    /// </summary>
-    public bool RearSideAutoRotate { get; set; }
-
     // --- 文档 -------------------------------------------------------------
     /// <summary>OCR/document language, e.g. "ja", "en", "zh-Hans". Empty means "auto".</summary>
     public string DocumentLanguage { get; set; } = string.Empty;
-
-    /// <summary>Split the batch: none, by blank page, or after N pages.</summary>
-    public SplitMode Split { get; set; } = SplitMode.None;
-
-    public int SplitPageCount { get; set; } = 1;
 
     /// <summary>Continuous scan while pages remain in the ADF (target: SCN continuous scan).</summary>
     public bool ContinuousScan { get; set; } = true;
@@ -121,13 +107,4 @@ public sealed class ScanSettings
     public bool IsFlatbed => Feed == FeedMode.Flatbed;
 
     public ScanSettings Clone() => (ScanSettings)MemberwiseClone();
-}
-
-/// <summary>Batch splitting strategy.</summary>
-public enum SplitMode
-{
-    None,
-    ByBlankPage,
-    ByPageCount,
-    ByImageCount,
 }

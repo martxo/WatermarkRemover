@@ -248,16 +248,23 @@ public static class UpdateCoordinator
         string packageKind = result.IsDelta
             ? "增量更新包，无需重新下载完整安装包"
             : "全量更新包";
-        // Full-package downloads on a Velopack install mean the portable shape (no local base
-        // package → Velopack disables deltas). Say so once, with the fix, or the user keeps
-        // asking why every update is 200MB.
-        string portableHint = !result.IsDelta && VelopackUpdateService.IsPortableShapedInstall
-            ? "\n\n提示：当前是便携版（解压）运行方式，增量更新不可用，每次都要完整下载。\n" +
-              "改用 Setup.exe 安装一次（同版本覆盖安装即可），之后每次更新只需几 MB 的增量包。"
-            : string.Empty;
+        // A full download on a Velopack install has two very different causes; naming the right
+        // one is the difference between a misleading "you are portable" and a one-line fix.
+        // Velopack's own .portable marker is authoritative — a Setup install never has it.
+        bool portable = VelopackUpdateService.IsPortableInstall;
+        string localHint = result.IsDelta
+            ? string.Empty
+            : portable
+                ? "\n\n提示：当前是便携版（解压）运行方式，增量更新不可用，每次都要完整下载。\n" +
+                  "改用 Setup.exe 安装一次（同版本覆盖安装即可），之后每次更新只需几 MB 的增量包。"
+                : "\n\n提示：安装包缓存里缺少可做差分的完整包（可能被清理工具删除），本次需要完整下载；\n" +
+                  "下载完成后新的完整包会自动保留，之后的更新恢复增量。";
+        AppLog.Info(
+            $"Velopack 本地状态：便携版={portable}，本地完整包={VelopackUpdateService.HasLocalBasePackage}，" +
+            $"缓存目录={VelopackUpdateService.PackagesDirectory ?? "无"}");
         bool accepted = dialogs.ConfirmYesNo(
             $"发现新版本 v{result.LatestVersion}（当前 v{UpdateService.CurrentVersion}），是否立即下载并更新？\n\n" +
-            $"更新包：{packageKind}，大小 {sizeText}{portableHint}\n" +
+            $"更新包：{packageKind}，大小 {sizeText}{localHint}\n" +
             "下载、校验均有进度显示，更新完成后程序会自动重启，无需重新安装。",
             "软件更新");
 

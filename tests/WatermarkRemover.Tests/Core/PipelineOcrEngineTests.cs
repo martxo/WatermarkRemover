@@ -1,4 +1,5 @@
 using System.Text;
+using WatermarkRemover.Core.Features;
 using WatermarkRemover.Core.Features.Layout;
 using WatermarkRemover.Core.Features.Ocr;
 using WatermarkRemover.Core.Geometry;
@@ -476,21 +477,21 @@ public class PipelineOcrEngineTests
         string? layout, string? engine, string expectedDisplayName, int expectedCrops)
     {
         // Mirrors AppOcrEngineChain.ApplyPipeline: chain.Select for both preferences, then wrap.
-        var layouts = new LayoutStageChain(new ILayoutStageFactory[]
+        var layouts = new LayoutStageChain(new IProbeFactory<ILayoutStage>[]
         {
-            new DelegateLayoutStageFactory(
+            new DelegateProbeFactory<ILayoutStage>(
                 "整图直通",
                 () => (true, new FakeStage("整图直通", passthrough: true), string.Empty)),
-            new DelegateLayoutStageFactory(
+            new DelegateProbeFactory<ILayoutStage>(
                 "版面块",
                 () => (true, new FakeStage("版面块",
                     new[] { new LayoutRegion(new RectD(0.1, 0.1, 0.4, 0.3), "text") }), string.Empty)),
         });
-        var engines = new OcrEngineChain(new IOcrEngineFactory[]
+        var engines = new OcrEngineChain(new IProbeFactory<IOcrEngine>[]
         {
-            new DelegateOcrEngineFactory(
+            new DelegateProbeFactory<IOcrEngine>(
                 "引擎甲", () => (true, new FakeEngine { DisplayName = "引擎甲" }, string.Empty)),
-            new DelegateOcrEngineFactory(
+            new DelegateProbeFactory<IOcrEngine>(
                 "引擎乙", () => (true, new FakeEngine { DisplayName = "引擎乙" }, string.Empty)),
         });
 

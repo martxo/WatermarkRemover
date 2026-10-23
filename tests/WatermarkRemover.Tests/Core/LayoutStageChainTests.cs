@@ -1,3 +1,4 @@
+using WatermarkRemover.Core.Features;
 using WatermarkRemover.Core.Features.Layout;
 using WatermarkRemover.Core.Geometry;
 
@@ -16,7 +17,7 @@ public class LayoutStageChainTests
                 new[] { new LayoutRegion(new RectD(0, 0, 1, 1), "page") });
     }
 
-    private sealed class FakeFactory(string name, bool available, bool throws = false) : ILayoutStageFactory
+    private sealed class FakeFactory(string name, bool available, bool throws = false) : IProbeFactory<ILayoutStage>
     {
         public string Name => name;
 
@@ -32,7 +33,7 @@ public class LayoutStageChainTests
     [Fact]
     public void PicksFirstAvailableBlockAndRecordsSkippedLinks()
     {
-        var chain = new LayoutStageChain(new ILayoutStageFactory[]
+        var chain = new LayoutStageChain(new IProbeFactory<ILayoutStage>[]
         {
             new FakeFactory("first", available: false),
             new FakeFactory("second", available: true),
@@ -48,7 +49,7 @@ public class LayoutStageChainTests
     [Fact]
     public void FallsBackToFullImagePassthroughWhenNothingUsable()
     {
-        var chain = new LayoutStageChain(new ILayoutStageFactory[]
+        var chain = new LayoutStageChain(new IProbeFactory<ILayoutStage>[]
         {
             new FakeFactory("first", available: false),
             new FakeFactory("second", available: false),
@@ -64,7 +65,7 @@ public class LayoutStageChainTests
     [Fact]
     public void EmptyRegistrationStillYieldsPassthrough()
     {
-        var chain = new LayoutStageChain(Array.Empty<ILayoutStageFactory>());
+        var chain = new LayoutStageChain(Array.Empty<IProbeFactory<ILayoutStage>>());
 
         Assert.IsType<FullImageLayoutStage>(chain.Stage);
         Assert.True(chain.Stage.IsPassthrough);
@@ -73,7 +74,7 @@ public class LayoutStageChainTests
     [Fact]
     public void ThrowingFactoryIsRecordedAndChainKeepsDegrading()
     {
-        var chain = new LayoutStageChain(new ILayoutStageFactory[]
+        var chain = new LayoutStageChain(new IProbeFactory<ILayoutStage>[]
         {
             new FakeFactory("broken", available: true, throws: true),
             new FakeFactory("healthy", available: true),
@@ -86,7 +87,7 @@ public class LayoutStageChainTests
     [Fact]
     public void SelectReturnsPinnedBlockAndProbesRemainingFactories()
     {
-        var chain = new LayoutStageChain(new ILayoutStageFactory[]
+        var chain = new LayoutStageChain(new IProbeFactory<ILayoutStage>[]
         {
             new FakeFactory("first", available: true),
             new FakeFactory("second", available: true),
@@ -103,7 +104,7 @@ public class LayoutStageChainTests
     [Fact]
     public void SelectFallsBackToAutomaticChainWhenPreferenceIsUnusable()
     {
-        var chain = new LayoutStageChain(new ILayoutStageFactory[]
+        var chain = new LayoutStageChain(new IProbeFactory<ILayoutStage>[]
         {
             new FakeFactory("first", available: true),
             new FakeFactory("second", available: false),
@@ -120,14 +121,14 @@ public class LayoutStageChainTests
     public void EnsureAllProbedProbesEveryFactoryExactlyOnce()
     {
         int probes = 0;
-        var chain = new LayoutStageChain(new ILayoutStageFactory[]
+        var chain = new LayoutStageChain(new IProbeFactory<ILayoutStage>[]
         {
-            new DelegateLayoutStageFactory("usable", () =>
+            new DelegateProbeFactory<ILayoutStage>("usable", () =>
             {
                 probes++;
                 return (true, new FakeStage("usable"), string.Empty);
             }),
-            new DelegateLayoutStageFactory("missing", () =>
+            new DelegateProbeFactory<ILayoutStage>("missing", () =>
             {
                 probes++;
                 return (false, null, "model file absent");
@@ -147,7 +148,7 @@ public class LayoutStageChainTests
     [Fact]
     public void DescribeListsEveryProbedLink()
     {
-        var chain = new LayoutStageChain(new ILayoutStageFactory[]
+        var chain = new LayoutStageChain(new IProbeFactory<ILayoutStage>[]
         {
             new FakeFactory("first", available: false),
             new FakeFactory("second", available: true),

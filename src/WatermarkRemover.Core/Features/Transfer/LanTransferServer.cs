@@ -56,8 +56,15 @@ public sealed class LanTransferServer : IDisposable
     /// almost never collide.</summary>
     private const int DefaultPort = 52125;
 
-    /// <summary>Firewall rule installed by <see cref="TryElevatedSetup"/>; probed by name.</summary>
-    private const string FirewallRuleName = "WatermarkRemover-LanTransfer";
+    /// <summary>Firewall rule installed by <see cref="TryElevatedSetup"/>; probed by name.
+    /// Deliberately port-scoped: the listening socket belongs to http.sys (System), so a
+    /// program-scoped rule never matches HttpListener traffic — the phone times out on a blank
+    /// page while loopback tests keep passing.</summary>
+    private const string FirewallRuleName = "WatermarkRemover-LanTransfer-Port";
+
+    /// <summary>Program-scoped rule written by older versions; removed on setup because it never
+    /// covered http.sys traffic and could pin a stale exe path.</summary>
+    private const string LegacyFirewallRuleName = "WatermarkRemover-LanTransfer";
 
     /// <summary>Copy-paste texts are small; anything bigger is treated as a mistake.</summary>
     private const int MaxTextBytes = 1 << 20;
@@ -91,8 +98,9 @@ public sealed class LanTransferServer : IDisposable
     /// <summary>
     /// Registers the HTTP prefix and starts the request loop. Files land in
     /// <paramref name="targetDirectory"/>; the directory is created when missing. A preferred
-    /// port of 0 (tests) binds loopback only; otherwise the LAN-wide prefix is used and, when the
-    /// machine lacks the one-time reservation, provisioned through a single UAC prompt.
+    /// port of 0 binds a free loopback port (manual smoke runs — the suite never starts a
+    /// listener); otherwise the LAN-wide prefix is used and, when the machine lacks the one-time
+    /// reservation, provisioned through a single UAC prompt.
     /// </summary>
     public void Start(string targetDirectory)
     {
@@ -100,7 +108,7 @@ public sealed class LanTransferServer : IDisposable
 
         Directory.CreateDirectory(targetDirectory);
         _options.TargetDirectory = targetDirectory;
-        _token = Guid.NewGuid().ToString("N")[..8];
+        _token = NewToken();
 
         bool wildcard;
         int port;
@@ -122,7 +130,7 @@ public sealed class LanTransferServer : IDisposable
 
         _listener = StartListener(port, wildcard);
         Port = port;
-        Url = $"http://{(wildcard ? LanAddresses.BestIPv4() : "localhost")}:{port}/?t={_token}";
+        Url = ComposeUrl(wildcard ? LanAddresses.BestIPv4() : "localhost", port, _token);
         IsRunning = true;
 
         // The listener works even without our firewall rule — Windows just nags the user with a
@@ -170,23 +178,27 @@ public sealed class LanTransferServer : IDisposable
 
     /// <summary>
     /// One-time per-machine setup for the LAN prefix: an http.sys URL reservation plus a firewall
-    /// rule for THIS executable on the transfer port, all network profiles. Idempotent (stale
-    /// reservations/rules are deleted first — the previous add-only version could never refresh
-    /// a rule after the exe moved, and could never run at all when only the reservation predated
-    /// it, which is exactly how machines ended up nagged forever). Runs one elevated command —
-    /// the user sees a single UAC prompt; declining keeps the receiver working, just nagged.
+    /// rule for the transfer port, all network profiles. Idempotent (stale reservations/rules are
+    /// deleted first — the previous add-only version could never refresh a rule after the exe
+    /// moved, and could never run at all when only the reservation predated it, which is exactly
+    /// how machines ended up nagged forever). Runs one elevated command — the user sees a single
+    /// UAC prompt; declining keeps the receiver working, just nagged.
+    ///
+    /// The rule is port-scoped, not program-scoped: inbound connections are accepted by http.sys
+    /// (System), so a rule bound to WatermarkRemover.exe does not match and Windows drops the
+    /// phone's packets before the app ever sees them.
     /// </summary>
     private static bool TryElevatedSetup(int port)
     {
         try
         {
-            string exe = AppExePath;
             var startInfo = new ProcessStartInfo("cmd.exe",
                 $"/c netsh http delete urlacl url=http://+:{port}/ & " +
                 $"netsh http add urlacl url=http://+:{port}/ sddl=D:(A;;GX;;;WD) & " +
+                $"netsh advfirewall firewall delete rule name=\"{LegacyFirewallRuleName}\" & " +
                 $"netsh advfirewall firewall delete rule name=\"{FirewallRuleName}\" & " +
                 $"netsh advfirewall firewall add rule name=\"{FirewallRuleName}\" " +
-                $"dir=in action=allow protocol=TCP localport={port} profile=any program=\"{exe}\"")
+                $"dir=in action=allow protocol=TCP localport={port} profile=any")
             {
                 UseShellExecute = true,
                 Verb = "runas",
@@ -202,16 +214,14 @@ public sealed class LanTransferServer : IDisposable
         }
     }
 
-    /// <summary>True when our rule exists AND binds the current exe — a rule left behind by an
-    /// older install location does not cover this binary, so Windows would keep nagging.</summary>
+    /// <summary>True when the port-scoped rule exists. No exe-path check: the rule is not bound
+    /// to a program, so a moved install or a Velopack update stays covered.</summary>
     private static bool FirewallRuleCovers()
     {
         try
         {
-            // `verbose` is mandatory: the plain listing never prints the Program line, so the
-            // path check below always failed and every start re-ran the UAC provisioning.
             var psi = new ProcessStartInfo("netsh.exe",
-                $"advfirewall firewall show rule name=\"{FirewallRuleName}\" verbose")
+                $"advfirewall firewall show rule name=\"{FirewallRuleName}\"")
             {
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
@@ -219,12 +229,9 @@ public sealed class LanTransferServer : IDisposable
             };
             using var process = Process.Start(psi);
             if (process is null) return false;
-            string output = process.StandardOutput.ReadToEnd();
+            _ = process.StandardOutput.ReadToEnd(); // drain before waiting; avoids a full-pipe stall
             process.WaitForExit(5_000);
-            // ExitCode 1 = "no rules match" (locale-independent); the program line is checked by
-            // path so a moved portable install re-provisions instead of trusting the stale rule.
-            return process.ExitCode == 0
-                && output.Contains(AppExePath, StringComparison.OrdinalIgnoreCase);
+            return process.ExitCode == 0; // 1 = "no rules match" (locale-independent)
         }
         catch
         {
@@ -238,10 +245,6 @@ public sealed class LanTransferServer : IDisposable
         TryElevatedSetup(port);
     }
 
-    private static string AppExePath =>
-        Environment.ProcessPath
-        ?? System.Reflection.Assembly.GetExecutingAssembly().Location;
-
     private static int GrabFreePort()
     {
         var probe = new TcpListener(IPAddress.Any, 0);
@@ -249,6 +252,17 @@ public sealed class LanTransferServer : IDisposable
         try { return ((IPEndPoint)probe.LocalEndpoint).Port; }
         finally { probe.Stop(); }
     }
+
+    /// <summary>Per-session token carried in the QR URL: eight lowercase hex chars. Pure so the
+    /// shape can be covered without binding a socket — tests that started a real listener made
+    /// Windows Firewall prompt for <c>testhost</c> on every run (each run has a fresh binary
+    /// path, so no remembered decision ever applied).</summary>
+    internal static string NewToken() => Guid.NewGuid().ToString("N")[..8];
+
+    /// <summary>The URL encoded into the QR code. Pure for the same reason as
+    /// <see cref="NewToken"/>; the listener itself is exercised by the phone, not the suite.</summary>
+    internal static string ComposeUrl(string host, int port, string token) =>
+        $"http://{host}:{port}/?t={token}";
 
     public void Stop()
     {
