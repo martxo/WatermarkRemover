@@ -1,4 +1,4 @@
-# Release pipeline for WatermarkRemover.
+﻿# Release pipeline for WatermarkRemover.
 #
 #   powershell -ExecutionPolicy Bypass -File d:\code\release.ps1 -Version 1.15.30
 #
@@ -44,6 +44,7 @@ Write-Host "== 1/3 vpk pack $Version =="
 # people who unzip instead of installing — which we no longer support (Setup installs get
 # deltas; an unzipped copy never can). Skipping it cuts ~1/5 of every release upload.
 vpk pack --packId WatermarkRemover --packVersion $Version `
+    --packTitle "办公助理" `
     --packDir d:\code\publish-staging --mainExe WatermarkRemover.exe --noPortable
 if ($LASTEXITCODE -ne 0) { throw "vpk pack failed ($LASTEXITCODE)" }
 
