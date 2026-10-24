@@ -242,11 +242,6 @@
                         Command="{Binding CancelScanCommand}"
                         Visibility="{Binding IsScanning, Converter={StaticResource BoolToVis}}"
                         Margin="10,0,0,0"/>
-                <TextBlock Text="{Binding ScanStatus}"
-                           Margin="14,0,0,0"
-                           VerticalAlignment="Center"
-                           FontSize="13"
-                           Foreground="{StaticResource TextSecondaryBrush}"/>
             </StackPanel>
         </Border>
             </Grid>
@@ -1280,29 +1275,33 @@
                                 </Grid>
 
                                 <!-- Live scan pages: thumbnails appear as each page leaves the
-                                     scanner, then the finished PDF strip replaces them. -->
+                                     scanner. Sized and laid out like the finished PDF strip so
+                                     the hand-over reads as the same strip gaining edit controls
+                                     — not as a second set of thumbnails appearing. -->
                                 <Border Margin="0,12,0,0"
                                         Padding="0,12,0,0"
                                         BorderBrush="{StaticResource BorderBrushLight}"
                                         BorderThickness="0,1,0,0"
                                         Visibility="{Binding ShowLiveStrip, Converter={StaticResource BoolToVis}}">
-                                    <ScrollViewer HorizontalScrollBarVisibility="Auto"
-                                                  VerticalScrollBarVisibility="Disabled"
+                                    <ScrollViewer HorizontalScrollBarVisibility="Disabled"
+                                                  VerticalScrollBarVisibility="Auto"
+                                                  MaxHeight="236"
                                                   Focusable="False">
                                         <ItemsControl ItemsSource="{Binding LiveThumbnails}">
                                             <ItemsControl.ItemsPanel>
                                                 <ItemsPanelTemplate>
-                                                    <StackPanel Orientation="Horizontal"/>
+                                                    <WrapPanel/>
                                                 </ItemsPanelTemplate>
                                             </ItemsControl.ItemsPanel>
                                             <ItemsControl.ItemTemplate>
                                                 <DataTemplate>
-                                                    <Border Width="64" Height="86" Margin="0,0,8,0"
+                                                    <Border Width="92" Height="118" Margin="0,0,8,8"
                                                             Background="White"
                                                             BorderBrush="{StaticResource BorderBrushLight}"
                                                             BorderThickness="1"
                                                             CornerRadius="4">
-                                                        <Image Source="{Binding}" Stretch="Uniform" Margin="3"/>
+                                                        <Image Source="{Binding}" Stretch="Uniform" Margin="3"
+                                                               RenderOptions.BitmapScalingMode="HighQuality"/>
                                                     </Border>
                                                 </DataTemplate>
                                             </ItemsControl.ItemTemplate>
@@ -1479,10 +1478,22 @@
 
         <!-- Footer -->
         <Grid Grid.Row="3" Margin="0,14,0,0">
-            <TextBlock Text="{Binding Board.StatusText}"
-                       FontSize="12"
+            <TextBlock FontSize="12"
                        Foreground="{StaticResource TextSecondaryBrush}"
-                       VerticalAlignment="Center"/>
+                       VerticalAlignment="Center">
+                <TextBlock.Style>
+                    <Style TargetType="TextBlock">
+                        <Setter Property="Text" Value="{Binding Board.StatusText}"/>
+                        <!-- Scan progress belongs to the job row; the footer echoes the same
+                             action a third time, so it steps aside while a scan runs. -->
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding IsScanning}" Value="True">
+                                <Setter Property="Visibility" Value="Collapsed"/>
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </TextBlock.Style>
+            </TextBlock>
             <Button Content="清空列表"
                     Style="{StaticResource GhostButton}"
                     HorizontalAlignment="Right"

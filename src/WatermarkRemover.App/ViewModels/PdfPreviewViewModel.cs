@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.IO;
 using System.Windows.Input;
 using System.Windows.Media;
@@ -10,6 +11,7 @@ using WatermarkRemover.App.Ocr;
 using WatermarkRemover.App.Scan;
 using WatermarkRemover.Core.Features.Ocr;
 using WatermarkRemover.Core.Features.Preview;
+using WatermarkRemover.Core.Logging;
 using WatermarkRemover.Pdf;
 
 namespace WatermarkRemover.App.ViewModels;
@@ -141,13 +143,19 @@ public sealed class PdfPreviewViewModel : ObservableObject
     private bool _isRotating;
     private string _statusText = string.Empty;
 
+    /// <summary>Pages that were already on screen while the scan ran. Applied once when the tile
+    /// row is first built, so the strip opens with content instead of an empty grid; later
+    /// rebuilds (rotate / delete / insert) start clean and render from the PDF.</summary>
+    private IReadOnlyList<ImageSource>? _seedThumbnails;
+
     public PdfPreviewViewModel(
         string pdfPath, string displayName, IPdfPageRenderer renderer,
         CancellationToken cancellationToken = default,
         Func<int, bool>? confirmPageDelete = null,
         IOcrEngine? ocrEngine = null, bool autoOrient = false,
         Action<string>? onRelocated = null, bool autoCleanBlank = false,
-        Func<IProgress<string>, Task<string?>>? scanProvider = null)
+        Func<IProgress<string>, Task<string?>>? scanProvider = null,
+        IReadOnlyList<ImageSource>? seedThumbnails = null)
     {
         _pdfPath = pdfPath;
         _renderer = renderer;
@@ -158,6 +166,7 @@ public sealed class PdfPreviewViewModel : ObservableObject
         _onRelocated = onRelocated;
         _autoCleanBlank = autoCleanBlank;
         _scanProvider = scanProvider;
+        _seedThumbnails = seedThumbnails;
         Title = displayName;
         Thumbnails.CollectionChanged += (_, _) =>
         {
@@ -430,30 +439,45 @@ public sealed class PdfPreviewViewModel : ObservableObject
     {
         if (IsCancelled) return;
 
+        // A scan can be long; the slow-operation warning would fire on every healthy load, so the
+        // per-step timings below carry the useful numbers instead.
+        using var op = AppLog.BeginOperation(
+            LogCategory.Preview, "打开预览", Path.GetFileName(_pdfPath), slowMs: 0);
+
         try
         {
             PageCount = await _renderer.GetPageCountAsync(_pdfPath);
         }
         catch (OperationCanceledException)
         {
+            op.Complete("已取消");
             return;
         }
         catch (Exception ex)
         {
             StatusText = $"无法打开这份 PDF：{ex.Message}";
+            op.Fail($"无法读取页数：{ex.Message}", ex);
             return;
         }
 
-        if (IsCancelled) return;
+        op.Step("读取页数", $"{PageCount} 页");
+
+        if (IsCancelled)
+        {
+            op.Complete("已取消");
+            return;
+        }
 
         if (PageCount == 0)
         {
             StatusText = "这份 PDF 没有可显示的页面。";
+            op.Complete("没有可显示的页面");
             return;
         }
 
         BuildThumbnails();
         await RenderAsync(0);
+        op.Step("首屏渲染", $"第 1 页，{PreviewDpi}dpi");
 
         // Scan rows self-heal as soon as the canvas is painted: the orientation verdict only
         // needs page one, so it must not queue behind the blank-page pass (whose renders are the
@@ -467,6 +491,7 @@ public sealed class PdfPreviewViewModel : ObservableObject
         // simply stays empty — StatusText belongs to the big page, never to the strip. Tile
         // renders are LOW priority: treatment work (probes, blank scan, canvas) cuts ahead.
         StartThumbnailLoad();
+        op.Complete($"{PageCount} 页，首屏已渲染");
     }
 
     /// <summary>
@@ -480,19 +505,42 @@ public sealed class PdfPreviewViewModel : ObservableObject
     /// </summary>
     private async Task RunScanPostProcessAsync()
     {
-        if (!_autoOrient || _ocrEngine is null)
+        using var op = AppLog.BeginOperation(
+            LogCategory.Preview, "扫描后处理", Path.GetFileName(_pdfPath), slowMs: 0);
+
+        try
         {
-            await CleanBlankPagesAsync();
-            return;
+            if (!_autoOrient || _ocrEngine is null)
+            {
+                await CleanBlankPagesAsync();
+                op.Complete("仅清理空白页");
+                return;
+            }
+
+            bool blankFirstPage = _autoCleanBlank && await IsPageBlankAsync(0);
+            op.Step("检测首页空白", blankFirstPage ? "空白" : "有内容");
+
+            if (blankFirstPage)
+            {
+                await CleanBlankPagesAsync();
+                op.Step("清理空白页", "首页空白，先清理");
+            }
+
+            await AutoOrientAsync();
+            op.Step("方向检测");
+
+            if (_autoCleanBlank && !blankFirstPage)
+            {
+                await CleanBlankPagesAsync();
+                op.Step("清理空白页", "方向检测后清理");
+            }
+
+            op.Complete("扫描后处理结束");
         }
-
-        bool blankFirstPage = _autoCleanBlank && await IsPageBlankAsync(0);
-
-        if (blankFirstPage) await CleanBlankPagesAsync();
-
-        await AutoOrientAsync();
-
-        if (_autoCleanBlank && !blankFirstPage) await CleanBlankPagesAsync();
+        catch (Exception ex)
+        {
+            op.Fail("扫描后处理失败", ex);
+        }
     }
 
     /// <summary>Blank verdict for one cached page; an unreadable page counts as content so the
@@ -504,8 +552,10 @@ public sealed class PdfPreviewViewModel : ObservableObject
             byte[] pagePng = await GetPageBytesAsync(pageIndex, PreviewDpi, priority: true);
             return await Task.Run(() => BlankPageDetector.IsBlank(pagePng));
         }
-        catch (Exception)
+        catch (Exception ex)
         {
+            // An unreadable page counts as content; keep the reason so a silent probe is traceable.
+            AppLog.Debug($"空白判定失败：第 {pageIndex + 1} 页，按有内容处理（{ex.Message}）");
             return false;
         }
     }
@@ -520,30 +570,52 @@ public sealed class PdfPreviewViewModel : ObservableObject
     {
         if (!_autoCleanBlank || _isOrienting || IsRotating || PageCount <= 1) return;
 
+        using var op = AppLog.BeginOperation(
+            LogCategory.Preview, "清理空白页", Path.GetFileName(_pdfPath), slowMs: 0);
+
         IsRotating = true; // the single-writer lock: tiles' edit buttons idle while pages go
         try
         {
             var blankPages = new List<int>();
             for (int i = 0; i < PageCount; i++)
             {
-                if (IsCancelled) return;
+                if (IsCancelled)
+                {
+                    op.Complete("已取消");
+                    return;
+                }
+
                 byte[] png = await GetPageBytesAsync(i, PreviewDpi, priority: true);
-                if (await Task.Run(() => BlankPageDetector.IsBlank(png)))
+                bool blank = await Task.Run(() => BlankPageDetector.IsBlank(png));
+                if (blank)
                     blankPages.Add(i);
+                op.Step($"检测第 {i + 1}/{PageCount} 页", blank ? "空白" : "有内容");
             }
-            if (IsCancelled) return;
+            if (IsCancelled)
+            {
+                op.Complete("已取消");
+                return;
+            }
 
             if (blankPages.Count >= PageCount)
             {
                 blankPages.Remove(0); // an all-blank scan keeps its first sheet
             }
-            if (blankPages.Count == 0) return;
+            if (blankPages.Count == 0)
+            {
+                op.Complete("未发现空白页");
+                return;
+            }
 
             int removed = 0;
             await WritePdfAsync(() => removed = PdfPageRotator.DeletePages(_pdfPath, blankPages));
-            if (IsCancelled || removed == 0) return;
+            op.Step("删除空白页写盘", $"删除 {removed} 页");
+            if (IsCancelled || removed == 0)
+            {
+                op.Complete("写盘未生效");
+                return;
+            }
             RememberFileStamp(force: true);
-            AppLog.Info($"预览已自动删除空白页：{Path.GetFileName(_pdfPath)} 共 {removed} 页");
 
             // Indexes shifted for every page after the first removed one — the whole render
             // cache is keyed by index, so it all goes; the strip rebuilds below anyway.
@@ -553,16 +625,17 @@ public sealed class PdfPreviewViewModel : ObservableObject
             StartThumbnailLoad();
             await RenderAsync(Math.Min(PageIndex, PageCount - 1), force: true);
             StatusText = $"已自动删除 {removed} 页空白页";
+            op.Complete($"删除 {removed} 页空白页，剩余 {PageCount} 页");
         }
         catch (FileNotFoundException ex)
         {
-            AppLog.Trace($"空白页清理中止（文件不可达）：{ex.FileName}", ex);
+            op.Fail($"空白页清理中止（文件不可达）：{ex.FileName}", ex);
             if (!IsCancelled) StatusText = ex.Message;
         }
         catch (Exception ex)
         {
             // A failed cleanup must never obscure the scan result — fold quietly.
-            AppLog.Trace($"空白页清理失败：{Path.GetFileName(_pdfPath)}", ex);
+            op.Fail("空白页清理失败", ex);
         }
         finally
         {
@@ -574,8 +647,15 @@ public sealed class PdfPreviewViewModel : ObservableObject
     private void BuildThumbnails()
     {
         Thumbnails.Clear();
+        IReadOnlyList<ImageSource>? seeds = _seedThumbnails;
+        _seedThumbnails = null;
         for (int i = 0; i < _pageCount; i++)
-            Thumbnails.Add(new PdfPreviewThumbnailViewModel(this, i));
+        {
+            var thumb = new PdfPreviewThumbnailViewModel(this, i);
+            if (seeds is not null && i < seeds.Count)
+                thumb.SetImage(seeds[i]);
+            Thumbnails.Add(thumb);
+        }
         SyncThumbnailSelection();
         RebuildStripItems();
     }
@@ -614,32 +694,50 @@ public sealed class PdfPreviewViewModel : ObservableObject
         IReadOnlyList<PdfPreviewThumbnailViewModel> thumbs,
         int generation)
     {
+        using var op = AppLog.BeginOperation(
+            LogCategory.Preview, "缩略图填充", $"{thumbs.Count} 页", slowMs: 0);
+
+        int filled = 0;
         foreach (var thumb in thumbs)
         {
             // Re-supplied tiles after a reload belong to a superseded session: drop out.
             if (IsCancelled || generation != _thumbnailLoadGeneration || !Thumbnails.Contains(thumb))
+            {
+                op.Complete($"已终止，成功填充 {filled}/{thumbs.Count} 张");
                 return;
+            }
 
             try
             {
                 byte[] bytes = await GetPageBytesAsync(thumb.Index, ThumbnailDpi);
                 if (IsCancelled || generation != _thumbnailLoadGeneration || !Thumbnails.Contains(thumb))
+                {
+                    op.Complete($"已终止，成功填充 {filled}/{thumbs.Count} 张");
                     return;
+                }
                 ImageSource image = await Task.Run(() => MakeThumbSource(bytes));
                 // Re-check after the decode: a fold/accordion switch during it must win.
                 if (IsCancelled || generation != _thumbnailLoadGeneration || !Thumbnails.Contains(thumb))
+                {
+                    op.Complete($"已终止，成功填充 {filled}/{thumbs.Count} 张");
                     return;
+                }
                 thumb.SetImage(image);
+                filled++;
             }
             catch (OperationCanceledException)
             {
+                op.Complete($"已取消，成功填充 {filled}/{thumbs.Count} 张");
                 return;
             }
-            catch (Exception)
+            catch (Exception ex)
             {
-                // The main canvas reports the real reason; an empty tile is enough here.
+                // The main canvas reports the real reason; an empty tile is enough here, but the
+                // strip failure still leaves a trace.
+                AppLog.Debug($"缩略图填充失败：第 {thumb.Index + 1} 页（{ex.Message}）");
             }
         }
+        op.Complete($"成功填充 {filled}/{thumbs.Count} 张");
     }
 
     /// <summary>
@@ -663,6 +761,9 @@ public sealed class PdfPreviewViewModel : ObservableObject
         if (IsCancelled || IsRotating) return;
         if (pageIndex < 0 || pageIndex >= PageCount) return;
 
+        using var op = AppLog.BeginOperation(
+            LogCategory.Preview, "旋转页面", $"第 {pageIndex + 1} 页 / {Path.GetFileName(_pdfPath)}");
+
         IsRotating = true;
         StatusText = $"正在旋转第 {pageIndex + 1} 页并保存…";
         try
@@ -672,32 +773,43 @@ public sealed class PdfPreviewViewModel : ObservableObject
                 EnsurePdfReadable();
                 PdfPageRotator.RotateClockwise(_pdfPath, pageIndex);
             });
+            op.Step("旋转写盘", $"第 {pageIndex + 1} 页，顺时针 90°");
             InvalidatePage(pageIndex);
-            AppLog.Info($"预览旋转已保存：{Path.GetFileName(_pdfPath)} 第 {pageIndex + 1} 页");
 
-            if (IsCancelled) return; // the file is saved; nothing is on screen any more
+            if (IsCancelled)
+            {
+                op.Complete("已取消（文件已保存）");
+                return; // the file is saved; nothing is on screen any more
+            }
             RememberFileStamp(force: true);
 
             byte[] thumbBytes = await GetPageBytesAsync(pageIndex, ThumbnailDpi, priority: true);
-            if (IsCancelled) return;
+            if (IsCancelled)
+            {
+                op.Complete("已取消（文件已保存）");
+                return;
+            }
             if (pageIndex < Thumbnails.Count)
                 Thumbnails[pageIndex].SetImage(await Task.Run(() => MakeThumbSource(thumbBytes)));
+            op.Step("缩略图刷新", $"第 {pageIndex + 1} 页，{thumbBytes.Length / 1024} KB");
 
             if (PageIndex == pageIndex)
                 await RenderAsync(pageIndex, force: true);
+            op.Step("画布刷新", PageIndex == pageIndex ? $"第 {pageIndex + 1} 页" : "未显示该页");
 
             // Only clear our own progress line; a render failure reported by RenderAsync must stay.
             if (StatusText.StartsWith("正在旋转", StringComparison.Ordinal))
                 StatusText = string.Empty;
+            op.Complete($"第 {pageIndex + 1} 页已顺时针旋转");
         }
         catch (FileNotFoundException ex)
         {
-            AppLog.Trace($"预览旋转失败（文件不可达）：{ex.FileName}", ex);
+            op.Fail($"旋转保存失败（文件不可达）：{ex.FileName}", ex);
             if (!IsCancelled) StatusText = ex.Message;
         }
         catch (Exception ex)
         {
-            AppLog.Trace($"预览旋转失败：{Path.GetFileName(_pdfPath)} 第 {pageIndex + 1} 页", ex);
+            op.Fail($"旋转保存失败：第 {pageIndex + 1} 页", ex);
             if (!IsCancelled) StatusText = $"旋转保存失败：{ex.Message}";
         }
         finally
@@ -719,6 +831,9 @@ public sealed class PdfPreviewViewModel : ObservableObject
         if (PageCount <= 1) return; // the last page must survive: empty PDFs cannot be opened
         if (_confirmPageDelete is { } confirm && !confirm(pageIndex)) return;
 
+        using var op = AppLog.BeginOperation(
+            LogCategory.Preview, "删除页面", $"第 {pageIndex + 1} 页 / {Path.GetFileName(_pdfPath)}");
+
         IsRotating = true;
         StatusText = $"正在删除第 {pageIndex + 1} 页…";
         try
@@ -728,9 +843,13 @@ public sealed class PdfPreviewViewModel : ObservableObject
                 EnsurePdfReadable();
                 PdfPageRotator.DeletePage(_pdfPath, pageIndex);
             });
-            AppLog.Info($"预览已删除页：{Path.GetFileName(_pdfPath)} 第 {pageIndex + 1} 页");
+            op.Step("删除页写盘", $"第 {pageIndex + 1} 页");
 
-            if (IsCancelled) return; // the file is saved; nothing is on screen any more
+            if (IsCancelled)
+            {
+                op.Complete("已取消（文件已保存）");
+                return; // the file is saved; nothing is on screen any more
+            }
             RememberFileStamp(force: true);
 
             // Every page after the deleted one shifts down an index — the render cache keys by
@@ -739,20 +858,23 @@ public sealed class PdfPreviewViewModel : ObservableObject
             PageCount--;
             BuildThumbnails();
             StartThumbnailLoad();
+            op.Step("重建缩略图", $"剩余 {PageCount} 页");
 
             // The page that took the deleted one's place becomes the shown page.
             await RenderAsync(Math.Min(pageIndex, PageCount - 1), force: true);
+            op.Step("画布刷新", $"第 {PageIndex + 1} 页");
             if (StatusText.StartsWith("正在删除", StringComparison.Ordinal))
                 StatusText = string.Empty;
+            op.Complete($"第 {pageIndex + 1} 页已删除，剩余 {PageCount} 页");
         }
         catch (FileNotFoundException ex)
         {
-            AppLog.Trace($"预览删除页失败（文件不可达）：{ex.FileName}", ex);
+            op.Fail($"删除页失败（文件不可达）：{ex.FileName}", ex);
             if (!IsCancelled) StatusText = ex.Message;
         }
         catch (Exception ex)
         {
-            AppLog.Trace($"预览删除页失败：{Path.GetFileName(_pdfPath)} 第 {pageIndex + 1} 页", ex);
+            op.Fail($"删除页失败：第 {pageIndex + 1} 页", ex);
             if (!IsCancelled) StatusText = $"删除页失败：{ex.Message}";
         }
         finally
@@ -786,18 +908,27 @@ public sealed class PdfPreviewViewModel : ObservableObject
         if (_scanProvider is null) return;
         if (insertAfterIndex < -1 || insertAfterIndex >= PageCount) return; // -1 = in front of page one
 
+        string slot = insertAfterIndex < 0 ? "开头" : $"第 {insertAfterIndex + 1} 页后";
+        using var op = AppLog.BeginOperation(
+            LogCategory.Preview, "插入扫描页", $"{slot} / {Path.GetFileName(_pdfPath)}");
+
         IsRotating = true;
         StatusText = "正在准备扫描…";
-        string slot = insertAfterIndex < 0 ? "开头" : $"第 {insertAfterIndex + 1} 页后";
         string? scannedPath = null;
         bool inserted = false;
         try
         {
             scannedPath = await _scanProvider(new Progress<string>(message => StatusText = message)).ConfigureAwait(true);
-            if (IsCancelled) return;
+            op.Step("扫描", scannedPath is null ? "未产出文件" : Path.GetFileName(scannedPath));
+            if (IsCancelled)
+            {
+                op.Complete("已取消");
+                return;
+            }
             if (scannedPath is null || !File.Exists(scannedPath))
             {
                 StatusText = "扫描未完成，没有页面可插入。";
+                op.Complete("扫描未产出页面，未插入");
                 return;
             }
 
@@ -807,9 +938,13 @@ public sealed class PdfPreviewViewModel : ObservableObject
                 return PdfPageInserter.InsertAfter(_pdfPath, insertAfterIndex, scannedPath!);
             }).ConfigureAwait(true);
             inserted = added > 0;
-            AppLog.Info($"预览已插入扫描页：{Path.GetFileName(_pdfPath)} {slot}新增 {added} 页");
+            op.Step("插入写盘", $"{slot}新增 {added} 页");
 
-            if (IsCancelled) return; // the file is saved; nothing is on screen any more
+            if (IsCancelled)
+            {
+                op.Complete("已取消（文件已保存）");
+                return; // the file is saved; nothing is on screen any more
+            }
             ShiftRenderedPages(insertAfterIndex, added);
             PageCount += added;
 
@@ -817,7 +952,12 @@ public sealed class PdfPreviewViewModel : ObservableObject
             // like before the gap — probe each new page and turn the crooked ones in place,
             // before the strip below paints them.
             await OrientInsertedPagesAsync(insertAfterIndex + 1, added).ConfigureAwait(true);
-            if (IsCancelled) return; // pages are fixed in the file; nothing is on screen any more
+            op.Step("插入页方向校正");
+            if (IsCancelled)
+            {
+                op.Complete("已取消（文件已保存）");
+                return; // pages are fixed in the file; nothing is on screen any more
+            }
             RememberFileStamp(force: true);
 
             // Grow the strip in place: tiles before the gap keep their page, tiles after it are
@@ -838,22 +978,25 @@ public sealed class PdfPreviewViewModel : ObservableObject
             foreach (var thumb in Thumbnails) thumb.RefreshCommands();
             RebuildStripItems();
             _ = LoadThumbnailsAsync(fresh, ++_thumbnailLoadGeneration);
+            op.Step("缩略图刷新", $"新增 {added} 页");
 
             // Land on the first page that came out of the scanner.
             await RenderAsync(Math.Min(insertAfterIndex + 1, PageCount - 1), force: true).ConfigureAwait(true);
+            op.Step("画布刷新", $"第 {PageIndex + 1} 页");
 
             // RenderAsync clears StatusText on success; write our line after that, and leave a
             // render failure's own message standing.
             if (StatusText.Length == 0) StatusText = $"已插入 {added} 页扫描页。";
+            op.Complete($"{slot}新增 {added} 页，共 {PageCount} 页");
         }
         catch (FileNotFoundException ex)
         {
-            AppLog.Trace($"插入扫描页失败（文件不可达）：{ex.FileName}", ex);
+            op.Fail($"插入扫描页失败（文件不可达）：{ex.FileName}", ex);
             if (!IsCancelled) StatusText = ex.Message;
         }
         catch (Exception ex)
         {
-            AppLog.Trace($"插入扫描页失败：{Path.GetFileName(_pdfPath)} {slot}", ex);
+            op.Fail($"插入扫描页失败：{slot}", ex);
             if (!IsCancelled) StatusText = $"插入扫描页失败：{ex.Message}";
         }
         finally
@@ -932,49 +1075,65 @@ public sealed class PdfPreviewViewModel : ObservableObject
         if (IsCancelled || _ocrEngine is null || IsOrienting) return;
         if (PageCount <= 0 || _isLoading) return; // let the initial paint finish first
 
+        using var op = AppLog.BeginOperation(
+            LogCategory.Preview, "自动摆正", Path.GetFileName(_pdfPath), slowMs: 0);
+
         IsOrienting = true;
         StatusText = "正在检测页面方向…";
         try
         {
             byte[] pagePng = await GetPageBytesAsync(0, OrientationDpi, priority: true);
+            op.Step("探测页渲染", $"第 1 页，{OrientationDpi}dpi");
 
             var detector = new PdfOrientationDetector(_ocrEngine);
             int steps = await Task.Run(() => detector.DetectClockwiseStepsAsync(pagePng, _cancellationToken));
             _renderedPages.TryRemove((0, OrientationDpi), out _); // probe raster is never displayed
-            if (IsCancelled) return;
+            op.Step("方向投票", steps == 0 ? "已是正确朝向" : $"需顺时针 {steps * 90}°");
+            if (IsCancelled)
+            {
+                op.Complete("已取消");
+                return;
+            }
 
             if (steps == 0)
             {
                 if (StatusText.StartsWith("正在检测", StringComparison.Ordinal)) StatusText = string.Empty;
-                AppLog.Info($"方向检测：{Path.GetFileName(_pdfPath)} 已是正确朝向，未改动");
+                op.Complete("已是正确朝向，未改动");
                 return;
             }
 
             await WritePdfAsync(() => PdfPageRotator.RotateAll(_pdfPath, steps));
-            if (IsCancelled) return; // the file is fixed; nothing is on screen any more
+            op.Step("旋转写盘", $"顺时针 {steps * 90}°，共 {PageCount} 页");
+            if (IsCancelled)
+            {
+                op.Complete("已取消（文件已保存）");
+                return; // the file is fixed; nothing is on screen any more
+            }
             RememberFileStamp(force: true);
-
-            AppLog.Info($"已自动摆正：{Path.GetFileName(_pdfPath)}，顺时针 {steps * 90}°，共 {PageCount} 页");
 
             // Every /Rotate changed but the content streams did not — only the rotation metadata
             // is stale in the caches, yet page bytes differ per (page, dpi) key, so drop it all.
             InvalidateAllPages();
             BuildThumbnails();
             StartThumbnailLoad();
+            op.Step("重建缩略图", $"共 {PageCount} 页");
             await RenderAsync(PageIndex, force: true);
+            op.Step("画布刷新", $"第 {PageIndex + 1} 页");
 
             // RenderAsync clears StatusText on success; write our line after that, and leave a
             // render failure's own message standing.
             if (StatusText.Length == 0) StatusText = "已自动摆正。";
+            op.Complete($"顺时针 {steps * 90}°，共 {PageCount} 页");
         }
         catch (OperationCanceledException)
         {
+            op.Complete("已取消");
         }
         catch (Exception ex)
         {
             // Auto-orientation is a convenience: failures stay out of the user's way (the file
             // itself is untouched — RotateAll swaps only after a complete save).
-            AppLog.Trace($"自动摆正失败：{Path.GetFileName(_pdfPath)}", ex);
+            op.Fail("自动摆正失败", ex);
             if (!IsCancelled) StatusText = string.Empty;
         }
         finally
@@ -992,6 +1151,7 @@ public sealed class PdfPreviewViewModel : ObservableObject
         if (pageIndex < 0 || pageIndex >= _pageCount) return;
         if (!force && pageIndex == _displayedPageIndex && CurrentImage is not null) return;
 
+        long startTicks = Stopwatch.GetTimestamp();
         int generation = ++_loadGeneration;
         PageIndex = pageIndex;
         IsLoading = true;
@@ -1005,6 +1165,8 @@ public sealed class PdfPreviewViewModel : ObservableObject
             CurrentImage = Decode(bytes);
             _displayedPageIndex = pageIndex;
             StatusText = string.Empty;
+            AppLog.Debug($"预览渲染完成：第 {pageIndex + 1} 页，{PreviewDpi}dpi，" +
+                         $"{(long)Stopwatch.GetElapsedTime(startTicks).TotalMilliseconds} ms");
         }
         catch (OperationCanceledException)
         {
@@ -1017,6 +1179,8 @@ public sealed class PdfPreviewViewModel : ObservableObject
             _displayedPageIndex = -1;
             CurrentImage = null;
             StatusText = $"预览失败：{ex.Message}";
+            AppLog.Warn($"预览渲染失败：第 {pageIndex + 1} 页，{PreviewDpi}dpi，" +
+                        $"{(long)Stopwatch.GetElapsedTime(startTicks).TotalMilliseconds} ms", ex);
         }
         finally
         {
@@ -1047,14 +1211,25 @@ public sealed class PdfPreviewViewModel : ObservableObject
     private async Task<byte[]> GetPageBytesAsync(int pageIndex, int dpi, bool priority = false)
     {
         var key = (pageIndex, dpi);
-        if (_renderedPages.TryGetValue(key, out byte[]? cached)) return cached;
+        if (_renderedPages.TryGetValue(key, out byte[]? cached))
+        {
+            AppLog.Debug($"预览缓存命中：第 {pageIndex + 1} 页，{dpi}dpi，{cached.Length} 字节");
+            return cached;
+        }
 
+        long waitTicks = Stopwatch.GetTimestamp();
         await _renderGate.WaitAsync(_cancellationToken);
+        long gateMs = (long)Stopwatch.GetElapsedTime(waitTicks).TotalMilliseconds;
         try
         {
-            if (_renderedPages.TryGetValue(key, out cached)) return cached;
+            if (_renderedPages.TryGetValue(key, out cached))
+            {
+                AppLog.Debug($"预览缓存命中（等待闸门 {gateMs} ms）：第 {pageIndex + 1} 页，{dpi}dpi，{cached.Length} 字节");
+                return cached;
+            }
 
             int epoch = Volatile.Read(ref _cacheEpoch);
+            long renderTicks = Stopwatch.GetTimestamp();
             byte[] bytes;
             try
             {
@@ -1067,18 +1242,24 @@ public sealed class PdfPreviewViewModel : ObservableObject
                 if (!await Task.Run(TryRelocatePdf)) throw;
                 bytes = await _renderer.RenderPageAsync(_pdfPath, pageIndex, dpi, priority);
             }
+            long renderMs = (long)Stopwatch.GetElapsedTime(renderTicks).TotalMilliseconds;
             RememberFileStamp();
             // A page edit during the render invalidates these bytes; caching them now would
             // resurrect the pre-edit raster the edit's clear just dropped.
             if (Volatile.Read(ref _cacheEpoch) == epoch)
             {
                 _renderedPages[key] = bytes;
-                if (Interlocked.Add(ref _renderCacheBytes, bytes.Length) > RenderCacheBudgetBytes)
+                long cacheBytes = Interlocked.Add(ref _renderCacheBytes, bytes.Length);
+                if (cacheBytes > RenderCacheBudgetBytes)
                 {
+                    AppLog.Warn($"预览渲染缓存超预算：清空前 {cacheBytes / 1048576.0:F1} MB" +
+                                $"（{cacheBytes} 字节），上限 {RenderCacheBudgetBytes / 1048576} MB");
                     _renderedPages.Clear();
                     Interlocked.Exchange(ref _renderCacheBytes, 0);
                 }
             }
+            AppLog.Debug($"预览缓存未命中：第 {pageIndex + 1} 页，{dpi}dpi，等待闸门 {gateMs} ms，" +
+                         $"渲染 {renderMs} ms，{bytes.Length} 字节，优先级 {(priority ? "高" : "普通")}");
             return bytes;
         }
         finally
@@ -1100,7 +1281,10 @@ public sealed class PdfPreviewViewModel : ObservableObject
 
         string? directory = Path.GetDirectoryName(_pdfPath);
         if (directory is null || !Directory.Exists(directory) || _knownLength < 0 || _fingerprint is null)
+        {
+            AppLog.Debug($"预览无法跟踪改名文件：{Path.GetFileName(_pdfPath)} 目录不可用或缺少文件指纹");
             return false;
+        }
 
         string[] candidates;
         try
@@ -1122,17 +1306,23 @@ public sealed class PdfPreviewViewModel : ObservableObject
                 .Where(HeadBytesMatch) // the stamp narrows the field; content picks the file
                 .ToArray();
         }
-        catch (IOException)
+        catch (IOException ex)
         {
+            AppLog.Debug($"预览无法跟踪改名文件：{Path.GetFileName(_pdfPath)} 枚举失败（{ex.Message}）");
             return false;
         }
 
-        if (candidates.Length != 1) return false;
+        if (candidates.Length != 1)
+        {
+            AppLog.Debug($"预览无法跟踪改名文件：{Path.GetFileName(_pdfPath)} 候选 {candidates.Length} 个，无法唯一确定");
+            return false;
+        }
 
+        string oldName = Path.GetFileName(_pdfPath);
         _pdfPath = candidates[0];
         Title = Path.GetFileName(_pdfPath);
         OnPropertyChanged(nameof(Title));
-        AppLog.Info($"预览已跟踪改名文件：{Path.GetFileName(_pdfPath)}");
+        AppLog.Info($"预览已跟踪改名文件：{oldName} → {Path.GetFileName(_pdfPath)}，候选 {candidates.Length} 个");
         _onRelocated?.Invoke(_pdfPath);
         return true;
     }
@@ -1184,6 +1374,7 @@ public sealed class PdfPreviewViewModel : ObservableObject
     /// </summary>
     private async Task WritePdfAsync(Action edit)
     {
+        long startTicks = Stopwatch.GetTimestamp();
         await _renderGate.WaitAsync(_cancellationToken);
         try
         {
@@ -1197,6 +1388,8 @@ public sealed class PdfPreviewViewModel : ObservableObject
         {
             _renderGate.Release();
         }
+        AppLog.Debug($"预览写盘完成：{Path.GetFileName(_pdfPath)}，" +
+                     $"{(long)Stopwatch.GetElapsedTime(startTicks).TotalMilliseconds} ms");
     }
 
     /// <summary>Edit guard: resolves a renamed file first, then fails with a message the user
@@ -1250,9 +1443,12 @@ public sealed class PdfPreviewViewModel : ObservableObject
     public void ReleaseThumbnailImages()
     {
         _thumbnailLoadGeneration++;
+        int released = Thumbnails.Count(thumb => thumb.Image is not null);
         foreach (var thumb in Thumbnails)
             thumb.ClearImage();
+        long cacheBytes = Interlocked.Read(ref _renderCacheBytes);
         TrimRenderCache();
+        AppLog.Debug($"预览已释放缩略图：{released} 张，渲染缓存 {cacheBytes} 字节");
         // The canvas bitmap is multi-megabyte and no row surface shows it while folded; without
         // this, 70 scanned documents would keep 70 decoded 150-dpi pages resident.
         CurrentImage = null;

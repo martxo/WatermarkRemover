@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Windows;
+using System.Windows.Media;
 using WatermarkRemover.App.Logging;
 using WatermarkRemover.App.Ocr;
 using WatermarkRemover.App.ViewModels;
@@ -69,8 +70,10 @@ public sealed class PreviewStripCoordinator
     }
 
     /// <summary>Builds and unfolds the row's strip immediately. Scans call this the moment the
-    /// PDF lands (zero-click preview); other sections reach it through the preview button.</summary>
-    public void Open(FileJobViewModel job)
+    /// PDF lands (zero-click preview); other sections reach it through the preview button.
+    /// <paramref name="seedThumbnails"/> are the pages already shown live during the scan: the
+    /// strip starts with them so it never flashes an empty grid and then a second set of tiles.</summary>
+    public void Open(FileJobViewModel job, IReadOnlyList<ImageSource>? seedThumbnails = null)
     {
         string? path = job.OutputPath;
         if (string.IsNullOrWhiteSpace(path) || !File.Exists(path) ||
@@ -92,7 +95,8 @@ public sealed class PreviewStripCoordinator
             autoOrient: scanRow,
             onRelocated: job.UpdateRenamed, // a renamed file is tracked, the row follows
             autoCleanBlank: scanRow, // duplex scans drop their blank back sides by themselves
-            scanProvider: scanRow ? _scanIntoStrip : null); // scan rows can insert scans into gaps
+            scanProvider: scanRow ? _scanIntoStrip : null, // scan rows can insert scans into gaps
+            seedThumbnails: seedThumbnails);
         strip.EnlargeRequested += (_, _) => EnlargeRequested(strip);
         job.AttachStrip(strip);
         // Accordion: the row being opened is the only one whose decoded tiles stay resident.

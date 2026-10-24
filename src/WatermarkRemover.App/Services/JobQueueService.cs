@@ -1,7 +1,10 @@
+using System.Diagnostics;
+using System.IO;
 using WatermarkRemover.App.Logging;
 using WatermarkRemover.App.Recognition;
 using WatermarkRemover.App.ViewModels;
 using WatermarkRemover.Core.Features;
+using WatermarkRemover.Core.Logging;
 using WatermarkRemover.Core.Recognition;
 
 namespace WatermarkRemover.App.Services;
@@ -41,7 +44,11 @@ public sealed class JobQueueService
 
         await Task.WhenAll(jobs.Select(async job =>
         {
+            long waitStart = Stopwatch.GetTimestamp();
             await throttle.WaitAsync().ConfigureAwait(false);
+            long waitMs = (long)Stopwatch.GetElapsedTime(waitStart).TotalMilliseconds;
+            AppLog.Debug($"任务排队：{Path.GetFileName(job.InputPath)} 等待 {waitMs} ms");
+
             try
             {
                 await ExecuteAsync(job, feature, context).ConfigureAwait(false);
@@ -58,20 +65,32 @@ public sealed class JobQueueService
     private Task ExecuteAsync(FileJobViewModel job, IFeature feature, FeatureContext context) =>
         Task.Run(() =>
         {
+            // Per job on purpose: concurrent jobs must never share one operation id.
+            using var op = AppLog.BeginOperation(
+                LogCategory.Job, "任务处理", Path.GetFileName(job.InputPath));
+
             job.MarkProcessing(feature.ProcessingText);
             // Inside the task body on purpose: sibling jobs must not see each other's scope.
             using var scope = RecognitionRunScope.Begin(job.InputPath, feature.DisplayName);
             try
             {
-                if (!feature.CanHandle(job.InputPath))
+                bool canHandle = feature.CanHandle(job.InputPath);
+                op.Step("CanHandle", canHandle ? "可处理" : "不支持");
+                if (!canHandle)
                 {
                     job.Apply(FeatureResult.Fail(job.InputPath, $"{feature.DisplayName}只支持 PDF 文件"));
+                    op.Complete("状态 失败，输出 -");
                     return;
                 }
 
+                long runStart = Stopwatch.GetTimestamp();
                 FeatureResult result = feature.Run(job.InputPath, context);
+                long runMs = (long)Stopwatch.GetElapsedTime(runStart).TotalMilliseconds;
+                op.Step("执行业务", $"{feature.Id}，{runMs} ms");
+
                 job.Apply(result);
                 LogResult(result, feature);
+                op.Complete($"状态 {result.Status}，输出 {result.OutputPath ?? "-"}");
             }
             catch (Exception ex)
             {
@@ -79,6 +98,7 @@ public sealed class JobQueueService
                 // unexpected defects so one bad file cannot stall the whole batch.
                 AppLog.Error($"处理意外异常：{job.InputPath}", ex);
                 job.Apply(FeatureResult.Fail(job.InputPath, $"意外错误：{ex.Message}", ex, feature.DisplayName));
+                op.Fail($"意外异常：{ex.Message}", ex);
             }
             finally
             {

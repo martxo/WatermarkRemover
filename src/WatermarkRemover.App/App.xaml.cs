@@ -1,4 +1,6 @@
-﻿using System.Windows;
+﻿using System.Globalization;
+using System.Runtime.InteropServices;
+using System.Windows;
 using System.Windows.Threading;
 using Velopack;
 using WatermarkRemover.App.Logging;
@@ -21,18 +23,35 @@ public partial class App : Application
         AppLog.Initialize();
         AppLog.Info($"应用启动 v{GetVersion()}，数据目录：{AppFolders.Root}");
 
+        // Environment baseline: without these three facts a support log cannot distinguish a
+        // code defect from a machine-specific component/OS problem.
+        AppLog.Info($"运行环境：{RuntimeInformation.OSDescription}；" +
+                    $"{RuntimeInformation.ProcessArchitecture}；" +
+                    $"{Environment.ProcessorCount} 逻辑核；" +
+                    $"用户 {Environment.UserName}@{Environment.MachineName}；" +
+                    $"区域 {CultureInfo.CurrentCulture.Name}；.NET {Environment.Version}");
+        AppLog.Debug($"日志级别：{AppLog.MinimumLevel}；内存[启动]：{AppLog.MemorySnapshot()}");
+
         DispatcherUnhandledException += OnDispatcherUnhandledException;
         AppDomain.CurrentDomain.UnhandledException += OnDomainUnhandledException;
         TaskScheduler.UnobservedTaskException += OnUnobservedTaskException;
     }
 
+    protected override void OnExit(ExitEventArgs e)
+    {
+        AppLog.Info("应用退出");
+        AppLog.Shutdown();
+        base.OnExit(e);
+    }
+
     private static string GetVersion() =>
         typeof(App).Assembly.GetName().Version?.ToString(3) ?? "0.0.0";
 
-    /// <summary>UI thread crash: log, tell the user, and keep the window alive.</summary>
+    /// <summary>UI thread crash: log, flush, tell the user, and keep the window alive.</summary>
     private void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
     {
         AppLog.Error("界面线程未处理异常", e.Exception);
+        AppLog.Flush(); // the crash may be followed by a kill: get the stack on disk first
         ShowUnexpectedErrorDialog(e.Exception);
         e.Handled = true;
     }
@@ -41,6 +60,7 @@ public partial class App : Application
     private static void OnDomainUnhandledException(object sender, UnhandledExceptionEventArgs e)
     {
         AppLog.Error("后台线程致命异常", e.ExceptionObject as Exception);
+        AppLog.Flush();
     }
 
     private static void OnUnobservedTaskException(object? sender, UnobservedTaskExceptionEventArgs e)

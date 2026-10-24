@@ -1,6 +1,7 @@
 using System.IO;
 using WatermarkRemover.App.Logging;
 using WatermarkRemover.App.ViewModels;
+using WatermarkRemover.Core.Logging;
 using WatermarkRemover.Core.Settings;
 
 namespace WatermarkRemover.App.Services;
@@ -38,11 +39,18 @@ public sealed class JobRenamer
 
     private async Task RenameCoreAsync(FileJobViewModel job, string directory, string newName)
     {
+        using var op = AppLog.BeginOperation(
+            LogCategory.File,
+            "手动改名",
+            $"{Path.GetFileName(job.OutputPath)} → {newName}");
         try
         {
             string target = OutputNameGenerator.FindAvailablePath(directory, newName);
+            op.Step("解析目标名", Path.GetFileName(target));
+
             string currentPath = job.OutputPath!;
-            for (int attempt = 1; ; attempt++)
+            int attempt = 1;
+            for (; ; attempt++)
             {
                 try
                 {
@@ -57,13 +65,16 @@ public sealed class JobRenamer
                     await Task.Delay(attempt * 400).ConfigureAwait(true);
                 }
             }
+            op.Step("移动文件", $"尝试 {attempt} 次");
 
             AppLog.Info($"重命名输出文件：{Path.GetFileName(job.OutputPath)} → {Path.GetFileName(target)}");
             job.UpdateRenamed(target);
+            op.Complete($"→ {Path.GetFileName(target)}");
         }
         catch (Exception ex)
         {
             AppLog.Error($"重命名失败：{job.OutputPath} → {newName}", ex);
+            op.Fail("重命名失败", ex);
             _dialogs.Warn($"重命名失败：{ex.Message}", "提示");
         }
     }

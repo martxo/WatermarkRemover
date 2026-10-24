@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.IO;
 using System.Windows;
 using WatermarkRemover.App.Logging;
@@ -12,6 +13,7 @@ using WatermarkRemover.Core.Features.Ocr;
 using WatermarkRemover.Core.Features.Scan;
 using WatermarkRemover.Core.Features.Search;
 using WatermarkRemover.Core.Features.Transfer;
+using WatermarkRemover.Core.Logging;
 using WatermarkRemover.Core.Settings;
 using WatermarkRemover.Core.Watermarks;
 using WatermarkRemover.Index;
@@ -101,7 +103,9 @@ public sealed class MainViewModel : ObservableObject
         _selectedFeature = NavItems[0].Feature;
         Board.SetSection(_selectedFeature.Id, _selectedFeature.DisplayName);
 
-        _scan = new ScanCoordinator(Settings, busy => IsBusy = busy, status => ScanStatus = status);
+        // The job row owns scan progress (phase + page count). A second copy in the scan panel
+        // and a third in the footer made one action read as three competing status lines.
+        _scan = new ScanCoordinator(Settings, busy => IsBusy = busy);
         _naming = new ContentNamingService(Settings, SharedPdfRenderer, SharedOcrEngine);
         _renamer = new JobRenamer(_dialogs);
         _preview = new PreviewStripCoordinator(
@@ -320,15 +324,6 @@ public sealed class MainViewModel : ObservableObject
 
     public bool IsIdle => !IsBusy;
 
-    private string _scanStatus = string.Empty;
-
-    /// <summary>Live stage text from the scan flow, shown on the scan panel; empty at rest.</summary>
-    public string ScanStatus
-    {
-        get => _scanStatus;
-        private set => SetProperty(ref _scanStatus, value);
-    }
-
     /// <summary>Section switch: swap the board's view filter without rebuilding the data.</summary>
     private void OnSelectedFeatureChanged()
     {
@@ -408,6 +403,10 @@ public sealed class MainViewModel : ObservableObject
         if (files.Length == 0) return;
 
         AppLog.Info($"收到 {files.Length} 个待处理文件");
+        string previewNames = string.Join("、", files.Take(20).Select(Path.GetFileName));
+        AppLog.Debug(files.Length > 20
+            ? $"待处理文件：{previewNames}…等 {files.Length} 个"
+            : $"待处理文件：{previewNames}");
 
         var newJobs = files.Select(f =>
         {
@@ -428,6 +427,7 @@ public sealed class MainViewModel : ObservableObject
     private async Task ProcessJobsAsync(IReadOnlyList<FileJobViewModel> jobs, IFeature feature)
     {
         IsBusy = true;
+        var stopwatch = Stopwatch.StartNew();
         try
         {
             // Snapshot once per batch: background threads read this copy, the settings window
@@ -439,12 +439,16 @@ public sealed class MainViewModel : ObservableObject
                     ?.ReportStage(stage);
             });
             int maxConcurrency = Math.Clamp(Settings.MaxConcurrency, 1, 8);
+            AppLog.Info($"批次处理开始：{jobs.Count} 个文件，并发 {maxConcurrency}");
 
             await _queue.RunAsync(jobs, feature, context, maxConcurrency, job =>
             {
                 Board.MarkCompleted(job);
                 _preview.OpenWhenFinished(job);
             }).ConfigureAwait(true);
+
+            AppLog.Info($"批次处理结束：{jobs.Count} 个文件，并发 {maxConcurrency}，" +
+                        $"总耗时 {stopwatch.ElapsedMilliseconds} ms");
         }
         finally
         {
@@ -461,29 +465,40 @@ public sealed class MainViewModel : ObservableObject
     {
         if (IsBusy) return;
 
+        using var op = AppLog.BeginOperation(LogCategory.Scan, "扫描流程", slowMs: 0);
+
         FileJobViewModel job = AddScanningJob();
         bool scanFinished = false;
         Task<AutoNameResult?>? earlyNaming = null;
+        // Every scan message (connecting / opening session / reading page N) lands on the row
+        // itself; that is the only status surface for a scan.
+        var stageProgress = new Progress<string>(job.ReportStage);
         var pageProgress = new Progress<ScannedPageInfo>(page =>
         {
             job.AddLiveThumbnail(page.ThumbnailPng);
-            job.ReportStage($"正在扫描… 已读 {page.PageNumber} 页");
+            AppLog.Debug($"扫描页到达：第 {page.PageNumber} 页，" +
+                         $"{page.Width}×{page.Height}，缩略图 {page.ThumbnailPng.Length / 1024} KB");
 
             // Page 1 carries a naming-resolution image: OCR it now, while the scanner keeps
             // feeding the remaining pages, instead of after the finished PDF.
             if (!scanFinished && earlyNaming is null && page.NamingImage is { Length: > 0 } namingImage)
+            {
+                AppLog.Debug($"扫描页到达：第 {page.PageNumber} 页附带命名图，" +
+                             $"{namingImage.Length / 1024} KB，开始首屏命名");
                 earlyNaming = Task.Run(() => _naming.TrySuggestFromImageAsync(namingImage));
+            }
         });
 
         IsScanning = true;
         ScanOutcome outcome;
         try
         {
-            outcome = await _scan.ScanOnceAsync(progressSink: null, pageProgress).ConfigureAwait(true);
+            outcome = await _scan.ScanOnceAsync(stageProgress, pageProgress).ConfigureAwait(true);
         }
         catch (ScannerBusyException ex)
         {
             Board.Remove(job);
+            op.Complete($"未开始：{ex.Message}");
             _dialogs.Info(ex.Message, "提示");
             return;
         }
@@ -493,12 +508,17 @@ public sealed class MainViewModel : ObservableObject
             scanFinished = true;
         }
 
+        op.Step("扫描设备", outcome.Success
+            ? $"{outcome.PageCount} 页，来源 {outcome.SourceName}"
+            : outcome.Error ?? "扫描失败");
+
         if (!outcome.Success)
         {
             if (outcome.Cancelled && outcome.PageCount == 0)
             {
                 AppLog.Info("扫描已取消（未读取到页面）");
                 Board.Remove(job);
+                op.Complete("已取消，未读取到页面");
                 return;
             }
 
@@ -506,6 +526,7 @@ public sealed class MainViewModel : ObservableObject
             job.Apply(FeatureResult.FailWithDetails(
                 job.InputPath, outcome.Error ?? "扫描失败", outcome.ErrorDetails));
             job.ClearLiveThumbnails();
+            op.Fail(outcome.Error ?? "扫描失败");
             _dialogs.Error(outcome.Error ?? "扫描失败", "扫描失败");
             return;
         }
@@ -518,13 +539,23 @@ public sealed class MainViewModel : ObservableObject
             ? $"已取消，保留 {outcome.PageCount} 页"
             : $"扫描 {outcome.PageCount} 页";
         job.Apply(FeatureResult.Success(path, path, summary, outcome.PageCount));
-        job.ClearLiveThumbnails(); // the PDF strip now owns the page previews
+        // Hand the pages already on screen to the strip so it opens with real thumbnails instead
+        // of an empty grid: the live row then disappears without the strip visibly rebuilding.
+        var livePages = job.LiveThumbnails.ToArray();
         Board.MoveToTop(job);
+        op.Step("接收落盘", $"{Path.GetFileName(path)}，{outcome.PageCount} 页");
+
         // Zero-click preview: the strip unfolds the moment the scan lands.
-        _preview.Open(job);
+        _preview.Open(job, livePages);
+        job.ClearLiveThumbnails();
+        op.Step("打开预览", Path.GetFileName(path));
+
         // Naming may already have finished from page 1 while the scan continued; the rename
         // still waits for the PDF (and the strip's writes) before moving the file.
         _ = RenameScanInBackgroundAsync(job, path, earlyNaming);
+        op.Step("启动后台命名", earlyNaming is null ? "无首屏命名结果" : "复用首屏命名结果");
+
+        op.Complete(summary);
     }
 
     /// <summary>A row that exists for the whole scan: live page count first, the finished PDF
@@ -555,11 +586,14 @@ public sealed class MainViewModel : ObservableObject
         string pdfPath,
         Task<AutoNameResult?>? earlyNaming = null)
     {
+        using var op = AppLog.BeginOperation(
+            LogCategory.Naming, "后台命名", Path.GetFileName(pdfPath));
         try
         {
             // The open strip auto-orients / rewrites the file right after landing; a rename
             // (File.Move) during that write throws, so drain the strip's busy passes first.
             await (job.Strip?.WaitForSettledAsync() ?? Task.CompletedTask).ConfigureAwait(false);
+            op.Step("等待预览稳定");
 
             // Use the page-1 suggestion when it produced one. Otherwise fall back to probing the
             // PDF — but not when page 1 was already probed and the settings pin naming to it.
@@ -568,21 +602,44 @@ public sealed class MainViewModel : ObservableObject
                 : await earlyNaming.ConfigureAwait(false);
             string finalPath;
             if (suggestion is not null)
+            {
                 finalPath = await _naming.ApplyAsync(pdfPath, suggestion).ConfigureAwait(false);
+                op.Step("复用首屏命名", Path.GetFileName(finalPath));
+            }
             else if (earlyNaming is not null && Settings.NameFromFirstPageOnly)
+            {
                 finalPath = pdfPath;
+                op.Step("PDF 探测", "首屏已探测且设置仅用首页，跳过整页探测");
+            }
             else
+            {
                 finalPath = await _naming.TryRenameAsync(pdfPath).ConfigureAwait(false);
+                op.Step("PDF 探测", Path.GetFileName(finalPath));
+            }
 
-            if (string.Equals(finalPath, pdfPath, StringComparison.OrdinalIgnoreCase)) return;
+            if (string.Equals(finalPath, pdfPath, StringComparison.OrdinalIgnoreCase))
+            {
+                op.Complete("无更名");
+                return;
+            }
+
             AppLog.Info($"后台命名完成：{Path.GetFileName(pdfPath)} → {Path.GetFileName(finalPath)}");
+            op.Step("落盘", Path.GetFileName(finalPath));
+
             var dispatcher = Application.Current?.Dispatcher;
-            if (dispatcher is null) return;
+            if (dispatcher is null)
+            {
+                op.Complete($"→ {Path.GetFileName(finalPath)}");
+                return;
+            }
+
             dispatcher.Invoke(() => job.UpdateRenamed(finalPath));
+            op.Complete($"→ {Path.GetFileName(finalPath)}");
         }
         catch (Exception ex)
         {
             AppLog.Trace("命名：后台自动命名异常，保留时间戳命名", ex);
+            op.Fail("后台自动命名异常，保留时间戳命名", ex);
         }
     }
 

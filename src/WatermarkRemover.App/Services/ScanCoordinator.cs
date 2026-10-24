@@ -16,14 +16,17 @@ public sealed class ScanCoordinator
     private readonly AppSettings _settings;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly Action<bool> _setBusy;
-    private readonly Action<string> _setStatus;
+    private readonly Action<string>? _setStatus;
     private CancellationTokenSource? _cts;
 
-    public ScanCoordinator(AppSettings settings, Action<bool> setBusy, Action<string> setStatus)
+    /// <param name="setStatus">Optional page-level status mirror. The scan page passes null and
+    /// lets the job row carry the progress instead — showing the same sentence in three places
+    /// was pure noise.</param>
+    public ScanCoordinator(AppSettings settings, Action<bool> setBusy, Action<string>? setStatus = null)
     {
         _settings = settings ?? throw new ArgumentNullException(nameof(settings));
         _setBusy = setBusy ?? throw new ArgumentNullException(nameof(setBusy));
-        _setStatus = setStatus ?? throw new ArgumentNullException(nameof(setStatus));
+        _setStatus = setStatus;
         _scanService = new ScanService(settings);
     }
 
@@ -37,15 +40,19 @@ public sealed class ScanCoordinator
         IProgress<ScannedPageInfo>? pageSink = null)
     {
         if (!await _gate.WaitAsync(0).ConfigureAwait(true))
+        {
+            AppLog.Warn("扫描被拒绝：设备忙");
             throw new ScannerBusyException();
+        }
 
+        AppLog.Debug("扫描闸门已获取");
         using var cts = new CancellationTokenSource();
         _cts = cts;
         _setBusy(true);
-        _setStatus("正在准备扫描…");
+        _setStatus?.Invoke("正在准备扫描…");
         var progress = new Progress<string>(message =>
         {
-            _setStatus(message);
+            _setStatus?.Invoke(message);
             progressSink?.Report(message);
         });
         try
@@ -59,7 +66,8 @@ public sealed class ScanCoordinator
             _cts = null;
             _gate.Release();
             _setBusy(false);
-            _setStatus(string.Empty);
+            _setStatus?.Invoke(string.Empty);
+            AppLog.Debug("扫描闸门已释放");
         }
     }
 
@@ -67,7 +75,17 @@ public sealed class ScanCoordinator
     /// Requests cancellation of the running scan. Pages already captured are still assembled into
     /// a partial PDF by <see cref="ScanService"/>; with no pages yet nothing is written.
     /// </summary>
-    public void CancelScan() => _cts?.Cancel();
+    public void CancelScan()
+    {
+        if (_cts is null)
+        {
+            AppLog.Debug("取消扫描：当前没有正在进行的扫描");
+            return;
+        }
+
+        AppLog.Info("请求取消扫描");
+        _cts.Cancel();
+    }
 
     /// <summary>
     /// The preview strip's gap-button scan: one pass handed back as the scanned PDF's path for the

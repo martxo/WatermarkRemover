@@ -5,6 +5,7 @@ using WatermarkRemover.App.Ocr;
 using WatermarkRemover.Core.Features.Layout;
 using WatermarkRemover.Core.Features.Naming;
 using WatermarkRemover.Core.Features.Ocr;
+using WatermarkRemover.Core.Logging;
 using WatermarkRemover.Core.Settings;
 
 namespace WatermarkRemover.App.Services;
@@ -64,21 +65,33 @@ public sealed class ContentNamingService
     {
         if (!_settings.AutoNameByContent) return null;
 
+        using var op = AppLog.BeginOperation(
+            LogCategory.Naming, "自动命名", Path.GetFileName(pdfPath));
+
         try
         {
             int pageCount = await _renderer.GetPageCountAsync(pdfPath).ConfigureAwait(true);
+            op.Step("读取页数", $"{pageCount} 页");
             int probeLimit = _settings.NameFromFirstPageOnly ? 1 : MaxNamingProbePages;
             for (int pageIndex = 0; pageIndex < pageCount && pageIndex < probeLimit; pageIndex++)
             {
                 byte[] image = await _renderer.RenderPageAsync(pdfPath, pageIndex, NamingRenderDpi, priority: true).ConfigureAwait(true);
-                AutoNameResult? suggestion = await SuggestFromPageAsync(image, pageIndex, pageCount).ConfigureAwait(true);
-                if (suggestion is not null) return suggestion;
+                op.Step($"第 {pageIndex + 1}/{pageCount} 页渲染",
+                    $"{NamingRenderDpi}dpi，{image.Length / 1024} KB");
+                AutoNameResult? suggestion = await SuggestFromPageAsync(image, pageIndex, pageCount, op).ConfigureAwait(true);
+                if (suggestion is not null)
+                {
+                    op.Complete($"识别为 {suggestion.SuggestedStem}");
+                    return suggestion;
+                }
             }
+            op.Complete($"未识别出可信名称（探测 {Math.Min(pageCount, probeLimit)} 页）");
             return null;
         }
         catch (Exception ex)
         {
             AppLog.Trace("命名：自动命名过程异常，保留时间戳命名", ex);
+            op.Fail("自动命名过程异常，保留时间戳命名", ex);
             return null;
         }
     }
@@ -91,13 +104,20 @@ public sealed class ContentNamingService
     {
         if (!_settings.AutoNameByContent || imageBytes.Length == 0) return null;
 
+        using var op = AppLog.BeginOperation(
+            LogCategory.Naming, "首屏自动命名", $"{imageBytes.Length / 1024} KB");
+
         try
         {
-            return await SuggestFromPageAsync(imageBytes, pageIndex: 0, pageCount: 1).ConfigureAwait(true);
+            AutoNameResult? suggestion = await SuggestFromPageAsync(imageBytes, pageIndex: 0, pageCount: 1, op)
+                .ConfigureAwait(true);
+            op.Complete(suggestion is null ? "未识别出可信名称" : $"识别为 {suggestion.SuggestedStem}");
+            return suggestion;
         }
         catch (Exception ex)
         {
             AppLog.Trace("命名：首屏自动命名异常，保留时间戳命名", ex);
+            op.Fail("首屏自动命名异常，保留时间戳命名", ex);
             return null;
         }
     }
@@ -107,17 +127,26 @@ public sealed class ContentNamingService
     {
         ArgumentNullException.ThrowIfNull(autoName);
 
+        using var op = AppLog.BeginOperation(
+            LogCategory.Naming, "命名落盘", Path.GetFileName(pdfPath));
+
         try
         {
             string directory = Path.GetDirectoryName(pdfPath)!;
             string target = OutputNameGenerator.FindAvailablePath(
                 directory, autoName.SuggestedStem + Path.GetExtension(pdfPath));
-            if (string.Equals(target, pdfPath, StringComparison.OrdinalIgnoreCase)) return pdfPath;
+            if (string.Equals(target, pdfPath, StringComparison.OrdinalIgnoreCase))
+            {
+                op.Complete("名称未变化");
+                return pdfPath;
+            }
 
             // The strip may still hold the file for a page write (e.g. the user rotated a page
             // while the naming OCR ran); a short backoff beats losing the good name.
+            int attempts = 0;
             for (int attempt = 1; ; attempt++)
             {
+                attempts = attempt;
                 try
                 {
                     File.Move(pdfPath, target);
@@ -129,27 +158,33 @@ public sealed class ContentNamingService
                 }
             }
             AppLog.Info($"扫描自动命名：{Path.GetFileName(pdfPath)} → {Path.GetFileName(target)}");
+            op.Complete($"→ {Path.GetFileName(target)}（尝试 {attempts} 次）");
             return target;
         }
         catch (Exception ex)
         {
             AppLog.Trace("命名：自动命名落盘异常，保留时间戳命名", ex);
+            op.Fail("自动命名落盘异常，保留时间戳命名", ex);
             return pdfPath;
         }
     }
 
     /// <summary>Orientation + fixed-region fast path + full OCR for one page image.</summary>
-    private async Task<AutoNameResult?> SuggestFromPageAsync(byte[] image, int pageIndex, int pageCount)
+    private async Task<AutoNameResult?> SuggestFromPageAsync(
+        byte[] image, int pageIndex, int pageCount, OperationScope op)
     {
         // 摆正后再识别：ADF 躺倒页在方向检测完成前就进命名链会取错字（横版画布守卫不受影响）。
         image = await new PdfOrientationDetector(_ocr).OrientAsync(image).ConfigureAwait(true);
         AppLog.Trace($"命名：第 {pageIndex + 1}/{pageCount} 页渲染 {image.Length / 1024} KB", null);
+        op.Step($"第 {pageIndex + 1}/{pageCount} 页方向校正", $"{image.Length / 1024} KB");
 
         // Fast path for fixed-layout types: locate the name cell geometrically and
         // recognise only that crop — no full-page OCR, no text-order guessing.
         string? located = await CreditReportNameLocator
             .TryLocateNameAsync(image, _ocr, AppLog.Trace)
             .ConfigureAwait(true);
+        op.Step($"第 {pageIndex + 1}/{pageCount} 页固定区域定位",
+            located is null ? "未命中" : $"命中 {located}");
         if (located is not null)
         {
             AutoNameResult result = AutoNameResult.Create(located, CreditReportTypeShortName);
@@ -162,6 +197,7 @@ public sealed class ContentNamingService
         AppLog.Trace(
             $"命名：第 {pageIndex + 1}/{pageCount} 页 OCR 识别 {lines.Count} 行：{string.Join(" / ", lines.Select(l => l.Text))}",
             null);
+        op.Step($"第 {pageIndex + 1}/{pageCount} 页整页 OCR", $"{lines.Count} 行");
 
         // The top-band probe can miss a label that full-page OCR sees (2-up spreads, small
         // header tables). Reuse the full-page bounds for the same cell read before giving up
@@ -169,6 +205,8 @@ public sealed class ContentNamingService
         string? fromLines = await CreditReportNameLocator
             .TryReadFromLinesAsync(image, lines, _ocr, AppLog.Trace)
             .ConfigureAwait(true);
+        op.Step($"第 {pageIndex + 1}/{pageCount} 页整页坐标定位",
+            fromLines is null ? "未命中" : $"命中 {fromLines}");
         if (fromLines is not null)
         {
             AutoNameResult fromGeometry = AutoNameResult.Create(fromLines, CreditReportTypeShortName);
@@ -176,6 +214,9 @@ public sealed class ContentNamingService
             return fromGeometry;
         }
 
-        return SmartNamingService.TryBuildName(lines, AppLog.Trace);
+        AutoNameResult? built = SmartNamingService.TryBuildName(lines, AppLog.Trace);
+        op.Step($"第 {pageIndex + 1}/{pageCount} 页文本规则命名",
+            built is null ? "未识别" : built.SuggestedStem);
+        return built;
     }
 }

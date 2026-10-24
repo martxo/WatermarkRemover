@@ -4,13 +4,14 @@ namespace WatermarkRemover.Core.Logging;
 
 /// <summary>
 /// Pure parsing and filtering of AppLog output: the daily log files contain timestamped header
-/// lines ("2026-10-16 10:00:00.123 [INFO] message") plus untimestamped continuation lines that
-/// belong to the previous entry (exception stack traces). No I/O here — the app layer reads the
-/// files, this class turns lines into entries and narrows them by time range.
+/// lines plus untimestamped continuation lines that belong to the previous entry (exception
+/// stack traces). The header carries optional structured fields — category, operation id and
+/// thread — which older files simply omit; both shapes parse. No I/O here — the app layer
+/// reads the files, this class turns lines into entries and narrows them by time range.
 /// </summary>
 public static partial class LogFilter
 {
-    [GeneratedRegex(@"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}) \[(\w+)\] (.*)$")]
+    [GeneratedRegex(@"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}) \[([A-Z]+)\s*\](?: \[([A-Z]+)\])?(?: \[op=([0-9A-Za-z]+)\])?(?: \[t=(\d+)\])? (.*)$")]
     private static partial Regex HeaderPattern();
 
     /// <summary>
@@ -23,13 +24,18 @@ public static partial class LogFilter
         var entries = new List<LogEntry>();
         DateTime timestamp = default;
         string level = string.Empty;
+        string category = string.Empty;
+        string operationId = string.Empty;
+        int threadId = 0;
         string message = string.Empty;
         var raw = new List<string>();
 
         void Flush()
         {
             if (raw.Count == 0) return;
-            entries.Add(new LogEntry(timestamp, level, message, string.Join(Environment.NewLine, raw)));
+            entries.Add(new LogEntry(
+                timestamp, level, category, operationId, threadId, message,
+                string.Join(Environment.NewLine, raw)));
             raw.Clear();
         }
 
@@ -41,7 +47,12 @@ public static partial class LogFilter
                 Flush();
                 timestamp = DateTime.ParseExact(match.Groups[1].Value, "yyyy-MM-dd HH:mm:ss.fff", null);
                 level = match.Groups[2].Value;
-                message = match.Groups[3].Value;
+                category = match.Groups[3].Success ? match.Groups[3].Value : string.Empty;
+                operationId = match.Groups[4].Success ? match.Groups[4].Value : string.Empty;
+                threadId = match.Groups[5].Success
+                    ? int.Parse(match.Groups[5].Value, System.Globalization.CultureInfo.InvariantCulture)
+                    : 0;
+                message = match.Groups[6].Value;
                 raw.Add(line);
             }
             else if (raw.Count > 0)
