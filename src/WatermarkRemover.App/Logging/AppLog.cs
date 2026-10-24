@@ -11,6 +11,9 @@ namespace WatermarkRemover.App.Logging;
 public static class AppLog
 {
     private static readonly object Sync = new();
+    private static StreamWriter? _writer;
+    private static DateTime _writerDate;
+    private static int _unflushed;
 
     public static void Initialize()
     {
@@ -18,6 +21,10 @@ public static class AppLog
         {
             Directory.CreateDirectory(AppFolders.LogDirectory);
             PurgeOldLogs();
+            AppDomain.CurrentDomain.ProcessExit += (_, _) =>
+            {
+                lock (Sync) Flush();
+            };
         }
         catch
         {
@@ -51,15 +58,53 @@ public static class AppLog
 
             lock (Sync)
             {
-                string path = Path.Combine(
-                    AppFolders.LogDirectory,
-                    $"app-{DateTime.Now:yyyyMMdd}.log");
-                File.AppendAllText(path, line + Environment.NewLine);
+                EnsureWriter();
+                _writer!.WriteLine(line);
+                _unflushed++;
+
+                // Flush errors immediately (they are what survives a crash), and otherwise batch:
+                // one cached writer avoids opening/closing the file for every OCR trace line.
+                if (exception is not null || _unflushed >= 16) Flush();
             }
         }
         catch
         {
             // Swallow: a failing logger must not take the app down.
+        }
+    }
+
+    /// <summary>Caller holds <see cref="Sync"/>. Opens (or rolls) the daily file once.</summary>
+    private static void EnsureWriter()
+    {
+        DateTime today = DateTime.Today;
+        if (_writer is not null && _writerDate == today) return;
+
+        Flush();
+        _writer?.Dispose();
+        string path = Path.Combine(AppFolders.LogDirectory, $"app-{today:yyyyMMdd}.log");
+        _writer = new StreamWriter(
+            new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite),
+            new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false))
+        {
+            AutoFlush = false,
+        };
+        _writerDate = today;
+        _unflushed = 0;
+    }
+
+    /// <summary>Caller holds <see cref="Sync"/>.</summary>
+    private static void Flush()
+    {
+        if (_writer is null) return;
+
+        try
+        {
+            _writer.Flush();
+            _unflushed = 0;
+        }
+        catch
+        {
+            // A broken flush must never throw from a log call.
         }
     }
 

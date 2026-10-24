@@ -50,9 +50,17 @@ public sealed class PreviewStripCoordinator
         if (job.Strip is not null)
         {
             job.StripOpen = !job.StripOpen;
-            // A folded strip keeps its tiles (cheap, visible again on unfold) but gives back the
-            // full-page PNG cache: those are multi-megabyte LOH objects nothing is showing.
-            if (!job.StripOpen) job.Strip.TrimRenderCache();
+            if (job.StripOpen)
+            {
+                ReleaseOtherStrips(job);
+                if (!job.Strip.HasThumbnailImages) job.Strip.ReloadThumbnailImages();
+            }
+            else
+            {
+                // Folded strips hand back both the page cache and the decoded tile bitmaps: a
+                // long session otherwise keeps every row's thumbnails resident.
+                job.Strip.ReleaseThumbnailImages();
+            }
             AppLog.Info(job.StripOpen ? $"打开预览：{job.OutputPath}" : "收起预览");
             return;
         }
@@ -87,13 +95,23 @@ public sealed class PreviewStripCoordinator
             scanProvider: scanRow ? _scanIntoStrip : null); // scan rows can insert scans into gaps
         strip.EnlargeRequested += (_, _) => EnlargeRequested(strip);
         job.AttachStrip(strip);
-        // Folded strips are the ones nobody is looking at: hand their full-page byte caches back
-        // so a long session doesn't keep every page of every document resident.
-        foreach (var other in _jobs)
-            if (!ReferenceEquals(other, job) && !other.StripOpen)
-                other.Strip?.TrimRenderCache();
+        // Accordion: the row being opened is the only one whose decoded tiles stay resident.
+        // Older strips fold and release their bitmaps, so a scan-heavy session holds one
+        // document's pixels instead of every document's.
+        ReleaseOtherStrips(job);
         AppLog.Info($"打开预览：{path}");
         _ = strip.LoadAsync();
+    }
+
+    /// <summary>Folds and releases every strip except <paramref name="keep"/>.</summary>
+    private void ReleaseOtherStrips(FileJobViewModel keep)
+    {
+        foreach (var other in _jobs)
+        {
+            if (ReferenceEquals(other, keep)) continue;
+            if (other.StripOpen) other.StripOpen = false;
+            other.Strip?.ReleaseThumbnailImages();
+        }
     }
 
     /// <summary>

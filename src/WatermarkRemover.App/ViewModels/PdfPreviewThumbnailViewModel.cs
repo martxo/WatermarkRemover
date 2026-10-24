@@ -48,6 +48,14 @@ public sealed class PdfPreviewThumbnailViewModel : ObservableObject
         private set => SetProperty(ref _image, value);
     }
 
+    /// <summary>Drops the decoded tile image (folded / superseded strip); the owner reloads it on
+    /// unfold. Frozen bitmaps are multi-megabyte, so a long session must not keep every row's.</summary>
+    internal void ClearImage()
+    {
+        if (_image is null) return;
+        Image = null;
+    }
+
     /// <summary>True while the main canvas shows this page; the view paints the accent ring.</summary>
     public bool IsSelected
     {

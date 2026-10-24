@@ -141,7 +141,7 @@ public sealed class JobBoard : ObservableObject
         }
 
         if (dispatcher.CheckAccess()) Move();
-        else dispatcher.Invoke(Move);
+        else dispatcher.BeginInvoke(Move); // never block a batch worker on the UI thread
     }
 
     /// <summary>Quick suffixes may have changed: refresh the chips of every existing job.</summary>

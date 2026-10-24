@@ -1,4 +1,4 @@
-﻿namespace WatermarkRemover.Scan.Core.Models;
+namespace WatermarkRemover.Scan.Core.Models;
 
 /// <summary>
 /// One captured page. A duplex sheet produces two pages sharing the same <see cref="SheetIndex"/>;
@@ -6,7 +6,9 @@
 /// </summary>
 public sealed class ScannedPage
 {
-    public required RasterImage Image { get; init; }
+    /// <summary>Source raster. Null when the capture path already encoded this page and dropped
+    /// the raw frame; the PDF builder then consumes the encoded payload instead.</summary>
+    public RasterImage? Image { get; init; }
 
     /// <summary>Zero-based position of the page in the final document order.</summary>
     public int Index { get; set; }

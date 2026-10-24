@@ -53,6 +53,14 @@ public sealed class ScanService
 
     private static readonly ScanImageEncoder ThumbnailEncoder = new();
 
+    /// <summary>The scan PDF profile; encoding happens per page at capture time.</summary>
+    private static readonly PdfBuildOptions ScanPdfOptions = new()
+    {
+        HighCompression = true,
+        Searchable = false,
+        PageNumbers = false,
+    };
+
     private readonly AppSettings _settings;
 
     public ScanService(AppSettings settings) => _settings = settings;
@@ -137,7 +145,13 @@ public sealed class ScanService
         progress.Report($"正在启动「{device.Name}」…");
         IScanSession session = await chosen.OpenAsync(device, settings, cancellationToken);
 
-        var rawPages = new List<RasterImage>();
+        // Pages are encoded as they arrive and their raw frames dropped; a thick stack therefore
+        // holds N small payloads instead of N ~35 MB bitmaps. A depth-2 queue keeps the encode
+        // overlapped with the next page read without ever holding the whole document in memory.
+        var encodedPages = new List<EncodedScanPage>();
+        var pendingEncodes = new Queue<Task<EncodedScanPage>>();
+        double dpi = PdfDocumentBuilder.ResolveDpi(settings);
+        int captured = 0;
         bool cancelled = false;
         try
         {
@@ -147,9 +161,14 @@ public sealed class ScanService
                 var page = await session.ReadPageAsync(cancellationToken);
                 if (page is null) break;
 
-                rawPages.Add(page);
-                ReportPage(page, rawPages.Count, pageProgress);
-                progress.Report($"正在扫描… 已读取 {rawPages.Count} 页");
+                captured++;
+                ReportPage(page, captured, pageProgress);
+                progress.Report($"正在扫描… 已读取 {captured} 页");
+
+                pendingEncodes.Enqueue(Task.Run(() => PdfDocumentBuilder.EncodePage(
+                    new ScannedPage { Image = page }, ScanPdfOptions, ThumbnailEncoder, dpi)));
+                if (pendingEncodes.Count >= 2)
+                    encodedPages.Add(await pendingEncodes.Dequeue());
             }
         }
         catch (OperationCanceledException)
@@ -162,9 +181,11 @@ public sealed class ScanService
             // Release the device before assembling the PDF, so a cancel stops the hardware now
             // instead of after the (potentially long) document build.
             await session.DisposeAsync();
+            while (pendingEncodes.Count > 0)
+                encodedPages.Add(await pendingEncodes.Dequeue());
         }
 
-        if (rawPages.Count == 0)
+        if (encodedPages.Count == 0)
         {
             return cancelled
                 ? new ScanOutcome(false, null, 0, device.Name, "扫描已取消", null, Cancelled: true)
@@ -173,18 +194,21 @@ public sealed class ScanService
         }
 
         progress.Report(cancelled ? "已取消，正在保存已扫描的页面…" : "正在生成 PDF…");
-        var ordered = PageOrderNormalizer.Normalize(rawPages, settings);
-        var pages = new List<ScannedPage>(ordered.Count);
-        for (var index = 0; index < ordered.Count; index++)
+
+        // Reorder finished payloads (not raw rasters) into reading order.
+        IReadOnlyList<int> order = PageOrderNormalizer.NormalizeOrder(encodedPages.Count, settings);
+        var pages = new List<ScannedPage>(order.Count);
+        var orderedEncoded = new List<EncodedScanPage>(order.Count);
+        for (var index = 0; index < order.Count; index++)
         {
             var (sheetIndex, isBackSide) = PageOrderNormalizer.ClassifyPage(index, duplex);
             pages.Add(new ScannedPage
             {
-                Image = ordered[index],
                 Index = index,
                 SheetIndex = sheetIndex,
                 IsBackSide = isBackSide,
             });
+            orderedEncoded.Add(encodedPages[order[index]]);
         }
 
         string directory = OutputDirectoryResolver.Resolve(_settings.ScanOutputDirectory, AppFolders.Root);
@@ -200,10 +224,7 @@ public sealed class ScanService
         };
         // Cancellation stops page capture, not the save: the pages already read must still land
         // as a partial PDF, so the assembly and write deliberately ignore the token.
-        byte[] pdf = await Task.Run(() => PdfDocumentBuilder.Build(
-            document,
-            new PdfBuildOptions { HighCompression = true, Searchable = false, PageNumbers = false },
-            new ScanImageEncoder()));
+        byte[] pdf = await Task.Run(() => PdfDocumentBuilder.Build(document, ScanPdfOptions, orderedEncoded));
         await Task.Run(() => File.WriteAllBytes(path, pdf));
 
         AppLog.Info(cancelled

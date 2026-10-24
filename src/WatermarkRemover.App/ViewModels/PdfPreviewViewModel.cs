@@ -33,10 +33,10 @@ public sealed class PdfPreviewViewModel : ObservableObject
     private const int PreviewDpi = 150;
 
     /// <summary>
-    /// Thumbnail rendering DPI. 150 matches the main canvas so the shown page's tile reuses the
-    /// cached render instead of paying for a second pass; dense scans stay legible at tile size.
+    /// Thumbnail rendering DPI. 96 is ample for the 92–368 px tiles and keeps a long strip's
+    /// fill cheap; the canvas still renders separately at <see cref="PreviewDpi"/>.
     /// </summary>
-    private const int ThumbnailDpi = 150;
+    private const int ThumbnailDpi = 96;
 
     /// <summary>
     /// Render DPI for orientation probes only. Direction voting reads line-box layout, not
@@ -46,12 +46,11 @@ public sealed class PdfPreviewViewModel : ObservableObject
     private const int OrientationDpi = 90;
 
     /// <summary>
-    /// Longest side a thumbnail is pre-scaled to. 720 keeps ~2× oversample even when
-    /// the grid is zoomed to its 4.0 ceiling (368 px tile), so the tiles stay crisp at every
-    /// zoom; the big downscale step from the 1718 px render happens here with a quality kernel,
-    /// not in WPF's scaler.
+    /// Longest side a thumbnail is pre-scaled to. 480 keeps ~1.3× oversample at the 4.0 zoom
+    /// ceiling (368 px tile) while cutting the decoded tile memory by roughly half versus 720.
+    /// The big downscale from the page render happens here with a quality kernel, not in WPF.
     /// </summary>
-    private const int ThumbMaxSide = 720;
+    private const int ThumbMaxSide = 480;
 
     /// <summary>Base tile size at scale 1.0; the grid's zoom buttons multiply this.</summary>
     public const double BaseTileWidth = 92.0;
@@ -125,6 +124,10 @@ public sealed class PdfPreviewViewModel : ObservableObject
     /// an older epoch return their bytes to their (already discarded) caller but never cache them.
     /// </summary>
     private int _cacheEpoch;
+
+    /// <summary>Bumped whenever the tile fill is released/restarted; an older fill stops early so
+    /// a folded strip cannot keep decoding images in the background.</summary>
+    private int _thumbnailLoadGeneration;
 
     private int _pageCount;
     private int _pageIndex;
@@ -463,7 +466,7 @@ public sealed class PdfPreviewViewModel : ObservableObject
         // Tiles fill in after the main canvas is already interactive; a tile that fails to render
         // simply stays empty — StatusText belongs to the big page, never to the strip. Tile
         // renders are LOW priority: treatment work (probes, blank scan, canvas) cuts ahead.
-        _ = LoadThumbnailsAsync(Thumbnails.ToList());
+        StartThumbnailLoad();
     }
 
     /// <summary>
@@ -547,7 +550,7 @@ public sealed class PdfPreviewViewModel : ObservableObject
             InvalidateAllPages();
             PageCount -= removed;
             BuildThumbnails();
-            _ = LoadThumbnailsAsync(Thumbnails.ToList());
+            StartThumbnailLoad();
             await RenderAsync(Math.Min(PageIndex, PageCount - 1), force: true);
             StatusText = $"已自动删除 {removed} 页空白页";
         }
@@ -604,18 +607,29 @@ public sealed class PdfPreviewViewModel : ObservableObject
     }
 
     /// <summary>Fills the strip tile by tile, off the UI path, without ever touching StatusText.</summary>
-    private async Task LoadThumbnailsAsync(IReadOnlyList<PdfPreviewThumbnailViewModel> thumbs)
+    private void StartThumbnailLoad() =>
+        _ = LoadThumbnailsAsync(Thumbnails.ToList(), ++_thumbnailLoadGeneration);
+
+    private async Task LoadThumbnailsAsync(
+        IReadOnlyList<PdfPreviewThumbnailViewModel> thumbs,
+        int generation)
     {
         foreach (var thumb in thumbs)
         {
             // Re-supplied tiles after a reload belong to a superseded session: drop out.
-            if (IsCancelled || !Thumbnails.Contains(thumb)) return;
+            if (IsCancelled || generation != _thumbnailLoadGeneration || !Thumbnails.Contains(thumb))
+                return;
 
             try
             {
                 byte[] bytes = await GetPageBytesAsync(thumb.Index, ThumbnailDpi);
-                if (IsCancelled || !Thumbnails.Contains(thumb)) return;
-                thumb.SetImage(await Task.Run(() => MakeThumbSource(bytes)));
+                if (IsCancelled || generation != _thumbnailLoadGeneration || !Thumbnails.Contains(thumb))
+                    return;
+                ImageSource image = await Task.Run(() => MakeThumbSource(bytes));
+                // Re-check after the decode: a fold/accordion switch during it must win.
+                if (IsCancelled || generation != _thumbnailLoadGeneration || !Thumbnails.Contains(thumb))
+                    return;
+                thumb.SetImage(image);
             }
             catch (OperationCanceledException)
             {
@@ -724,7 +738,7 @@ public sealed class PdfPreviewViewModel : ObservableObject
             InvalidateAllPages();
             PageCount--;
             BuildThumbnails();
-            _ = LoadThumbnailsAsync(Thumbnails.ToList());
+            StartThumbnailLoad();
 
             // The page that took the deleted one's place becomes the shown page.
             await RenderAsync(Math.Min(pageIndex, PageCount - 1), force: true);
@@ -823,7 +837,7 @@ public sealed class PdfPreviewViewModel : ObservableObject
             SyncThumbnailSelection();
             foreach (var thumb in Thumbnails) thumb.RefreshCommands();
             RebuildStripItems();
-            _ = LoadThumbnailsAsync(fresh);
+            _ = LoadThumbnailsAsync(fresh, ++_thumbnailLoadGeneration);
 
             // Land on the first page that came out of the scanner.
             await RenderAsync(Math.Min(insertAfterIndex + 1, PageCount - 1), force: true).ConfigureAwait(true);
@@ -946,7 +960,7 @@ public sealed class PdfPreviewViewModel : ObservableObject
             // is stale in the caches, yet page bytes differ per (page, dpi) key, so drop it all.
             InvalidateAllPages();
             BuildThumbnails();
-            _ = LoadThumbnailsAsync(Thumbnails.ToList());
+            StartThumbnailLoad();
             await RenderAsync(PageIndex, force: true);
 
             // RenderAsync clears StatusText on success; write our line after that, and leave a
@@ -1223,6 +1237,34 @@ public sealed class PdfPreviewViewModel : ObservableObject
     {
         _renderedPages.Clear();
         Interlocked.Exchange(ref _renderCacheBytes, 0);
+    }
+
+    /// <summary>Whether any tile currently holds a decoded bitmap.</summary>
+    public bool HasThumbnailImages => Thumbnails.Any(t => t.Image is not null);
+
+    /// <summary>
+    /// Drops every decoded tile bitmap (and the full-page byte cache). Called when a strip folds
+    /// or another row takes the preview, so a long session keeps one strip's pixels, not all of
+    /// them. Unfolding calls <see cref="ReloadThumbnailImages"/>.
+    /// </summary>
+    public void ReleaseThumbnailImages()
+    {
+        _thumbnailLoadGeneration++;
+        foreach (var thumb in Thumbnails)
+            thumb.ClearImage();
+        TrimRenderCache();
+        // The canvas bitmap is multi-megabyte and no row surface shows it while folded; without
+        // this, 70 scanned documents would keep 70 decoded 150-dpi pages resident.
+        CurrentImage = null;
+    }
+
+    /// <summary>Rebuilds the tile bitmaps after a folded strip is unfolded again.</summary>
+    public void ReloadThumbnailImages()
+    {
+        if (Thumbnails.Count == 0) return;
+
+        _thumbnailLoadGeneration++;
+        _ = LoadThumbnailsAsync(Thumbnails.ToList(), _thumbnailLoadGeneration);
     }
 
     /// <summary>PDFium hands back PNG bytes; WPF wants a frozen bitmap it can bind from any thread.</summary>

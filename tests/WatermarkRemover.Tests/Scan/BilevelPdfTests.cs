@@ -84,6 +84,31 @@ public class BilevelPdfTests : IDisposable
     }
 
     [Fact]
+    public void Build_PreEncodedPagesKeepsBilevelAndColourPayloads()
+    {
+        var bilevel = BilevelFrame(120, 90, (x, y) => (x + y) % 4 != 0);
+        var colour = new RasterImage(120, 90, Enumerable.Repeat<byte>(200, 120 * 90 * 4).ToArray());
+        var document = Document(bilevel, colour);
+        var options = new PdfBuildOptions { HighCompression = true };
+        var encoder = new ScanImageEncoder();
+        double dpi = PdfDocumentBuilder.ResolveDpi(document.Settings);
+
+        var encoded = document.Pages
+            .Select(page => PdfDocumentBuilder.EncodePage(page, options, encoder, dpi))
+            .ToList();
+        byte[] bytes = PdfDocumentBuilder.Build(document, options, encoded);
+
+        var raw = Encoding.ASCII.GetString(bytes);
+        Assert.Contains("/CCITTFaxDecode", raw);
+        Assert.Contains("/DCTDecode", raw);
+
+        string path = Path.Combine(_dir, "pre-encoded.pdf");
+        File.WriteAllBytes(path, bytes);
+        using var reader = DocLib.Instance.GetDocReader(path, new Docnet.Core.Models.PageDimensions(300.0 / 72.0));
+        Assert.Equal(2, reader.GetPageCount());
+    }
+
+    [Fact]
     public void Build_BilevelAndColourPagesMixPerFrame()
     {
         var bilevel = BilevelFrame(120, 90, (x, y) => (x + y) % 4 != 0);

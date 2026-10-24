@@ -183,9 +183,10 @@ public class PdfPreviewViewModelTests
         vm.NextCommand.Execute(null);
         await DrainAsync(vm);
 
-        // Unique pages 0,1,2 — one render each at the shared 150-dpi cache. Revisits and the
-        // strip's tile for the shown page hit the cache instead of the renderer.
-        Assert.Equal(3, renderer.RenderedPageCount);
+        // Two canvas visits (pages 0 and 1) render once each; page 1 is revisited but served
+        // from cache. The strip renders its own 96-dpi tiles for all three pages.
+        Assert.Equal(2, renderer.RenderedDpis.Count(dpi => dpi == 150));
+        Assert.Equal(3, renderer.RenderedDpis.Count(dpi => dpi == 96));
         Assert.Equal(1, vm.PageIndex);
     }
 
@@ -199,10 +200,10 @@ public class PdfPreviewViewModelTests
 
         // The tile would be fine with ~120 px; a 1600 px bitmap handed to WPF makes it do a
         // single ~13x downscale that eats thin lines. The strip must pre-scale instead — to
-        // 720 long side, enough oversample for the grid's 4.0 zoom ceiling.
+        // 480 long side, still enough oversample for the grid's 4.0 zoom ceiling.
         var thumb = Assert.IsAssignableFrom<BitmapSource>(vm.Thumbnails[0].Image);
-        Assert.Equal(540, thumb.PixelWidth);
-        Assert.Equal(720, thumb.PixelHeight);
+        Assert.Equal(360, thumb.PixelWidth);
+        Assert.Equal(480, thumb.PixelHeight);
     }
 
     [Fact]

@@ -1,4 +1,4 @@
-﻿using WatermarkRemover.Scan.Core.Models;
+using WatermarkRemover.Scan.Core.Models;
 
 namespace WatermarkRemover.Scan.Core.Pipeline;
 
@@ -27,24 +27,40 @@ public static class PageOrderNormalizer
         IReadOnlyList<RasterImage> rawPages,
         ScanSettings settings)
     {
+        IReadOnlyList<int> order = NormalizeOrder(rawPages.Count, settings);
+        var ordered = new List<RasterImage>(order.Count);
+        foreach (int index in order)
+            ordered.Add(rawPages[index]);
+        return ordered;
+    }
+
+    /// <summary>
+    /// The same reading order as <see cref="Normalize"/>, expressed as source indexes. Lets a
+    /// caller that has already encoded (or otherwise released) its page rasters reorder the
+    /// finished payloads without keeping every raw bitmap alive.
+    /// </summary>
+    public static IReadOnlyList<int> NormalizeOrder(int pageCount, ScanSettings settings)
+    {
         if (settings.Duplex == DuplexMode.Off ||
             settings.DuplexFeedOrder != DuplexFeedOrder.FrontsThenReversedRears ||
             settings.Feed == FeedMode.Flatbed ||
-            rawPages.Count < 2 ||
-            rawPages.Count % 2 != 0)
+            pageCount < 2 ||
+            pageCount % 2 != 0)
         {
-            return rawPages;
+            var identity = new int[pageCount];
+            for (var i = 0; i < pageCount; i++) identity[i] = i;
+            return identity;
         }
 
-        var sheetCount = rawPages.Count / 2;
-        var ordered = new List<RasterImage>(rawPages.Count);
+        var sheetCount = pageCount / 2;
+        var order = new List<int>(pageCount);
         for (var sheet = 0; sheet < sheetCount; sheet++)
         {
-            ordered.Add(rawPages[sheet]);                       // front of sheet N
-            ordered.Add(rawPages[rawPages.Count - 1 - sheet]);  // rear of sheet N, last first
+            order.Add(sheet);                     // front of sheet N
+            order.Add(pageCount - 1 - sheet);     // rear of sheet N, last first
         }
 
-        return ordered;
+        return order;
     }
 
     /// <summary>Classifies a normalised page position into sheet index and side.</summary>

@@ -29,6 +29,20 @@ public sealed record PdfBuildOptions
 }
 
 /// <summary>
+/// One page's finished PDF payload: either a raw CCITT G4 fax stream (<see cref="Ccitt"/>) or a
+/// compressed bitmap (<see cref="Bytes"/>), plus the page geometry derived from the ORIGINAL
+/// pixels so later work never changes the page size. Captured pages can be encoded as they
+/// arrive and the raw rasters released; assembly then consumes these small payloads.
+/// </summary>
+public sealed record EncodedScanPage(
+    byte[]? Bytes,
+    byte[]? Ccitt,
+    int PixelWidth,
+    int PixelHeight,
+    double WidthPt,
+    double HeightPt);
+
+/// <summary>
 /// Builds the PDF byte stream for a scanned document. Page layout, the optional searchable text
 /// layer and the page-number stamp exist in exactly one place; callers supply the image encoder.
 /// </summary>
@@ -87,34 +101,81 @@ public static class PdfDocumentBuilder
         return bytes;
     }
 
+    /// <summary>
+    /// Assembles a document whose pages were already encoded by the capture path. The caller
+    /// keeps only the small payloads, so a long scan never needs every raw frame in memory.
+    /// </summary>
+    public static byte[] Build(
+        ScanDocument document,
+        PdfBuildOptions options,
+        IReadOnlyList<EncodedScanPage> encodedPages)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(encodedPages);
+
+        if (encodedPages.Count != document.Pages.Count)
+            throw new ArgumentException("编码页数与文档页数不一致。", nameof(encodedPages));
+
+        EnsureInitialized();
+        byte[] bytes = Assemble(document, options, ResolveDpi(document.Settings), encodedPages);
+        if (options.Encrypted && !CanOpenWithPassword(bytes, options.UserPassword))
+        {
+            throw new InvalidOperationException("加密 PDF 生成后无法用密码回读，已中止输出以免写出无法打开的文件。");
+        }
+        return bytes;
+    }
+
+    /// <summary>The scan DPI used for page geometry; 300 when the setting is unset.</summary>
+    public static double ResolveDpi(ScanSettings settings)
+    {
+        double dpi = (double)(int)settings.Resolution;
+        return dpi > 0 ? dpi : FallbackDpi;
+    }
+
     private static byte[] Render(ScanDocument document, PdfBuildOptions options, IImageEncoder encoder)
     {
-        var dpi = (double)(int)document.Settings.Resolution;
-        if (dpi <= 0)
-        {
-            dpi = FallbackDpi;
-        }
+        double dpi = ResolveDpi(document.Settings);
+        EncodedScanPage[] encodedPages = EncodePages(document.Pages, options, encoder, dpi);
+        return Assemble(document, options, dpi, encodedPages);
+    }
 
-        // --- Phase 1: encode every page in parallel ---
+    /// <summary>
+    /// Encodes every page in parallel. Used by callers that still hold all raw pages; the scan
+    /// path encodes each page as it arrives and calls the encoded overload instead.
+    /// </summary>
+    private static EncodedScanPage[] EncodePages(
+        IReadOnlyList<ScannedPage> pages,
+        PdfBuildOptions options,
+        IImageEncoder encoder,
+        double dpi)
+    {
         // Per-page encoding (bilevel detection + G4 pack, or the 高压缩 resize + JPEG encode) is
-        // the CPU-heavy part of a multi-page scan — minutes of wall clock when run serially over
-        // a thick stack of paper. The encoders are thread-safe by construction (every call builds
-        // its own Skia bitmaps / LibTiff writer, RasterImage frames are read-only inputs), so the
-        // fan-out is safe. Capped at 8 workers: each in-flight page holds a ~35 MB raw frame.
-        var encodedPages = new EncodedPage[document.Pages.Count];
+        // the CPU-heavy part of a multi-page scan. The encoders are thread-safe by construction,
+        // so the fan-out is safe. Capped at 8 workers: each in-flight page holds a ~35 MB frame.
+        var encodedPages = new EncodedScanPage[pages.Count];
         var parallelism = Math.Min(Environment.ProcessorCount, 8);
-        if (document.Pages.Count > 1 && parallelism > 1)
+        if (pages.Count > 1 && parallelism > 1)
         {
             Parallel.For(0, encodedPages.Length, new ParallelOptions { MaxDegreeOfParallelism = parallelism },
-                index => encodedPages[index] = EncodePage(document.Pages[index], options, encoder, dpi));
+                index => encodedPages[index] = EncodePage(pages[index], options, encoder, dpi));
         }
         else
         {
             for (var index = 0; index < encodedPages.Length; index++)
-                encodedPages[index] = EncodePage(document.Pages[index], options, encoder, dpi);
+                encodedPages[index] = EncodePage(pages[index], options, encoder, dpi);
         }
 
-        // --- Phase 2: assemble the document single-threaded ---
+        return encodedPages;
+    }
+
+    private static byte[] Assemble(
+        ScanDocument document,
+        PdfBuildOptions options,
+        double dpi,
+        IReadOnlyList<EncodedScanPage> encodedPages)
+    {
+        // --- Assemble the document single-threaded ---
         // PdfSharp's object graph is not thread-safe, so the assembly just consumes the finished
         // byte payloads — no pixel work happens here, it only writes dictionaries and streams.
         using var pdf = new PdfDocument();
@@ -179,30 +240,27 @@ public static class PdfDocumentBuilder
         return output.ToArray();
     }
 
-    /// <summary>One page's finished PDF payload: either a raw CCITT G4 fax stream
-    /// (<see cref="Ccitt"/>) or a compressed bitmap (<see cref="Bytes"/>), plus the page
-    /// geometry derived from the ORIGINAL pixels so later work never changes the page size.</summary>
-    private sealed record EncodedPage(
-        byte[]? Bytes,
-        byte[]? Ccitt,
-        int PixelWidth,
-        int PixelHeight,
-        double WidthPt,
-        double HeightPt);
-
-    /// <summary>Everything pixel-related for one page, run on a worker thread: bilevel frames
-    /// take the CCITT G4 route, everything else the 高压缩 resize + JPEG route (or PNG when
-    /// 高压缩 is off). Mirrors the pre-parallelisation per-page logic exactly.</summary>
-    private static EncodedPage EncodePage(ScannedPage source, PdfBuildOptions options, IImageEncoder encoder, double dpi)
+    /// <summary>Everything pixel-related for one page, safe to run on a worker thread: bilevel
+    /// frames take the CCITT G4 route, everything else the 高压缩 resize + JPEG route (or PNG
+    /// when 高压缩 is off). Public so the scan path can encode each page as it arrives.</summary>
+    public static EncodedScanPage EncodePage(
+        ScannedPage source,
+        PdfBuildOptions options,
+        IImageEncoder encoder,
+        double dpi)
     {
-        var image = source.Image;
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(encoder);
+
+        var image = source.Image ?? throw new InvalidOperationException("页面缺少图像数据。");
 
         var widthPt = PageGeometry.PixelsToPoints(image.Width, dpi);
         var heightPt = PageGeometry.PixelsToPoints(image.Height, dpi);
 
         if (CcittG4Image.TryEncode(image, out var ccitt))
         {
-            return new EncodedPage(null, ccitt, image.Width, image.Height, widthPt, heightPt);
+            return new EncodedScanPage(null, ccitt, image.Width, image.Height, widthPt, heightPt);
         }
 
         if (options.HighCompression)
@@ -216,7 +274,7 @@ public static class PdfDocumentBuilder
         var bytes = options.HighCompression
             ? encoder.Encode(image, "jpg", HighCompressionJpegQuality)
             : encoder.Encode(image, "png", 100);
-        return new EncodedPage(bytes, null, image.Width, image.Height, widthPt, heightPt);
+        return new EncodedScanPage(bytes, null, image.Width, image.Height, widthPt, heightPt);
     }
 
     /// <summary>
