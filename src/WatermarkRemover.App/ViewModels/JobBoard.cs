@@ -169,10 +169,17 @@ public sealed class JobBoard : ObservableObject
             job.RefreshSuffixChips(suffixes);
     }
 
-    /// <summary>Clears the current section's records only — each page owns its own history.</summary>
+    /// <summary>Clears the current section's records only — each page owns its own history.
+    /// Asks first: these rows are also the only record of where the finished files went, and a
+    /// mis-click used to wipe them with no way back.</summary>
     private void Clear()
     {
         if (IsBusy) return;
+        if (!_dialogs.Confirm(
+                $"清空「{_sectionName}」的 {VisibleJobCount} 条记录？已生成的文件不会被删除。",
+                "清空列表"))
+            return;
+
         for (var i = Jobs.Count - 1; i >= 0; i--)
         {
             if (Jobs[i].OwnerFeatureId == _sectionId)

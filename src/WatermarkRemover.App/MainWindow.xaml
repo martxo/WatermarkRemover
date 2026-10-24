@@ -1183,7 +1183,7 @@
                                                         <Style.Triggers>
                                                             <DataTrigger Binding="{Binding OutputPath}" Value="{x:Null}">
                                                                 <Setter Property="Cursor" Value="Arrow"/>
-                                                                <Setter Property="ToolTip" Value="{x:Null}"/>
+                                                                <Setter Property="ToolTip" Value="还没有输出文件，完成后可点击打开"/>
                                                             </DataTrigger>
                                                         </Style.Triggers>
                                                     </Style>
@@ -1572,7 +1572,8 @@
                         ToolTip="{Binding UploadBatchHint}"/>
                 <Button Content="清空列表"
                         Style="{StaticResource GhostButton}"
-                        Command="{Binding Board.ClearCommand}"/>
+                        Command="{Binding Board.ClearCommand}"
+                        ToolTip="清空本页记录；已生成的文件不会被删除"/>
             </StackPanel>
         </Grid>
             </Grid>

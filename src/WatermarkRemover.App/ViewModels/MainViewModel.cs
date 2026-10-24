@@ -128,7 +128,7 @@ public sealed class MainViewModel : ObservableObject
         Netdisk = new NetdiskCoordinator(Settings, _dialogs, () => IsBusy);
 
         OpenOutputCommand = new RelayCommand(p => OpenOutput(p as string), p => p is string path && File.Exists(path));
-        SaveSettingsCommand = new RelayCommand(SaveSettings);
+        SaveSettingsCommand = new RelayCommand(() => SaveSettings());
         ScanCommand = new RelayCommand(() => _ = RunScanAsync(), () => IsIdle && !IsScanning);
         CancelScanCommand = new RelayCommand(() =>
         {
@@ -341,7 +341,15 @@ public sealed class MainViewModel : ObservableObject
         }
 
         page.Commit();
-        SaveSettingsCommand.Execute(null);
+        if (!SaveSettings())
+        {
+            // Closing now would look like a successful save while the changes die with the
+            // process; keep the page open so the user can retry or discard.
+            _dialogs.Warn(
+                "设置保存失败（配置目录不可写），本次更改在退出后不会保留。请检查目录权限后重试。",
+                "保存失败");
+            return false;
+        }
         CloseSettings();
         return true;
     }
@@ -469,7 +477,7 @@ public sealed class MainViewModel : ObservableObject
         }
 
         string[] input = paths.Where(p => !string.IsNullOrWhiteSpace(p)).ToArray();
-        string[] files = ExpandDrop(input);
+        (string[] files, int ignored) = ExpandDrop(input);
 
         if (files.Length == 0)
         {
@@ -477,8 +485,17 @@ public sealed class MainViewModel : ObservableObject
             // an unsupported file was already rejected by the drop zone itself.
             if (input.Any(Directory.Exists))
                 _dialogs.Info("这个文件夹里没有可处理的文件（只读取第一层）。", "提示");
+            else if (input.Any(File.Exists))
+                _dialogs.Info($"「{SelectedFeature.DisplayName}」不支持所拖入的文件。", "提示");
             return;
         }
+
+        // A mixed drop used to swallow the rejects without a word; one line accounts for them.
+        if (ignored > 0)
+            _dialogs.Info(
+                $"已忽略 {ignored} 个不支持「{SelectedFeature.DisplayName}」的文件，" +
+                $"其余 {files.Length} 个已加入列表。",
+                "提示");
 
         AppLog.Info($"收到 {files.Length} 个待处理文件");
         string previewNames = string.Join("、", files.Take(20).Select(Path.GetFileName));
@@ -502,10 +519,13 @@ public sealed class MainViewModel : ObservableObject
     }
 
     /// <summary>Expands dropped folders one level and keeps only what the selected feature takes.
-    /// Mixed drops are normal, so unsupported names are dropped without a prompt.</summary>
-    private string[] ExpandDrop(IEnumerable<string> paths)
+    /// Mixed drops are normal, so the count of explicitly dropped files that were rejected comes
+    /// back with the result — the caller can say how many were skipped instead of dropping them
+    /// silently. Files filtered out of a whole folder are ordinary and not counted.</summary>
+    private (string[] Files, int Ignored) ExpandDrop(IEnumerable<string> paths)
     {
         var files = new List<string>();
+        int ignored = 0;
         foreach (string path in paths)
         {
             if (Directory.Exists(path))
@@ -521,13 +541,14 @@ public sealed class MainViewModel : ObservableObject
                     AppLog.Warn($"展开文件夹失败：{path}（{ex.Message}）");
                 }
             }
-            else if (File.Exists(path) && SelectedFeature.CanHandle(path))
+            else if (File.Exists(path))
             {
-                files.Add(path);
+                if (SelectedFeature.CanHandle(path)) files.Add(path);
+                else ignored++;
             }
         }
 
-        return files.Distinct(StringComparer.OrdinalIgnoreCase).Take(MaxDropFiles).ToArray();
+        return (files.Distinct(StringComparer.OrdinalIgnoreCase).Take(MaxDropFiles).ToArray(), ignored);
     }
 
     private async Task ProcessJobsAsync(IReadOnlyList<FileJobViewModel> jobs, IFeature feature)
@@ -811,7 +832,8 @@ public sealed class MainViewModel : ObservableObject
         }
     }
 
-    private void SaveSettings()
+    /// <summary>Persists the live settings; false when the file could not be written.</summary>
+    private bool SaveSettings()
     {
         // The pipeline preference may have changed: repoint the proxy before persisting so the
         // next job already uses the newly chosen layout block and engine.
@@ -822,9 +844,11 @@ public sealed class MainViewModel : ObservableObject
             AppLog.Info("设置已保存");
             // Quick suffixes may have changed: refresh the chips of every existing job.
             Board.RefreshSuffixChips(Settings.QuickSuffixes);
+            return true;
         }
-        else
-            AppLog.Error("设置保存失败（目录不可写？）");
+
+        AppLog.Error("设置保存失败（目录不可写？）");
+        return false;
     }
 
     // --- 任务记录（对账） ----------------------------------------------

@@ -11,9 +11,12 @@ public class JobsViewTests
 {
     private sealed class FakeDialogs : IDialogService
     {
-        public bool Confirm(string message, string title) => true;
+        /// <summary>What every confirmation answers; a test can flip it to deny.</summary>
+        public bool ConfirmResult { get; set; } = true;
 
-        public bool ConfirmYesNo(string message, string title) => true;
+        public bool Confirm(string message, string title) => ConfirmResult;
+
+        public bool ConfirmYesNo(string message, string title) => ConfirmResult;
 
         public void Info(string message, string title)
         {
@@ -37,7 +40,8 @@ public class JobsViewTests
         }
     }
 
-    private static MainViewModel NewVm() => new(new FakeDialogs(), new FakeShell());
+    private static MainViewModel NewVm(FakeDialogs? dialogs = null) =>
+        new(dialogs ?? new FakeDialogs(), new FakeShell());
 
     private static FileJobViewModel Job(string path, string owner) =>
         new(path, Array.Empty<string>()) { OwnerFeatureId = owner };
@@ -73,6 +77,17 @@ public class JobsViewTests
 
         Assert.Equal(1, vm.Board.Jobs.Count);
         Assert.Equal("watermark.badge", vm.Board.Jobs[0].OwnerFeatureId);
+    }
+
+    [Fact]
+    public void Clear_keeps_the_records_when_the_confirmation_is_declined()
+    {
+        var vm = NewVm(new FakeDialogs { ConfirmResult = false });
+        vm.Board.Jobs.Add(Job(@"C:\t\scan1.pdf", "scan.page"));
+
+        vm.Board.ClearCommand.Execute(null);
+
+        Assert.Equal(1, vm.Board.Jobs.Count);
     }
 
     [Fact]

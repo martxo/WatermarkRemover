@@ -217,16 +217,9 @@ public partial class MainWindow : Window
         if (!e.Data.GetDataPresent(DataFormats.FileDrop)) return;
         if (e.Data.GetData(DataFormats.FileDrop) is not string[] dropped) return;
 
-        // Folders are kept here on purpose: the view model expands them one level deep.
-        string[] accepted = dropped.Where(_viewModel.CanAcceptPath).ToArray();
-
-        if (accepted.Length == 0)
-        {
-            _dialogs.Info($"「{_viewModel.SelectedFeature.DisplayName}」不支持所拖入的文件。", "提示");
-            return;
-        }
-
-        await _viewModel.AddFilesAsync(accepted);
+        // Everything goes to the view model: it expands folders, keeps what the feature handles
+        // and reports the rejects (a mixed drop must not lose files without saying so).
+        await _viewModel.AddFilesAsync(dropped);
     }
 
     private async void OnPickFiles(object sender, RoutedEventArgs e)
