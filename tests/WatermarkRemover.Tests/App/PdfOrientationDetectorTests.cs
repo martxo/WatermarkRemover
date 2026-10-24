@@ -171,7 +171,7 @@ public class PdfOrientationDetectorTests
         var ocr = new LayoutScriptedOcr();
         var detector = new PdfOrientationDetector(ocr);
 
-        int steps = await detector.DetectClockwiseStepsAsync(Png(30, 40));
+        int? steps = await detector.DetectClockwiseStepsAsync(Png(30, 40));
 
         // The 0°/180° pair settles it — the sideways probes never even run.
         Assert.Equal(2, ocr.Calls);
@@ -186,7 +186,7 @@ public class PdfOrientationDetectorTests
         var ocr = new LayoutScriptedOcr();
         var detector = new PdfOrientationDetector(ocr);
 
-        int steps = await detector.DetectClockwiseStepsAsync(Png(40, 30));
+        int? steps = await detector.DetectClockwiseStepsAsync(Png(40, 30));
 
         Assert.Equal(0, ocr.Calls); // guarded out before any recognition
         Assert.Equal(0, steps);
@@ -226,7 +226,7 @@ public class PdfOrientationDetectorTests
         var ocr = new ScriptedOcr(3, 30);
         var detector = new PdfOrientationDetector(ocr);
 
-        int steps = await detector.DetectClockwiseStepsAsync(Png(30, 40));
+        int? steps = await detector.DetectClockwiseStepsAsync(Png(30, 40));
 
         Assert.Equal(2, ocr.Calls);
         Assert.Equal(2, steps); // 180° was the decisive reading
@@ -240,19 +240,19 @@ public class PdfOrientationDetectorTests
         var ocr = new ScriptedOcr(3, 10, 25, 2);
         var detector = new PdfOrientationDetector(ocr);
 
-        int steps = await detector.DetectClockwiseStepsAsync(Png(30, 40));
+        int? steps = await detector.DetectClockwiseStepsAsync(Png(30, 40));
 
         Assert.Equal(4, ocr.Calls);
         Assert.Equal(1, steps);
     }
 
     [Fact]
-    public async Task An_unusable_engine_reads_as_already_upright()
+    public async Task An_unusable_engine_reports_no_verdict()
     {
         var detector = new PdfOrientationDetector(new UnusableOcr());
 
-        int steps = await detector.DetectClockwiseStepsAsync(Png(30, 40));
+        int? steps = await detector.DetectClockwiseStepsAsync(Png(30, 40));
 
-        Assert.Equal(0, steps); // convenience feature degrades to silence, never an error
+        Assert.Null(steps); // "cannot judge" must not read as "already upright"
     }
 }

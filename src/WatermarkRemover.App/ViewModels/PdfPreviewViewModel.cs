@@ -185,7 +185,7 @@ public sealed class PdfPreviewViewModel : ObservableObject
             () => ThumbnailScale = Math.Round(ThumbnailScale - ThumbScaleStep, 2),
             () => ThumbnailScale > MinThumbScale + 0.001);
         AutoOrientCommand = new RelayCommand(
-            () => _ = AutoOrientAsync(),
+            () => _ = AutoOrientAsync(reportFailure: true),
             () => _ocrEngine is not null && !IsOrienting && !IsRotating && PageCount > 0);
         // Any document with at least one page accepts a scan at any slot — front, middle or
         // end. A one-page scan is exactly the case that needs the bookends most (the missing
@@ -426,6 +426,32 @@ public sealed class PdfPreviewViewModel : ObservableObject
     }
 
     public bool HasStatusText => !string.IsNullOrEmpty(_statusText);
+
+    /// <summary>Which transient confirmation owns the status line; a newer message supersedes an
+    /// older one so a late timer can never wipe text the user needs to read.</summary>
+    private int _statusToken;
+
+    /// <summary>
+    /// Shows a confirmation for a couple of seconds, then clears it. Rotating, deleting and
+    /// straightening all save straight into the PDF, and the tile repaint alone is too quiet to
+    /// read as "it worked" — but a line that never goes away makes the next real error easy to
+    /// miss, so done-messages expire.
+    /// </summary>
+    private void ShowTransientStatus(string message, int seconds = 3)
+    {
+        StatusText = message;
+        int token = ++_statusToken;
+
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (dispatcher is null) return;
+
+        _ = Task.Delay(TimeSpan.FromSeconds(seconds)).ContinueWith(_ =>
+            dispatcher.BeginInvoke(() =>
+            {
+                if (token != _statusToken || StatusText != message) return;
+                StatusText = string.Empty;
+            }));
+    }
 
     public RelayCommand PreviousCommand { get; }
 
@@ -856,9 +882,10 @@ public sealed class PdfPreviewViewModel : ObservableObject
                 await RenderAsync(pageIndex, force: true);
             op.Step("画布刷新", PageIndex == pageIndex ? $"第 {pageIndex + 1} 页" : "未显示该页");
 
-            // Only clear our own progress line; a render failure reported by RenderAsync must stay.
-            if (StatusText.StartsWith("正在旋转", StringComparison.Ordinal))
-                StatusText = string.Empty;
+            // Only replace our own progress line; a render failure reported by RenderAsync must stay.
+            // RenderAsync empties the line on success, so a blank line is ours to fill too.
+            if (StatusText.Length == 0 || StatusText.StartsWith("正在旋转", StringComparison.Ordinal))
+                ShowTransientStatus($"第 {pageIndex + 1} 页已旋转，已保存");
             op.Complete($"第 {pageIndex + 1} 页已顺时针旋转");
         }
         catch (FileNotFoundException ex)
@@ -922,8 +949,8 @@ public sealed class PdfPreviewViewModel : ObservableObject
             // The page that took the deleted one's place becomes the shown page.
             await RenderAsync(Math.Min(pageIndex, PageCount - 1), force: true);
             op.Step("画布刷新", $"第 {PageIndex + 1} 页");
-            if (StatusText.StartsWith("正在删除", StringComparison.Ordinal))
-                StatusText = string.Empty;
+            if (StatusText.Length == 0 || StatusText.StartsWith("正在删除", StringComparison.Ordinal))
+                ShowTransientStatus($"第 {pageIndex + 1} 页已删除，剩余 {PageCount} 页");
             op.Complete($"第 {pageIndex + 1} 页已删除，剩余 {PageCount} 页");
         }
         catch (FileNotFoundException ex)
@@ -1094,9 +1121,9 @@ public sealed class PdfPreviewViewModel : ObservableObject
             byte[] pagePng = await GetPageBytesAsync(index, OrientationDpi, priority: true).ConfigureAwait(true);
             if (IsCancelled) return;
             probed.Add(index);
-            int steps = await Task.Run(() => detector.DetectClockwiseStepsAsync(pagePng, _cancellationToken)).ConfigureAwait(true);
-            if (IsCancelled) return;
-            if (steps != 0) turns.Add((index, steps));
+            int? steps = await Task.Run(() => detector.DetectClockwiseStepsAsync(pagePng, _cancellationToken)).ConfigureAwait(true);
+            if (IsCancelled || steps is null) return; // unusable OCR: keep the pages as scanned
+            if (steps != 0) turns.Add((index, steps.Value));
         }
 
         // Probe rasters are never displayed (tiles and canvas read PreviewDpi); unturned
@@ -1125,11 +1152,11 @@ public sealed class PdfPreviewViewModel : ObservableObject
     /// <summary>
     /// Auto-orientation: render the first page, let the OCR engine vote on the four quarter
     /// turns, and — if the verdict is decisive — turn the whole document in a single save, then
-    /// rebuild every surface (tiles, render cache, canvas). Deliberately quiet: an engine that
-    /// can't read the page (blank page, unusable OCR) keeps the file untouched and reports
-    /// nothing; the button stays for a manual retry.
+    /// rebuild every surface (tiles, render cache, canvas). The pass that runs by itself stays
+    /// quiet when the engine cannot judge; <paramref name="reportFailure"/> (an explicit click)
+    /// says why the page was left alone and that the file is untouched.
     /// </summary>
-    internal async Task AutoOrientAsync()
+    internal async Task AutoOrientAsync(bool reportFailure = false)
     {
         if (IsCancelled || _ocrEngine is null || IsOrienting) return;
         if (PageCount <= 0 || _isLoading) return; // let the initial paint finish first
@@ -1145,18 +1172,28 @@ public sealed class PdfPreviewViewModel : ObservableObject
             op.Step("探测页渲染", $"第 1 页，{OrientationDpi}dpi");
 
             var detector = new PdfOrientationDetector(_ocrEngine);
-            int steps = await Task.Run(() => detector.DetectClockwiseStepsAsync(pagePng, _cancellationToken));
+            int? verdict = await Task.Run(() => detector.DetectClockwiseStepsAsync(pagePng, _cancellationToken));
             _renderedPages.TryRemove((0, OrientationDpi), out _); // probe raster is never displayed
-            op.Step("方向投票", steps == 0 ? "已是正确朝向" : $"需顺时针 {steps * 90}°");
             if (IsCancelled)
             {
                 op.Complete("已取消");
                 return;
             }
 
+            if (verdict is null)
+            {
+                op.Complete("OCR 不可用，未改动");
+                if (reportFailure)
+                    ShowTransientStatus("自动摆正失败：本机没有可用的 OCR 引擎（文件未改动）");
+                return;
+            }
+
+            int steps = verdict.Value;
+            op.Step("方向投票", steps == 0 ? "已是正确朝向" : $"需顺时针 {steps * 90}°");
+
             if (steps == 0)
             {
-                if (StatusText.StartsWith("正在检测", StringComparison.Ordinal)) StatusText = string.Empty;
+                ShowTransientStatus("已是正向，无需调整");
                 op.Complete("已是正确朝向，未改动");
                 return;
             }
@@ -1181,7 +1218,8 @@ public sealed class PdfPreviewViewModel : ObservableObject
 
             // RenderAsync clears StatusText on success; write our line after that, and leave a
             // render failure's own message standing.
-            if (StatusText.Length == 0) StatusText = "已自动摆正。";
+            if (StatusText.Length == 0)
+                ShowTransientStatus($"已自动摆正（顺时针 {steps * 90}°），已保存");
             op.Complete($"顺时针 {steps * 90}°，共 {PageCount} 页");
         }
         catch (OperationCanceledException)
@@ -1190,10 +1228,10 @@ public sealed class PdfPreviewViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            // Auto-orientation is a convenience: failures stay out of the user's way (the file
-            // itself is untouched — RotateAll swaps only after a complete save).
+            // The file is untouched (RotateAll swaps only after a complete save), but staying
+            // silent made a failed click look like a dead button — say it and that nothing broke.
             op.Fail("自动摆正失败", ex);
-            if (!IsCancelled) StatusText = string.Empty;
+            if (!IsCancelled) StatusText = $"自动摆正失败：{ex.Message}（文件未改动）";
         }
         finally
         {

@@ -40,10 +40,11 @@ public sealed class PdfOrientationDetector
 
     /// <summary>
     /// Returns how many clockwise quarter turns the page needs to read upright (0 = already
-    /// correct). Any engine failure degrades to "leave it alone" — auto-orientation is a
-    /// convenience and must never turn into an error the user has to dismiss.
+    /// correct), or null when the engine could not judge at all (unusable OCR). Callers that
+    /// run by themselves treat null as "leave it alone"; an explicit user click can say why
+    /// instead of pretending the page was already upright.
     /// </summary>
-    public async Task<int> DetectClockwiseStepsAsync(byte[] pagePng, CancellationToken cancellationToken = default)
+    public async Task<int?> DetectClockwiseStepsAsync(byte[] pagePng, CancellationToken cancellationToken = default)
     {
         // Landscape pages are meant to be read sideways. 表格型横版文件（征信/流水）的竖列识别框
         // 会把几何通道骗成 "sideways" 并强转竖向 — never auto-turn a page that is wider than tall.
@@ -71,7 +72,7 @@ public sealed class PdfOrientationDetector
         }
         catch (InvalidOperationException)
         {
-            return 0; // no usable OCR on this machine — silently keep the page as scanned
+            return null; // no usable OCR on this machine — the caller decides how loud to be
         }
 
         // The vertical pair settles the overwhelming majority of real defects (duplex back
@@ -89,7 +90,7 @@ public sealed class PdfOrientationDetector
         }
         catch (InvalidOperationException)
         {
-            return 0;
+            return null;
         }
 
         return PickBestTurn(new Dictionary<int, double>
@@ -107,8 +108,8 @@ public sealed class PdfOrientationDetector
     /// </summary>
     public async Task<byte[]> OrientAsync(byte[] pagePng, CancellationToken cancellationToken = default)
     {
-        int steps = await DetectClockwiseStepsAsync(pagePng, cancellationToken);
-        return steps == 0 ? pagePng : Rotate(pagePng, steps);
+        int? steps = await DetectClockwiseStepsAsync(pagePng, cancellationToken);
+        return steps is null or 0 ? pagePng : Rotate(pagePng, steps.Value);
     }
 
     /// <summary>Geometry channel: read the candidate upright and score its line-box layout.</summary>

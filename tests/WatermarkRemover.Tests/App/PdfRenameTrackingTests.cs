@@ -70,7 +70,7 @@ public class PdfRenameTrackingTests
             await vm.RotatePageAsync(0);
             await DrainAsync(vm);
 
-            Assert.Equal(string.Empty, vm.StatusText); // the edit went through silently
+            Assert.Equal("第 1 页已旋转，已保存", vm.StatusText); // the edit reports its save
             Assert.Equal(90, RotationOf(renamed));     // …and landed on the renamed file
             Assert.Equal(renamed, hostNotified);       // the host was told where the file went
             Assert.Equal(Path.GetFileName(renamed), vm.Title);

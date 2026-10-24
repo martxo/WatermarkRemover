@@ -9,8 +9,9 @@ namespace WatermarkRemover.Tests.App;
 /// <summary>
 /// Auto-orientation end to end on a real file: the strip renders page one, the OCR engine votes
 /// over four quarter turns, and a decisive verdict rewrites every page's /Rotate in one save.
-/// These tests pin the file-level contract (the metadata really lands on disk) and the quiet
-/// contract (an indecisive or unusable engine never touches the file).
+/// These tests pin the file-level contract (the metadata really lands on disk) and the reporting
+/// contract — every click answers in the status line, and a failed or pointless pass never
+/// touches the file.
 /// </summary>
 public class PdfAutoOrientTests
 {
@@ -20,18 +21,26 @@ public class PdfAutoOrientTests
         /// <summary>Pages rendered at the preview DPI — what the strip's tiles consume.</summary>
         public int PreviewRenderCount { get; private set; }
 
+        /// <summary>Tiles render at 96dpi on a fire-and-forget loop that is normally faster than
+        /// orientation's first probe, which turned 「orientation starts while the strip is still
+        /// filling」 into timing luck. A per-tile delay keeps the strip visibly mid-fill when the
+        /// vote begins. (A gate held open would deadlock instead: the renderer's semaphore is
+        /// serial, so a blocked tile also blocks the orientation probe.)</summary>
+        public int TileRenderDelayMs { get; init; }
+
         public Task<int> GetPageCountAsync(string pdfPath) => Task.FromResult(pageCount);
 
-        public Task<byte[]> RenderPageAsync(string pdfPath, int pageIndex, int dpi, bool priority = false)
+        public async Task<byte[]> RenderPageAsync(string pdfPath, int pageIndex, int dpi, bool priority = false)
         {
             if (dpi == 150) PreviewRenderCount++;
+            if (dpi == 96 && TileRenderDelayMs > 0) await Task.Delay(TileRenderDelayMs);
 
             // Portrait canvas — the orientation detector exempts landscape pages outright.
             var info = new SKImageInfo(30, 40, SKColorType.Bgra8888, SKAlphaType.Premul);
             using var bitmap = new SKBitmap(info);
             using var image = SKImage.FromBitmap(bitmap);
             using var data = image.Encode(SKEncodedImageFormat.Png, 100);
-            return Task.FromResult<byte[]>(data.ToArray());
+            return data.ToArray();
         }
 
         public Task<IReadOnlyList<byte[]>> RenderPagesAsync(string pdfPath, int dpi) =>
@@ -120,7 +129,7 @@ public class PdfAutoOrientTests
             await DrainAsync(vm);
 
             Assert.Equal(180, RotationOf(pdf)); // two clockwise quarter turns were written
-            Assert.Equal("已自动摆正。", vm.StatusText);
+            Assert.StartsWith("已自动摆正（顺时针 180°）", vm.StatusText);
         }
         finally
         {
@@ -142,7 +151,8 @@ public class PdfAutoOrientTests
             await DrainAsync(vm);
 
             Assert.Equal(0, RotationOf(pdf));
-            Assert.Equal(string.Empty, vm.StatusText);
+            // Says so instead of going silent: an unchanged page must still answer the click.
+            Assert.Equal("已是正向，无需调整", vm.StatusText);
         }
         finally
         {
@@ -157,7 +167,7 @@ public class PdfAutoOrientTests
         File.WriteAllBytes(pdf, PdfFixture.CamScannerLike().Build());
         try
         {
-            var renderer = new FakeRenderer(8);
+            var renderer = new FakeRenderer(8) { TileRenderDelayMs = 50 };
             var ocr = new GatedOcr();
             var vm = new PdfPreviewViewModel(pdf, "scan.pdf", renderer,
                 ocrEngine: ocr, autoOrient: true, autoCleanBlank: true);
@@ -188,12 +198,17 @@ public class PdfAutoOrientTests
         try
         {
             var vm = new PdfPreviewViewModel(pdf, "scan.pdf", new FakeRenderer(1),
-                ocrEngine: new UnusableOcr(), autoOrient: true);
+                ocrEngine: new UnusableOcr(), autoOrient: false);
             await vm.LoadAsync();
             await DrainAsync(vm);
 
+            // The automatic pass is quiet; the button click must answer with the reason.
+            vm.AutoOrientCommand.Execute(null);
+            await DrainAsync(vm);
+
             Assert.Equal(0, RotationOf(pdf));
-            Assert.Equal(string.Empty, vm.StatusText); // quiet failure — nothing to dismiss
+            Assert.StartsWith("自动摆正失败：", vm.StatusText);
+            Assert.Contains("文件未改动", vm.StatusText);
             Assert.NotNull(vm.CurrentImage); // the strip still works
         }
         finally

@@ -373,7 +373,8 @@ public class PdfPreviewViewModelTests
             Assert.Contains("/Rotate 90", File.ReadAllText(path));
             Assert.False(vm.IsRotating);
             Assert.True(vm.Thumbnails[0].RotateCommand.CanExecute(null)); // lock released
-            Assert.Equal(string.Empty, vm.StatusText);
+            // The rotation is saved silently otherwise; the strip now says what just happened.
+            Assert.Equal("第 1 页已旋转，已保存", vm.StatusText);
             // The tile and the canvas both re-rendered the rotated page instead of showing a stale image.
             Assert.True(renderer.RenderedPageCount > rendersBefore);
             Assert.NotNull(vm.Thumbnails[0].Image);

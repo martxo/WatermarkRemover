@@ -1524,6 +1524,17 @@
                                         </StackPanel>
                                     </Grid>
                                 </Border>
+
+                                <!-- Strip status: rotating / deleting / straightening all save
+                                     straight into the PDF, and the tile repaint alone is too
+                                     quiet. Without this line a failure here was invisible —
+                                     StatusText used to be bound only inside the big viewer. -->
+                                <TextBlock Text="{Binding Strip.StatusText}"
+                                           FontSize="12"
+                                           Margin="0,8,0,0"
+                                           Foreground="{StaticResource TextSecondaryBrush}"
+                                           TextTrimming="CharacterEllipsis"
+                                           Visibility="{Binding Strip.HasStatusText, Converter={StaticResource BoolToVis}}"/>
                                 </StackPanel>
                             </Border>
                         </DataTemplate>
