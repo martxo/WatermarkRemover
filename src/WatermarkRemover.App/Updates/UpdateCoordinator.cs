@@ -60,6 +60,21 @@ public static class UpdateCoordinator
 
     private static async Task RunCheckCoreAsync(Window owner, IDialogService dialogs, bool silent)
     {
+        // A downloaded update is already waiting: a manual click means "restart into it", and a
+        // background pass has nothing left to do (never download the same package twice).
+        if (UpdateReadyNotifier.Current.HasUpdate)
+        {
+            if (!silent)
+            {
+                ApplyReady(dialogs);
+            }
+            else
+            {
+                AppLog.Info($"v{UpdateReadyNotifier.Current.Version} 已下载待重启，跳过启动检查");
+            }
+            return;
+        }
+
         // Installed (Setup.exe) users ride the Velopack incremental channel; green-directory
         // users keep the legacy full-zip flow below. Both share the same UI scaffolding.
         if (VelopackUpdateService.IsChannelUsable)
@@ -133,6 +148,12 @@ public static class UpdateCoordinator
         UpdateInfo info = result.Update!;
         AppLog.Info($"发现新版本 v{info.Version}（当前 v{UpdateService.CurrentVersion}）");
 
+        if (silent)
+        {
+            await DownloadSilentlyAsync(info).ConfigureAwait(true);
+            return;
+        }
+
         // The confirmation belongs to the check, not to the download: close the "checking…"
         // window so a modal dialog cannot sit on top of a live progress window.
         checkingWindow?.Close();
@@ -197,6 +218,87 @@ public static class UpdateCoordinator
         }
     }
 
+    /// <summary>
+    /// Startup path (legacy channel): download without any window, then let the shell announce
+    /// it with the update icon. Failures stay in the log — a background pass must never open a
+    /// dialog over the user's work.
+    /// </summary>
+    private static async Task DownloadSilentlyAsync(UpdateInfo info)
+    {
+        try
+        {
+            var quiet = new Progress<UpdateProgress>(_ => { });
+            string downloadedPath = await UpdateService
+                .DownloadUpdateAsync(info, quiet, CancellationToken.None)
+                .ConfigureAwait(true);
+
+            AppLog.Info($"更新 v{info.Version} 已在后台下载并通过校验：{downloadedPath}");
+            UpdateReadyNotifier.Current.Publish(info.Version.ToString(), () =>
+            {
+                AppLog.Info($"用户从更新图标确认，应用 v{info.Version}");
+                UpdateApplier.ApplyAndRestart(downloadedPath);
+                Application.Current.Shutdown();
+            });
+        }
+        catch (Exception ex)
+        {
+            AppLog.Warn($"后台下载更新 v{info.Version} 失败：{ex.Message}");
+        }
+    }
+
+    /// <summary>Startup path (Velopack channel): same quiet download against the increment feed.</summary>
+    private static async Task DownloadVelopackSilentlyAsync(VelopackCheckResult result)
+    {
+        try
+        {
+            var quiet = new Progress<UpdateProgress>(_ => { });
+            Velopack.UpdateInfo update = await VelopackService
+                .DownloadAsync(result.Update!, quiet, CancellationToken.None)
+                .ConfigureAwait(true);
+
+            AppLog.Info($"更新 v{result.LatestVersion} 已在后台下载并通过 Velopack 校验");
+            UpdateReadyNotifier.Current.Publish(result.LatestVersion.ToString(), () =>
+            {
+                AppLog.Info($"用户从更新图标确认，应用 v{result.LatestVersion}");
+                VelopackService.ApplyAndRestart(update);
+            });
+        }
+        catch (Exception ex)
+        {
+            AppLog.Warn($"后台下载更新 v{result.LatestVersion} 失败：{ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Restarts into the downloaded update after one confirmation. Shared by the shell's update
+    /// icon and by a manual "check for updates" click made while the package is already waiting.
+    /// </summary>
+    public static void ApplyReady(IDialogService dialogs)
+    {
+        if (UpdateReadyNotifier.Current is not { HasUpdate: true, Apply: { } apply }) return;
+
+        string version = UpdateReadyNotifier.Current.Version!;
+        bool accepted = dialogs.ConfirmYesNo(
+            $"新版本 v{version} 已下载完成，是否立即重启并完成更新？\n\n" +
+            "程序会短暂关闭，更新完成后自动重新打开。",
+            "软件更新");
+        if (!accepted) return;
+
+        try
+        {
+            apply();
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error($"应用更新 v{version} 失败", ex);
+            dialogs.Warn(
+                "更新失败，当前版本不受影响。\n\n" +
+                $"原因：{ex.Message}\n\n" +
+                "可稍后在设置中重试，或到发布页手动下载安装最新版。",
+                "软件更新");
+        }
+    }
+
     // ── Velopack channel (增量推送) — mirrors the legacy flow above against the Velopack feed ──
 
     private static async Task RunVelopackCheckCoreAsync(Window owner, IDialogService dialogs, bool silent)
@@ -241,6 +343,12 @@ public static class UpdateCoordinator
         AppLog.Info(result.IsDelta
             ? $"发现新版本 v{result.LatestVersion}（当前 v{UpdateService.CurrentVersion}），有增量更新包"
             : $"发现新版本 v{result.LatestVersion}（当前 v{UpdateService.CurrentVersion}），将下载全量更新包");
+
+        if (silent)
+        {
+            await DownloadVelopackSilentlyAsync(result).ConfigureAwait(true);
+            return;
+        }
 
         string sizeText = result.PackageBytes > 0
             ? $"约 {ProgressTextFormatter.FormatBytes(result.PackageBytes)}"

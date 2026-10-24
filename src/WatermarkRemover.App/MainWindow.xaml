@@ -1593,6 +1593,23 @@
                     Orientation="Horizontal"
                     HorizontalAlignment="Right"
                     VerticalAlignment="Top">
+            <!-- Background-downloaded update: an accent icon appears the moment the package is
+                 verified, and stays until the user restarts into it. -->
+            <Button x:Name="UpdateReadyButton"
+                    Style="{StaticResource CaptionButton}"
+                    Command="{Binding InstallUpdateCommand}"
+                    Visibility="{Binding UpdateReady.HasUpdate, Converter={StaticResource BoolToVis}}"
+                    ToolTip="{Binding UpdateReady.Hint}">
+                <Grid Width="18" Height="18">
+                    <TextBlock Text="&#xE896;"
+                               FontFamily="Segoe MDL2 Assets" FontSize="14"
+                               Foreground="{StaticResource AccentBrush}"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    <Border Width="6" Height="6" CornerRadius="3"
+                            Background="#FFE5484D"
+                            HorizontalAlignment="Right" VerticalAlignment="Top"/>
+                </Grid>
+            </Button>
             <Button x:Name="MinimizeButton" Content="&#xE921;" Style="{StaticResource CaptionButton}"
                     Click="OnMinimizeClick" ToolTip="最小化"/>
             <Button x:Name="MaximizeButton" Content="&#xE922;" Style="{StaticResource CaptionButton}"

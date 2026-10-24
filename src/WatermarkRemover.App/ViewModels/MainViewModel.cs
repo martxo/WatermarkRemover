@@ -7,6 +7,7 @@ using WatermarkRemover.App.Logging;
 using WatermarkRemover.App.Ocr;
 using WatermarkRemover.App.Services;
 using WatermarkRemover.App.Settings;
+using WatermarkRemover.App.Updates;
 using WatermarkRemover.Core.Features;
 using WatermarkRemover.Core.Features.Naming;
 using WatermarkRemover.Core.Features.Netdisk;
@@ -130,6 +131,14 @@ public sealed class MainViewModel : ObservableObject
 
         OpenOutputCommand = new RelayCommand(p => OpenOutput(p as string), p => p is string path && File.Exists(path));
         SaveSettingsCommand = new RelayCommand(() => SaveSettings());
+        InstallUpdateCommand = new RelayCommand(
+            () => UpdateCoordinator.ApplyReady(_dialogs),
+            () => UpdateReady.HasUpdate);
+        UpdateReady.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(UpdateReadyNotifier.HasUpdate))
+                InstallUpdateCommand.RaiseCanExecuteChanged();
+        };
         ScanCommand = new RelayCommand(() => _ = RunScanAsync(), () => IsIdle && !IsScanning);
         CancelScanCommand = new RelayCommand(() =>
         {
@@ -216,6 +225,15 @@ public sealed class MainViewModel : ObservableObject
     public RelayCommand OpenOutputCommand { get; }
 
     public RelayCommand SaveSettingsCommand { get; }
+
+    /// <summary>
+    /// The shell's update state: a verified package downloaded in the background shows an icon
+    /// until the user restarts into it. Bound straight to the notifier so the background thread
+    /// that finishes the download can flip the icon without the view model in the middle.
+    /// </summary>
+    public UpdateReadyNotifier UpdateReady => UpdateReadyNotifier.Current;
+
+    public RelayCommand InstallUpdateCommand { get; }
 
     public RelayCommand ScanCommand { get; }
 
