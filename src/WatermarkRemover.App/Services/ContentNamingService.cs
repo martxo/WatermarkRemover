@@ -162,6 +162,20 @@ public sealed class ContentNamingService
         AppLog.Trace(
             $"命名：第 {pageIndex + 1}/{pageCount} 页 OCR 识别 {lines.Count} 行：{string.Join(" / ", lines.Select(l => l.Text))}",
             null);
+
+        // The top-band probe can miss a label that full-page OCR sees (2-up spreads, small
+        // header tables). Reuse the full-page bounds for the same cell read before giving up
+        // on the fixed layout — no second band OCR needed.
+        string? fromLines = await CreditReportNameLocator
+            .TryReadFromLinesAsync(image, lines, _ocr, AppLog.Trace)
+            .ConfigureAwait(true);
+        if (fromLines is not null)
+        {
+            AutoNameResult fromGeometry = AutoNameResult.Create(fromLines, CreditReportTypeShortName);
+            AppLog.Trace($"命名：自动命名成功 → {fromGeometry.SuggestedStem}", null);
+            return fromGeometry;
+        }
+
         return SmartNamingService.TryBuildName(lines, AppLog.Trace);
     }
 }

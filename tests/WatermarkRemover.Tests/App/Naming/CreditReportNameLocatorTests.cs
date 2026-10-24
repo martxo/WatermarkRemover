@@ -59,6 +59,59 @@ public class CreditReportNameLocatorTests
         Assert.True(nextColumn.X >= cell.Right, "next column (证件类型值) outside the crop");
     }
 
+    // --- full-page OCR bounds fallback ---
+
+    /// <summary>Returns a fixed cell reading; the locator should call it exactly once.</summary>
+    private sealed class CellOnlyOcr : IOcrEngine
+    {
+        public int Calls { get; private set; }
+
+        public string DisplayName => "cell";
+
+        public Task<IReadOnlyList<string>> RecognizeAsync(byte[] imageBytes)
+        {
+            Calls++;
+            return Task.FromResult<IReadOnlyList<string>>(new[] { "戴瀚锋" });
+        }
+    }
+
+    private static byte[] WhitePage()
+    {
+        using var bitmap = new SKBitmap(400, 400);
+        using (var canvas = new SKCanvas(bitmap))
+            canvas.Clear(SKColors.White);
+        using var image = SKImage.FromBitmap(bitmap);
+        using var data = image.Encode(SKEncodedImageFormat.Png, 100);
+        return data.ToArray();
+    }
+
+    [Fact]
+    public async Task Full_page_bounds_read_the_cell_when_the_band_probe_missed_the_label()
+    {
+        // Regression for the 2026-10-24 morning scan: the top-band OCR missed the label on a
+        // 2-up credit report, while full-page OCR saw it with bounds.
+        var lines = new[]
+        {
+            new RecognizedLine("被查询者姓名", new RectD(0.07, 0.27, 0.043, 0.019)),
+        };
+        var engine = new CellOnlyOcr();
+
+        string? name = await CreditReportNameLocator.TryReadFromLinesAsync(WhitePage(), lines, engine);
+
+        Assert.Equal("戴瀚锋", name);
+        Assert.Equal(1, engine.Calls);
+    }
+
+    [Fact]
+    public async Task Without_the_anchor_no_cell_crop_is_recognised()
+    {
+        var lines = new[] { new RecognizedLine("查询机构", new RectD(0.1, 0.1, 0.1, 0.02)) };
+        var engine = new CellOnlyOcr();
+
+        Assert.Null(await CreditReportNameLocator.TryReadFromLinesAsync(WhitePage(), lines, engine));
+        Assert.Equal(0, engine.Calls);
+    }
+
     // --- value cell text cleanup ---
 
     [Fact]

@@ -134,6 +134,55 @@ public static class CreditReportNameLocator
         return name;
     }
 
+    /// <summary>
+    /// Same geometric cell read, but using bounds from an already-paid full-page OCR pass. The
+    /// top-band probe can miss the label (2-up spreads, small header tables) while the full page
+    /// sees it; reusing those bounds avoids a second band OCR and rescues fixed-layout naming.
+    /// </summary>
+    public static async Task<string?> TryReadFromLinesAsync(
+        byte[] pageImage,
+        IReadOnlyList<RecognizedLine> lines,
+        IOcrEngine engine,
+        Action<string, Exception?>? trace = null)
+    {
+        ArgumentNullException.ThrowIfNull(pageImage);
+        ArgumentNullException.ThrowIfNull(lines);
+        ArgumentNullException.ThrowIfNull(engine);
+
+        RecognizedLine? anchor = FindAnchor(lines);
+        if (anchor?.Bounds is not { } label) return null;
+
+        try
+        {
+            using var page = SKBitmap.Decode(pageImage);
+            if (page is null) return null;
+
+            RectD cell = CellRect(label);
+            int x = Math.Clamp((int)(cell.X * page.Width), 0, page.Width - 1);
+            int y = Math.Clamp((int)(cell.Y * page.Height), 0, page.Height - 1);
+            int w = Math.Clamp((int)(cell.Width * page.Width), 1, page.Width - x);
+            int h = Math.Clamp((int)(cell.Height * page.Height), 1, page.Height - y);
+
+            using var cellBitmap = Crop(page, x, y, w, h);
+            using var zoomed = Scale(cellBitmap, CellZoom);
+            IReadOnlyList<string> cellLines = await engine
+                .RecognizeAsync(Encode(zoomed)).ConfigureAwait(false);
+
+            string? name = CleanCellValue(cellLines);
+            trace?.Invoke(
+                name is null
+                    ? "征信定位（整页坐标）：值格未识别出姓名"
+                    : $"征信定位（整页坐标）：值格识别 → {name}",
+                null);
+            return name;
+        }
+        catch (Exception ex)
+        {
+            trace?.Invoke("征信定位（整页坐标）：过程异常，交回常规识别", ex);
+            return null;
+        }
+    }
+
     /// <summary>True when the line is the report's name label, tolerating OCR noise (inserted
     /// spaces, colons, a merged next cell: 被查询者姓名证件类型).</summary>
     public static bool IsAnchorLabel(string? text)
