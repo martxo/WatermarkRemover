@@ -13,7 +13,9 @@ using WatermarkRemover.Scan.Pdf;
 
 namespace WatermarkRemover.App.Services;
 
-/// <summary>One scan attempt's outcome; <see cref="Success"/> carries the written PDF.</summary>
+/// <summary>One scan attempt's outcome; <see cref="Success"/> carries the written PDF.
+/// <see cref="Warning"/> means the document was saved, but not where it was asked to go — the
+/// host shows it verbatim so the user knows what to fix and where the pages are.</summary>
 public sealed record ScanOutcome(
     bool Success,
     string? OutputPath,
@@ -21,7 +23,8 @@ public sealed record ScanOutcome(
     string? SourceName,
     string? Error,
     string? ErrorDetails,
-    bool Cancelled = false);
+    bool Cancelled = false,
+    string? Warning = null);
 
 /// <summary>One page just pulled from the device, delivered while the scan is still running.
 /// The final PDF does not exist yet; the small PNG lets the row show the page immediately.</summary>
@@ -287,13 +290,35 @@ public sealed class ScanService
         // as a partial PDF, so the assembly and write deliberately ignore the token.
         byte[] pdf = await Task.Run(() => PdfDocumentBuilder.Build(document, ScanPdfOptions, orderedEncoded));
         op.Step("生成 PDF", $"{pages.Count} 页，{pdf.Length / 1024.0:0} KB");
-        await Task.Run(() => File.WriteAllBytes(path, pdf));
-        op.Step("写入文件", path);
+
+        // A failed write used to discard the whole document — the pages were already pulled off
+        // the hardware and the user had nothing to show for it. Now the PDF lands in a temp
+        // recovery folder and the caller tells the user where it is and what to fix.
+        string? warning = null;
+        try
+        {
+            await Task.Run(() => File.WriteAllBytes(path, pdf));
+            op.Step("写入文件", path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            string recoveryDirectory = Path.Combine(Path.GetTempPath(), "WatermarkRemover", "scan-recovery");
+            Directory.CreateDirectory(recoveryDirectory);
+            string recoveryPath = OutputNameGenerator.FindAvailablePath(
+                recoveryDirectory, Path.GetFileName(path));
+            await Task.Run(() => File.WriteAllBytes(recoveryPath, pdf));
+            AppLog.Error($"扫描目录写入失败，已存到临时目录：{directory} → {recoveryPath}", ex);
+            op.Step("写入文件", $"{directory} 失败，已存到 {recoveryPath}");
+            warning = $"无法写入扫描目录：\n{directory}\n\n原因：{ex.Message}\n\n" +
+                      $"这份扫描（{pages.Count} 页）已临时保存到：\n{recoveryPath}\n\n" +
+                      "请检查目录权限或磁盘空间，并把文件移动到目标目录。";
+            path = recoveryPath;
+        }
 
         AppLog.Info(cancelled
             ? $"扫描已取消，已保留 {pages.Count} 页：{path}（{pdf.Length / 1024.0:0} KB）"
             : $"扫描完成：{path}（{pages.Count} 页，{pdf.Length / 1024.0:0} KB，来源 {device.Name}，版面 {duplex}）");
-        return new ScanOutcome(true, path, pages.Count, device.Name, null, null, cancelled);
+        return new ScanOutcome(true, path, pages.Count, device.Name, null, null, cancelled, warning);
     }
 
     /// <summary>One page's finished payload plus the per-page numbers the log step reports.</summary>

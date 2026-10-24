@@ -2,6 +2,7 @@
 using WatermarkRemover.App.Scan;
 using WatermarkRemover.App.ViewModels;
 using WatermarkRemover.Core.Features.Ocr;
+using WatermarkRemover.Core.Settings;
 using WatermarkRemover.Pdf;
 
 namespace WatermarkRemover.Tests.App;
@@ -128,6 +129,21 @@ public class BlankPageCleanerTests
             throw new NotSupportedException();
     }
 
+    /// <summary>The cleanup is automatic, so it must leave a recoverable copy behind; the status
+    /// line names it. Reads the file name out of that line and cleans the copy up afterwards.</summary>
+    private static void AssertBackupExists(string statusText)
+    {
+        const string marker = "原件备份：";
+        int start = statusText.IndexOf(marker, StringComparison.Ordinal);
+        Assert.True(start >= 0, $"状态栏未提到备份：{statusText}");
+        start += marker.Length;
+        int end = statusText.LastIndexOf('）');
+        string name = statusText.Substring(start, end - start);
+        string path = Path.Combine(AppFolders.Root, "pages-backup", name);
+        Assert.True(File.Exists(path), $"备份文件不存在：{path}");
+        File.Delete(path);
+    }
+
     private static async Task DrainAsync(PdfPreviewViewModel vm)
     {
         for (int i = 0; i < 300 && (vm.IsLoading || vm.IsRotating || vm.Thumbnails.Any(t => t.Image is null)); i++)
@@ -147,8 +163,9 @@ public class BlankPageCleanerTests
             await DrainAsync(vm);
 
             Assert.Equal(1, vm.PageCount);
-            Assert.Equal("已自动删除 1 页空白页", vm.StatusText);
+            Assert.StartsWith("已自动删除 1 页空白页", vm.StatusText);
             Assert.Equal(1, PageCount(pdf)); // the file itself lost the blank sheet
+            AssertBackupExists(vm.StatusText);
         }
         finally
         {
@@ -170,8 +187,9 @@ public class BlankPageCleanerTests
             await DrainAsync(vm);
 
             Assert.Equal(1, vm.PageCount); // never allowed to fall to zero
-            Assert.Equal("已自动删除 2 页空白页", vm.StatusText);
+            Assert.StartsWith("已自动删除 2 页空白页", vm.StatusText);
             Assert.Equal(1, PageCount(pdf));
+            AssertBackupExists(vm.StatusText);
         }
         finally
         {

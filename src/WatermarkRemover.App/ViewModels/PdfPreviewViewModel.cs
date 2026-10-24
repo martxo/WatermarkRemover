@@ -12,6 +12,7 @@ using WatermarkRemover.App.Scan;
 using WatermarkRemover.Core.Features.Ocr;
 using WatermarkRemover.Core.Features.Preview;
 using WatermarkRemover.Core.Logging;
+using WatermarkRemover.Core.Settings;
 using WatermarkRemover.Pdf;
 
 namespace WatermarkRemover.App.ViewModels;
@@ -607,11 +608,16 @@ public sealed class PdfPreviewViewModel : ObservableObject
                 return;
             }
 
+            // Blank detection is a heuristic running unattended: keep the pre-cleanup document
+            // aside first, so a misjudged content page can still be recovered afterwards.
+            string? backup = TryBackupBeforeCleanup(blankPages.Count);
+
             int removed = 0;
             await WritePdfAsync(() => removed = PdfPageRotator.DeletePages(_pdfPath, blankPages));
             op.Step("删除空白页写盘", $"删除 {removed} 页");
             if (IsCancelled || removed == 0)
             {
+                TryDeleteBackup(backup);
                 op.Complete("写盘未生效");
                 return;
             }
@@ -624,7 +630,9 @@ public sealed class PdfPreviewViewModel : ObservableObject
             BuildThumbnails();
             StartThumbnailLoad();
             await RenderAsync(Math.Min(PageIndex, PageCount - 1), force: true);
-            StatusText = $"已自动删除 {removed} 页空白页";
+            StatusText = backup is null
+                ? $"已自动删除 {removed} 页空白页"
+                : $"已自动删除 {removed} 页空白页（原件备份：{Path.GetFileName(backup)}）";
             op.Complete($"删除 {removed} 页空白页，剩余 {PageCount} 页");
         }
         catch (FileNotFoundException ex)
@@ -640,6 +648,57 @@ public sealed class PdfPreviewViewModel : ObservableObject
         finally
         {
             IsRotating = false;
+        }
+    }
+
+    /// <summary>Where pre-cleanup copies live: next to logs/settings, never in the user's
+    /// scan folder (70 duplex scans a day would bury it).</summary>
+    private static string CleanupBackupDirectory => Path.Combine(AppFolders.Root, "pages-backup");
+
+    /// <summary>Only the newest few are kept; the rest is pruned on every cleanup.</summary>
+    private const int CleanupBackupsToKeep = 20;
+
+    /// <summary>Copies the PDF aside before pages are deleted automatically. Best effort — the
+    /// cleanup itself still runs when the copy fails, and null means there is nothing to undo.</summary>
+    private string? TryBackupBeforeCleanup(int blankCount)
+    {
+        try
+        {
+            Directory.CreateDirectory(CleanupBackupDirectory);
+            string name = $"{Path.GetFileNameWithoutExtension(_pdfPath)}-{blankCount}页空白-" +
+                          $"{DateTime.Now:yyyyMMdd-HHmmss}.pdf";
+            string backup = OutputNameGenerator.FindAvailablePath(CleanupBackupDirectory, name);
+            File.Copy(_pdfPath, backup, overwrite: false);
+            PruneOldCleanupBackups();
+            AppLog.Debug($"空白页清理前备份：{backup}");
+            return backup;
+        }
+        catch (Exception ex)
+        {
+            AppLog.Warn($"空白页清理前备份失败：{ex.Message}");
+            return null;
+        }
+    }
+
+    private static void TryDeleteBackup(string? backup)
+    {
+        if (backup is null) return;
+        try { File.Delete(backup); } catch { /* best effort */ }
+    }
+
+    private static void PruneOldCleanupBackups()
+    {
+        try
+        {
+            var stale = new DirectoryInfo(CleanupBackupDirectory)
+                .GetFiles("*.pdf")
+                .OrderByDescending(f => f.LastWriteTimeUtc)
+                .Skip(CleanupBackupsToKeep);
+            foreach (FileInfo file in stale) file.Delete();
+        }
+        catch (Exception ex)
+        {
+            AppLog.Debug($"清理过期空白页备份失败：{ex.Message}");
         }
     }
 

@@ -1,4 +1,5 @@
 using System.Windows;
+using System.ComponentModel;
 using System.Windows.Controls;
 using System.Runtime.InteropServices;
 using Microsoft.Win32;
@@ -126,6 +127,21 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
+    /// A scan or a batch still running means unsaved work; closing used to kill the scanner
+    /// mid-document with no warning. Ask once, and only then let the window go.
+    /// </summary>
+    protected override void OnClosing(CancelEventArgs e)
+    {
+        if (!_viewModel.ConfirmExit())
+        {
+            e.Cancel = true;
+            return;
+        }
+
+        base.OnClosing(e);
+    }
+
+    /// <summary>
     /// Stops background services (the LAN receiver frees its port immediately) before the
     /// process exits.
     /// </summary>
@@ -156,7 +172,7 @@ public partial class MainWindow : Window
         if (e.Data.GetDataPresent(DataFormats.FileDrop) &&
             e.Data.GetData(DataFormats.FileDrop) is string[] files)
         {
-            bool accepted = files.Any(_viewModel.SelectedFeature.CanHandle);
+            bool accepted = !_viewModel.IsBusy && files.Any(_viewModel.CanAcceptPath);
             e.Effects = accepted ? DragDropEffects.Copy : DragDropEffects.None;
             _viewModel.NotifyDragOver(files);
         }
@@ -201,9 +217,8 @@ public partial class MainWindow : Window
         if (!e.Data.GetDataPresent(DataFormats.FileDrop)) return;
         if (e.Data.GetData(DataFormats.FileDrop) is not string[] dropped) return;
 
-        string[] accepted = dropped
-            .Where(p => _viewModel.SelectedFeature.CanHandle(p))
-            .ToArray();
+        // Folders are kept here on purpose: the view model expands them one level deep.
+        string[] accepted = dropped.Where(_viewModel.CanAcceptPath).ToArray();
 
         if (accepted.Length == 0)
         {

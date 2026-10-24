@@ -5,6 +5,7 @@ using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using WatermarkRemover.App.Logging;
+using WatermarkRemover.App.Services;
 using WatermarkRemover.Core.Features;
 using WatermarkRemover.Core.Settings;
 
@@ -19,6 +20,16 @@ public enum JobState
     Failed,
 }
 
+/// <summary>Netdisk upload state of one finished record. The row is the only place the user can
+/// see whether a file actually reached the cloud, so the state lives here, not in a log.</summary>
+public enum UploadState
+{
+    None,
+    Uploading,
+    Uploaded,
+    Failed,
+}
+
 /// <summary>One input file in the processing queue.</summary>
 public sealed class FileJobViewModel : ObservableObject
 {
@@ -27,6 +38,9 @@ public sealed class FileJobViewModel : ObservableObject
 
     private JobState _state = JobState.Queued;
     private string _detail = "等待处理";
+    private string? _namingNote;
+    private UploadState _upload;
+    private string? _uploadNote;
     private string? _outputPath;
     private string? _errorDetails;
     private string? _featureName;
@@ -62,7 +76,15 @@ public sealed class FileJobViewModel : ObservableObject
         ToggleSuffixCommand = new RelayCommand(p => ToggleSuffix(p as SuffixChipViewModel), p => IsRenamable && !IsEditing);
         ToggleSuffixDropdownCommand = new RelayCommand(ToggleSuffixDropdown, () => IsRenamable);
         CopyErrorCommand = new RelayCommand(CopyErrorReport, _ => State == JobState.Failed);
+        RetryCommand = new RelayCommand(_ => RetryRequested?.Invoke(this, EventArgs.Empty), _ => ShowRetry);
+        UploadCommand = new RelayCommand(_ => UploadRequested?.Invoke(this, EventArgs.Empty), _ => ShowUploadButton);
     }
+
+    /// <summary>Raised when the user asks to run this failed scan again; the host owns the scanner.</summary>
+    public event EventHandler? RetryRequested;
+
+    /// <summary>Raised when the user asks to send this row's file to the netdisk; the host owns the account.</summary>
+    public event EventHandler? UploadRequested;
 
     /// <summary>Raised when the user commits an edited name. The coordinator performs the move.</summary>
     public event EventHandler<string>? RenameRequested;
@@ -98,7 +120,10 @@ public sealed class FileJobViewModel : ObservableObject
                 OnPropertyChanged(nameof(StateText));
                 OnPropertyChanged(nameof(ShowStatusChip));
                 OnPropertyChanged(nameof(ShowCopyError));
+                OnPropertyChanged(nameof(ShowRetry));
                 OnPropertyChanged(nameof(ShowLiveStrip));
+                OnPropertyChanged(nameof(ShowUploadChip));
+                OnPropertyChanged(nameof(ShowUploadButton));
             }
         }
     }
@@ -121,6 +146,10 @@ public sealed class FileJobViewModel : ObservableObject
 
     /// <summary>Only a failed job has a diagnostic worth copying.</summary>
     public bool ShowCopyError => State == JobState.Failed;
+
+    /// <summary>A failed scan can simply be re-run — there is no source file to reprocess, so the
+    /// generic "drop the file again" recovery does not exist for it.</summary>
+    public bool ShowRetry => State == JobState.Failed && OwnerFeatureId == "scan.page";
 
     /// <summary>A PDF output exists on disk, so the in-app preview can be offered for this row.</summary>
     public bool ShowPreview =>
@@ -220,6 +249,105 @@ public sealed class FileJobViewModel : ObservableObject
         private set => SetProperty(ref _detail, value);
     }
 
+    /// <summary>
+    /// Background naming is invisible by design (the row is already "完成" under a timestamp
+    /// name). This one line is its whole surface: what it is doing, or why the name stayed.
+    /// </summary>
+    public string? NamingNote
+    {
+        get => _namingNote;
+        private set
+        {
+            if (SetProperty(ref _namingNote, value))
+                OnPropertyChanged(nameof(ShowNamingNote));
+        }
+    }
+
+    public bool ShowNamingNote => !string.IsNullOrEmpty(NamingNote);
+
+    /// <summary>Sets the naming line from any thread — naming runs off the UI thread.</summary>
+    public void SetNamingNote(string? note)
+    {
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (dispatcher is null || dispatcher.CheckAccess())
+            NamingNote = note;
+        else
+            dispatcher.Invoke(() => NamingNote = note);
+    }
+
+    /// <summary>Where this record's file stands with the netdisk; surfaced as the row chip.</summary>
+    public UploadState Upload
+    {
+        get => _upload;
+        private set
+        {
+            if (SetProperty(ref _upload, value))
+            {
+                OnPropertyChanged(nameof(UploadChipText));
+                OnPropertyChanged(nameof(UploadTip));
+                OnPropertyChanged(nameof(ShowUploadChip));
+                OnPropertyChanged(nameof(ShowUploadButton));
+                UploadCommand.RaiseCanExecuteChanged();
+            }
+        }
+    }
+
+    /// <summary>Why the upload failed, or which account it landed on — shown in the chip tooltip.</summary>
+    public string? UploadNote
+    {
+        get => _uploadNote;
+        private set
+        {
+            if (SetProperty(ref _uploadNote, value))
+                OnPropertyChanged(nameof(UploadTip));
+        }
+    }
+
+    /// <summary>「已上传」 stays on the record; a failed or in-flight upload keeps saying so.</summary>
+    public bool ShowUploadChip => State == JobState.Succeeded && Upload != UploadState.None;
+
+    /// <summary>The upload action hides once the file is in the cloud; during an upload the
+    /// button disappears too, so a second click cannot start a parallel transfer.</summary>
+    public bool ShowUploadButton =>
+        State == JobState.Succeeded && Upload is not (UploadState.Uploaded or UploadState.Uploading);
+
+    public string UploadChipText => Upload switch
+    {
+        UploadState.Uploading => "上传中…",
+        UploadState.Uploaded => "已上传",
+        UploadState.Failed => "上传失败",
+        _ => string.Empty,
+    };
+
+    public string UploadTip => UploadNote is { Length: > 0 } note
+        ? note
+        : Upload switch
+        {
+            UploadState.Uploaded => "这个文件已在网盘里",
+            UploadState.Uploading => "正在上传到网盘",
+            UploadState.Failed => "上传失败，点击重试",
+            _ => "把这个文件上传到网盘",
+        };
+
+    /// <summary>Sets the upload state from any thread — netdisk transfers run off the UI thread.</summary>
+    public void SetUploadState(UploadState state, string? note = null)
+    {
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (dispatcher is null || dispatcher.CheckAccess())
+        {
+            UploadNote = note;
+            Upload = state;
+        }
+        else
+        {
+            dispatcher.Invoke(() =>
+            {
+                UploadNote = note;
+                Upload = state;
+            });
+        }
+    }
+
     public string? OutputPath
     {
         get => _outputPath;
@@ -315,6 +443,12 @@ public sealed class FileJobViewModel : ObservableObject
 
     /// <summary>Copies a full diagnostic report of this failure to the clipboard for bug reports.</summary>
     public RelayCommand CopyErrorCommand { get; }
+
+    /// <summary>Re-runs the scan for this failed row (host handles the scanner session).</summary>
+    public RelayCommand RetryCommand { get; }
+
+    /// <summary>Sends this row's file to the netdisk (host owns the configured account).</summary>
+    public RelayCommand UploadCommand { get; }
 
     /// <summary>How many discrete items the feature acted on (watermarks removed, pages recognised…).</summary>
     public int ItemCount
@@ -431,6 +565,41 @@ public sealed class FileJobViewModel : ObservableObject
         OnPropertyChanged(nameof(InputPath));
         OnPropertyChanged(nameof(FileName));
     }
+
+    /// <summary>
+    /// Rebuilds a finished record read back from the task journal (app restart) under its original
+    /// finish time. Deliberately not <see cref="Apply"/>: that stamps <c>DateTime.Now</c> and would
+    /// make yesterday's scans look like today's.
+    /// </summary>
+    internal void Restore(
+        string inputPath, string outputPath, string summary, int itemCount, DateTime processedAt)
+    {
+        InputPath = inputPath;
+        FileName = Path.GetFileName(inputPath);
+        OnPropertyChanged(nameof(InputPath));
+        OnPropertyChanged(nameof(FileName));
+
+        ProcessedAt = processedAt;
+        State = JobState.Succeeded;
+        OutputPath = outputPath;
+        ItemCount = itemCount;
+        _resultSummary = string.IsNullOrWhiteSpace(summary) ? "已处理" : summary;
+        DisplayName = Path.GetFileName(outputPath);
+        Detail = $"{_resultSummary} → {outputPath}";
+        RefreshChipStates();
+    }
+
+    /// <summary>What lands in the task journal for this row — the fields <see cref="Restore"/>
+    /// reads back, so the two stay in lockstep.</summary>
+    internal TaskJournalEntry ToJournalEntry() => new(
+        OwnerFeatureId ?? string.Empty,
+        InputPath,
+        OutputPath ?? string.Empty,
+        _resultSummary,
+        ItemCount,
+        ProcessedAt ?? DateTime.Now,
+        Upload.ToString(),
+        UploadNote);
 
     /// <summary>Called by the coordinator after the output file was successfully moved.</summary>
     public void UpdateRenamed(string newPath)

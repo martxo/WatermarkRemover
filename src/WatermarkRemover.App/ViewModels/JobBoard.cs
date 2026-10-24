@@ -112,6 +112,24 @@ public sealed class JobBoard : ObservableObject
     /// <summary>Starts a new batch: the completion tally resets with the first files.</summary>
     public void ResetCompleted() => CompletedCount = 0;
 
+    /// <summary>
+    /// Re-adds records read back from the task journal at startup. They are appended oldest first
+    /// (so the newest record still ends up on top) and counted, so the footer matches the list
+    /// instead of claiming zero finished files above a full one.
+    /// </summary>
+    public void Restore(IReadOnlyList<FileJobViewModel> jobs)
+    {
+        ArgumentNullException.ThrowIfNull(jobs);
+
+        foreach (var job in jobs)
+            Jobs.Add(job);
+
+        if (jobs.Count == 0) return;
+
+        CompletedCount = jobs.Count;
+        RefreshCounters();
+    }
+
     /// <summary>Drops an in-progress placeholder row without touching any file.</summary>
     public void Remove(FileJobViewModel job)
     {
@@ -173,9 +191,17 @@ public sealed class JobBoard : ObservableObject
         if (parameter is not FileJobViewModel job) return;
 
         bool hasOutput = job.OutputPath is not null && File.Exists(job.OutputPath);
-        string message = hasOutput
-            ? $"确定要删除「{job.DisplayName}」吗？\n\n已生成的文件将移入回收站，源文件不受影响。"
-            : $"确定要删除「{job.FileName}」这条记录吗？";
+        // Scans and phone transfers have no original: the generated file IS the only copy, so
+        // telling the user "源文件不受影响" there is a plain lie with data-loss consequences.
+        bool onlyCopy = hasOutput && string.Equals(
+            Path.GetFullPath(job.OutputPath!), Path.GetFullPath(job.InputPath),
+            StringComparison.OrdinalIgnoreCase);
+        string message = onlyCopy
+            ? $"确定要删除「{job.DisplayName}」吗？\n\n这是扫描/接收生成的原件，没有其他副本；\n" +
+              "删除后只能从回收站找回。"
+            : hasOutput
+                ? $"确定要删除「{job.DisplayName}」吗？\n\n已生成的文件将移入回收站，源文件不受影响。"
+                : $"确定要删除「{job.FileName}」这条记录吗？";
         if (!_dialogs.Confirm(message, "删除确认")) return;
 
         try

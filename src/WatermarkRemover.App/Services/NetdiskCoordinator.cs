@@ -65,6 +65,68 @@ public sealed class NetdiskCoordinator : ObservableObject
     /// <summary>The host's busy state changed — re-evaluate the quick-upload gate.</summary>
     public void RefreshCommandState() => QuickUploadCommand.RaiseCanExecuteChanged();
 
+    /// <summary>True when an account is configured — gates the row and batch upload entry points.</summary>
+    public bool HasAccounts => Accounts.Count > 0;
+
+    /// <summary>Account every picker-free upload targets (the first one configured).</summary>
+    public string PrimaryAccountName => Accounts.Count > 0 ? Accounts[0].Name : string.Empty;
+
+    /// <summary>
+    /// Uploads already-produced files to the first account's root without a file picker — this is
+    /// what the job rows call. One error entry per failed path; an empty list means everything
+    /// landed. Never throws: the row chip needs a result, not an exception.
+    /// </summary>
+    public async Task<IReadOnlyList<(string Path, string Error)>> UploadFilesAsync(IReadOnlyList<string> files)
+    {
+        ArgumentNullException.ThrowIfNull(files);
+        if (files.Count == 0) return Array.Empty<(string, string)>();
+
+        if (!HasAccounts)
+            return files.Select(f => (f, "未配置网盘账号")).ToList();
+
+        var account = Accounts[0];
+        var provider = Catalog.All.FirstOrDefault(p => p.Id == account.ProviderId);
+        if (provider is null)
+            return files.Select(f => (f, $"未找到网盘产品「{account.ProviderId}」")).ToList();
+
+        var failures = new List<(string Path, string Error)>();
+        SummaryText = $"正在上传 {files.Count} 个文件到「{account.Name}」…";
+        try
+        {
+            await using var session = await provider.ConnectAsync(account.ToCredentials());
+            foreach (string path in files)
+            {
+                try
+                {
+                    await session.UploadAsync(string.Empty, path);
+                    AppLog.Trace($"网盘上传：{path}", null);
+                }
+                catch (Exception ex)
+                {
+                    AppLog.Trace($"网盘上传失败：{path}（{ex.Message}）", ex);
+                    failures.Add((path, ex.Message));
+                }
+            }
+
+            // Tokens may have rotated during the upload — write the latest bag back.
+            Upsert(new NetdiskAccountState(
+                account.ProviderId, account.Name, session.CurrentCredentials.Values));
+            SummaryText = failures.Count == 0
+                ? $"已上传 {files.Count} 个文件到「{account.Name}」（{provider.DisplayName}）。"
+                : $"已上传 {files.Count - failures.Count}/{files.Count} 个文件，" +
+                  $"{failures.Count} 个失败（「{account.Name}」）。";
+        }
+        catch (Exception ex)
+        {
+            // The connection itself failed: every file in this batch carries the same reason.
+            AppLog.Trace($"网盘上传失败：{ex.Message}", ex);
+            SummaryText = $"上传失败：{ex.Message}";
+            return files.Select(f => (f, ex.Message)).ToList();
+        }
+
+        return failures;
+    }
+
     /// <summary>Inserts or replaces the account with the same product + name, then persists.</summary>
     public void Upsert(NetdiskAccountState account)
     {

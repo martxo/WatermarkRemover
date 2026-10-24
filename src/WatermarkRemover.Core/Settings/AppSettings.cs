@@ -71,6 +71,10 @@ public sealed class AppSettings
     /// <summary>Scan page layout (扫描页): 0 = 单面, 1 = 双面长边, 2 = 双面短边.</summary>
     public int ScanDuplex { get; set; }
 
+    /// <summary>连续扫描: re-arm the scanner as soon as one document lands. Batch work is dozens
+    /// of documents a day, so the mode is remembered rather than re-checked every launch.</summary>
+    public bool ContinuousScan { get; set; }
+
     /// <summary>Scan colour mode (扫描色彩): 0 = 自动, 1 = 彩色, 2 = 灰度, 3 = 黑白. Defaults to
     /// 黑白 — text documents scan ~2x faster and produce far smaller, crisper PDFs.</summary>
     public int ScanColor { get; set; } = 3;
@@ -103,6 +107,7 @@ public sealed class AppSettings
         PreferredOcrEngine = PreferredOcrEngine,
         PreferredLayoutStage = PreferredLayoutStage,
         ScanDuplex = ScanDuplex,
+        ContinuousScan = ContinuousScan,
         ScanColor = ScanColor,
         ScanOutputDirectory = ScanOutputDirectory,
         TransferOutputDirectory = TransferOutputDirectory,

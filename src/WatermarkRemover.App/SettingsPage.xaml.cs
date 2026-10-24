@@ -140,6 +140,16 @@ public partial class SettingsPage : UserControl
     {
         if (ViewModel is not { } vm || Window.GetWindow(this) is not { } window) return;
 
+        // An update restarts the app. Doing that under a running scan or batch throws the work
+        // away, so the check simply waits until the app is idle.
+        if (Main is { } host && (host.IsBusy || host.IsScanning))
+        {
+            Services.DialogService.Default.Warn(
+                "正在扫描或处理文件，完成后再检查更新。\n\n安装更新会重启程序，进行中的任务会丢失。",
+                "软件更新");
+            return;
+        }
+
         CheckUpdateButton.IsEnabled = false;
         CheckUpdateButton.Content = "检查中…";
         try

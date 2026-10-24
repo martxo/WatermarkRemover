@@ -233,10 +233,15 @@
                              Content="双面短边" Margin="0,0,0,0"
                              VerticalContentAlignment="Center"
                              IsChecked="{Binding IsScanDuplexShortEdge, Mode=TwoWay}"/>
+                <CheckBox Content="连续扫描"
+                          IsChecked="{Binding ContinuousScan, Mode=TwoWay}"
+                          VerticalAlignment="Center"
+                          Margin="20,0,0,0"
+                          ToolTip="每份完成后自动开始下一份；纸盒空了会自动结束"/>
                 <Button Content="开始扫描"
                         Style="{StaticResource PrimaryButton}"
                         Command="{Binding ScanCommand}"
-                        MinWidth="110" Margin="24,0,0,0"/>
+                        MinWidth="110" Margin="16,0,0,0"/>
                 <Button Content="取消扫描"
                         Style="{StaticResource SmallButton}"
                         Command="{Binding CancelScanCommand}"
@@ -1208,6 +1213,15 @@
                                                 </TextBlock.Style>
                                             </TextBlock>
                                         </Grid>
+
+                                        <!-- background naming: what it is doing, or why the
+                                             timestamp name stayed — otherwise it is invisible -->
+                                        <TextBlock Text="{Binding NamingNote}"
+                                                   FontSize="12"
+                                                   Foreground="{StaticResource TextSecondaryBrush}"
+                                                   Margin="0,3,0,0"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   Visibility="{Binding ShowNamingNote, Converter={StaticResource BoolToVis}}"/>
                                     </StackPanel>
 
                                     <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
@@ -1250,6 +1264,16 @@
                                             </TextBlock>
                                         </Border>
 
+                                        <!-- failed scan rows: one click re-runs the scanner instead of
+                                             making the user find the scan button again -->
+                                        <Button Style="{StaticResource SmallButton}"
+                                                Content="重新扫描"
+                                                Padding="10,3"
+                                                Margin="0,0,8,0"
+                                                Visibility="{Binding ShowRetry, Converter={StaticResource BoolToVis}}"
+                                                Command="{Binding RetryCommand}"
+                                                ToolTip="用相同的扫描设置再扫一份"/>
+
                                         <!-- failed rows only: copy a full diagnostic report for bug reports -->
                                         <Button Style="{StaticResource RowCopyErrorButton}"
                                                 Margin="0,0,8,0"
@@ -1267,10 +1291,42 @@
                                                 CommandParameter="{Binding}"
                                                 ToolTip="在记录下方展开缩略图，点击缩略图可放大；右上角旋转即存"/>
 
+                                        <!-- netdisk upload state: 「已上传」 stays on the record;
+                                             a failed/in-flight upload keeps saying so in its own color -->
+                                        <TextBlock Text="{Binding UploadChipText}"
+                                                   FontSize="12" FontWeight="SemiBold"
+                                                   VerticalAlignment="Center"
+                                                   Margin="0,0,8,0"
+                                                   ToolTip="{Binding UploadTip}"
+                                                   Visibility="{Binding ShowUploadChip, Converter={StaticResource BoolToVis}}">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding Upload}" Value="Uploaded">
+                                                            <Setter Property="Foreground" Value="{StaticResource SuccessBrush}"/>
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding Upload}" Value="Failed">
+                                                            <Setter Property="Foreground" Value="{StaticResource DangerBrush}"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+
+                                        <!-- finished rows: one click sends the file to the configured netdisk -->
+                                        <Button Style="{StaticResource SmallButton}"
+                                                Content="上传"
+                                                Padding="10,3"
+                                                Margin="0,0,8,0"
+                                                Visibility="{Binding ShowUploadButton, Converter={StaticResource BoolToVis}}"
+                                                Command="{Binding UploadCommand}"
+                                                ToolTip="{Binding UploadTip}"/>
+
                                         <Button Style="{StaticResource RowDeleteButton}"
                                                 Command="{Binding DataContext.Board.DeleteCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                                 CommandParameter="{Binding}"
-                                                ToolTip="删除这条记录，已生成的文件移入回收站（源文件保留）"/>
+                                                ToolTip="删除这条记录；已生成的文件移入回收站"/>
                                     </StackPanel>
                                 </Grid>
 
@@ -1494,10 +1550,19 @@
                     </Style>
                 </TextBlock.Style>
             </TextBlock>
-            <Button Content="清空列表"
-                    Style="{StaticResource GhostButton}"
-                    HorizontalAlignment="Right"
-                    Command="{Binding Board.ClearCommand}"/>
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                <!-- batch upload: every finished, not-yet-uploaded record of this page in one go.
+                     Hidden without a configured account — the row button says why when clicked. -->
+                <Button Content="上传到网盘"
+                        Style="{StaticResource GhostButton}"
+                        Margin="0,0,8,0"
+                        Command="{Binding UploadVisibleCommand}"
+                        Visibility="{Binding CanUploadBatch, Converter={StaticResource BoolToVis}}"
+                        ToolTip="{Binding UploadBatchHint}"/>
+                <Button Content="清空列表"
+                        Style="{StaticResource GhostButton}"
+                        Command="{Binding Board.ClearCommand}"/>
+            </StackPanel>
         </Grid>
             </Grid>
         </Border>

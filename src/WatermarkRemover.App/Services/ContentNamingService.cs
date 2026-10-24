@@ -58,6 +58,46 @@ public sealed class ContentNamingService
     }
 
     /// <summary>
+    /// The same content naming scans get, applied to a file that arrived from a phone. PDFs go
+    /// through the page probe; images go through the single-image probe, so a photo of a document
+    /// lands under its recognised name instead of 「IMG_2031.jpg」. Anything else keeps its name —
+    /// and every failure keeps the received name too, never losing the file.
+    /// </summary>
+    public async Task<string> TryRenameReceivedAsync(string path)
+    {
+        if (!_settings.AutoNameByContent) return path;
+
+        string extension = Path.GetExtension(path).ToLowerInvariant();
+        try
+        {
+            if (extension == ".pdf")
+                return await TryRenameAsync(path).ConfigureAwait(true);
+
+            if (extension is ".jpg" or ".jpeg" or ".png" or ".bmp" or ".webp")
+            {
+                long length = new FileInfo(path).Length;
+                if (length == 0 || length > MaxReceivedImageBytes) return path;
+
+                byte[] image = await File.ReadAllBytesAsync(path).ConfigureAwait(true);
+                AutoNameResult? suggestion = await TrySuggestFromImageAsync(image).ConfigureAwait(true);
+                return suggestion is null
+                    ? path
+                    : await ApplyAsync(path, suggestion).ConfigureAwait(true);
+            }
+        }
+        catch (Exception ex)
+        {
+            AppLog.Trace("命名：接收文件自动命名异常，保留原文件名", ex);
+        }
+
+        return path;
+    }
+
+    /// <summary>Cap on an image loaded whole for naming — phone originals are a few MB; anything
+    /// far larger is not a document photo and must not be pulled into memory.</summary>
+    private const long MaxReceivedImageBytes = 50L * 1024 * 1024;
+
+    /// <summary>
     /// Suggests a name by probing the PDF's pages (one page, or up to four when the settings allow
     /// it). Returns null when nothing was recognised; never throws for expected failures.
     /// </summary>
