@@ -226,8 +226,8 @@ public partial class MainWindow : Window
     {
         var dialog = new OpenFileDialog
         {
-            Title = "选择 PDF 文件",
-            Filter = "PDF 文件 (*.pdf)|*.pdf",
+            Title = _viewModel.FilePickerTitle,
+            Filter = _viewModel.FilePickerFilter,
             Multiselect = true,
         };
 

@@ -68,12 +68,52 @@ public class OcrFeatureTests : IDisposable
     }
 
     [Fact]
-    public void CanHandle_only_accepts_pdf_files()
+    public void CanHandle_accepts_pdf_only_without_an_image_loader()
     {
         var feature = new OcrFeature(new FakeRenderer(0), new FakeEngine(Array.Empty<string>()));
 
         Assert.True(feature.CanHandle("C:\\a\\doc.PDF"));
-        Assert.False(feature.CanHandle("C:\\a\\doc.jpg"));
+        Assert.False(feature.CanHandle("C:\\a\\doc.jpg")); // no loader = cannot read images
+        Assert.Equal(new[] { ".pdf" }, feature.InputExtensions);
+    }
+
+    [Fact]
+    public void Images_are_accepted_and_the_picker_offers_them_when_a_loader_is_wired()
+    {
+        var feature = new OcrFeature(
+            new FakeRenderer(0), new FakeEngine(Array.Empty<string>()),
+            imageLoader: _ => new byte[] { 0x89 });
+
+        Assert.True(feature.CanHandle("C:\\a\\照片.JPG"));
+        Assert.True(feature.CanHandle("C:\\a\\照片.png"));
+        Assert.True(feature.CanHandle("C:\\a\\doc.pdf"));
+        Assert.False(feature.CanHandle("C:\\a\\notes.txt"));
+        Assert.Contains(".jpg", feature.InputExtensions);
+        Assert.Contains(".pdf", feature.InputExtensions);
+    }
+
+    [Fact]
+    public void An_image_is_recognised_without_rendering_a_pdf_page()
+    {
+        var renderer = new FakeRenderer(9);
+        var loaded = new List<string>();
+        var feature = new OcrFeature(
+            renderer, new FakeEngine(new[] { "照片里的字" }),
+            imageLoader: path =>
+            {
+                loaded.Add(path);
+                return new byte[] { 0x89, 0x50 };
+            });
+        string input = Path.Combine(_dir, "photo.jpg");
+        File.WriteAllBytes(input, new byte[] { 0xFF, 0xD8 });
+
+        FeatureResult result = feature.Run(input, FeatureContext.Capture(new AppSettings()));
+
+        Assert.Equal(FeatureStatus.Succeeded, result.Status);
+        Assert.Equal(0, renderer.Calls); // the PDF channel was never touched
+        Assert.Equal(new[] { input }, loaded);
+        Assert.EndsWith("_ocr.txt", Path.GetFileName(result.OutputPath));
+        Assert.Contains("照片里的字", File.ReadAllText(result.OutputPath!, Encoding.UTF8));
     }
 
     [Fact]

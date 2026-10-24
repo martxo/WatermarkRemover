@@ -65,7 +65,8 @@ public sealed class MainViewModel : ObservableObject
             SharedOcrEngine,
             orientPage: image => new PdfOrientationDetector(SharedOcrEngine).OrientAsync(image),
             trace: AppLog.Trace),
-        new OcrFeature(SharedPdfRenderer, SharedOcrEngine, trace: AppLog.Trace),
+        new OcrFeature(SharedPdfRenderer, SharedOcrEngine, trace: AppLog.Trace,
+            imageLoader: ImageOcrInput.LoadAsOcrPng),
         new NetdiskFeature(),
         new LanTransferFeature(),
     });
@@ -389,6 +390,8 @@ public sealed class MainViewModel : ObservableObject
     {
         Board.SetSection(_selectedFeature.Id, _selectedFeature.DisplayName);
         OnPropertyChanged(nameof(DropHint));
+        OnPropertyChanged(nameof(FilePickerFilter));
+        OnPropertyChanged(nameof(FilePickerTitle));
         // Each section owns its own upload batch: the footer button follows the page.
         OnPropertyChanged(nameof(CanUploadBatch));
         OnPropertyChanged(nameof(UploadBatchHint));
@@ -428,6 +431,25 @@ public sealed class MainViewModel : ObservableObject
     /// may contain some (expanded one level deep on drop).</summary>
     public bool CanAcceptPath(string path) =>
         Directory.Exists(path) || SelectedFeature.CanHandle(path);
+
+    /// <summary>Open-file dialog filter built from what the current feature accepts, so the
+    /// picker never offers a format the page would reject (OCR takes photos, watermark does not).</summary>
+    public string FilePickerFilter
+    {
+        get
+        {
+            IReadOnlyList<string> extensions = SelectedFeature.InputExtensions;
+            if (extensions.Count == 0) return "PDF 文件 (*.pdf)|*.pdf";
+
+            string patterns = string.Join(";", extensions.Select(extension => "*" + extension));
+            string label = extensions.Count > 1 ? "支持的文件" : "PDF 文件";
+            return $"{label} ({patterns})|{patterns}";
+        }
+    }
+
+    /// <summary>Dialog title matching the filter width.</summary>
+    public string FilePickerTitle =>
+        SelectedFeature.InputExtensions.Count > 1 ? "选择文件" : "选择 PDF 文件";
 
     /// <summary>Called by the view on every drag heartbeat. Null = the payload carries no files
     /// at all; otherwise accept when any file matches the selected feature's CanHandle.</summary>

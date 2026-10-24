@@ -55,6 +55,8 @@ public sealed class WatermarkFeature : IFeature
     public bool CanHandle(string filePath) =>
         string.Equals(Path.GetExtension(filePath), ".pdf", StringComparison.OrdinalIgnoreCase);
 
+    public IReadOnlyList<string> InputExtensions => new[] { ".pdf" };
+
     public FeatureResult Run(string inputPath, FeatureContext context)
     {
         ArgumentNullException.ThrowIfNull(context);
