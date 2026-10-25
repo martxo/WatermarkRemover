@@ -28,7 +28,9 @@ public class WatermarkFeatureTests : IDisposable
 
     /// <summary>Naming-enabled feature: stub renderer + stub engine, and an orient delegate that
     /// counts its calls so the tests can pin the "pay for straightening only when starved"
-    /// contract (v1.15.34: naming used to orient EVERY page, which users read as a slowdown).</summary>
+    /// contract (v1.15.34: naming used to orient EVERY page, which users read as a slowdown).
+    /// The delegate returns fresh non-empty bytes — what the real detector does when it applies a
+    /// turn — so the retry-OCR ladder is exercised. A no-turn pass is a separate test.</summary>
     private (WatermarkFeature Feature, StubOcrEngine Engine, StubPageRenderer Renderer) CreateNamingFeature(
         AppSettings? settings = null)
     {
@@ -41,7 +43,7 @@ public class WatermarkFeatureTests : IDisposable
             orientPage: page =>
             {
                 renderer.OrientCalls++;
-                return Task.FromResult(page);
+                return Task.FromResult(new byte[] { 0x01 });
             });
         return (feature, engine, renderer);
     }
@@ -152,6 +154,34 @@ public class WatermarkFeatureTests : IDisposable
         Assert.Equal(1, renderer.OrientCalls);
         Assert.Equal(FeatureStatus.NoChange, result.Status);
         Assert.Null(result.OutputPath);
+    }
+
+    [Fact]
+    public void Naming_skips_the_retry_when_straightening_finds_nothing_to_turn()
+    {
+        // A blank or already-upright starved page comes back unchanged from the detector; OCRing
+        // the identical pixels again only burned time (the scanner's "空白页也在识别" report).
+        string input = WriteInput(PdfFixture.CamScannerLike().WithContent("q Q\n").Build(), "starved-upright.pdf");
+        var engine = new StubOcrEngine { Lines = Array.Empty<string>() };
+        int orientCalls = 0;
+        var feature = new WatermarkFeature(
+            new PdfDocumentSource(),
+            new IWatermarkStrategy[] { new BottomRightBadgeStrategy() },
+            new StubPageRenderer(), engine,
+            orientPage: page =>
+            {
+                orientCalls++;
+                return Task.FromResult(page); // same reference = no turn applied
+            });
+
+        var stages = new List<string>();
+        var result = feature.Run(input, FeatureContext.Capture(
+            new AppSettings { AutoNameByContent = true }, (_, stage) => stages.Add(stage)));
+
+        Assert.Equal(1, orientCalls);
+        Assert.Contains("正在检查页面朝向…", stages);
+        Assert.DoesNotContain("正在重新识别文字…", stages);
+        Assert.Equal(FeatureStatus.NoChange, result.Status);
     }
 
     [Fact]

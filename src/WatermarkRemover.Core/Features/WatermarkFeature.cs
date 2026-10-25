@@ -113,6 +113,14 @@ public sealed class WatermarkFeature : IFeature
             // （与扫描命名链 ContentNamingService 同一条摆正实现）。
             stage("正在检查页面朝向…");
             byte[] upright = _orientPage(page).GetAwaiter().GetResult();
+            // No turn applied (already upright, or a blank page the detector refuses to judge):
+            // the retry would OCR the identical pixels again, so skip it. Sideways pages still
+            // get their second reading because the detector returns turned bytes.
+            if (ReferenceEquals(upright, page))
+            {
+                _trace?.Invoke("命名：无需摆正，跳过重复识别", null);
+                return null;
+            }
             stage("正在重新识别文字…");
             var retry = _namingEngine.RecognizeBoundedOrDefaultAsync(upright).GetAwaiter().GetResult();
             _trace?.Invoke(

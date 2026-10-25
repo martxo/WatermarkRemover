@@ -213,6 +213,16 @@ public sealed class ContentNamingService
     private async Task<AutoNameResult?> SuggestFromPageAsync(
         byte[] image, int pageIndex, int pageCount, OperationScope op)
     {
+        // A blank page cannot name anything, but it used to pay the orientation vote (four OCR
+        // passes) plus a full-page OCR — the slow "空白页也在识别" the scanner reported. The pixel
+        // verdict is cheap and lets the next probe page start immediately.
+        if (Scan.BlankPageDetector.IsBlank(image))
+        {
+            AppLog.Trace($"命名：第 {pageIndex + 1}/{pageCount} 页为空白页，跳过识别", null);
+            op.Step($"第 {pageIndex + 1}/{pageCount} 页空白", "跳过");
+            return null;
+        }
+
         // 摆正后再识别：ADF 躺倒页在方向检测完成前就进命名链会取错字（横版画布守卫不受影响）。
         image = await new PdfOrientationDetector(_ocr).OrientAsync(image).ConfigureAwait(true);
         AppLog.Trace($"命名：第 {pageIndex + 1}/{pageCount} 页渲染 {image.Length / 1024} KB", null);

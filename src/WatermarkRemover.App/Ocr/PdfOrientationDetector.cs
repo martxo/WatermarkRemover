@@ -46,6 +46,11 @@ public sealed class PdfOrientationDetector
     /// </summary>
     public async Task<int?> DetectClockwiseStepsAsync(byte[] pagePng, CancellationToken cancellationToken = default)
     {
+        // A blank sheet has no direction to vote on, yet the vote would still pay up to four OCR
+        // passes for it. Blank backs are common in duplex scans and blank first pages were making
+        // naming spend its whole budget on an empty page; the pixel check costs milliseconds.
+        if (Scan.BlankPageDetector.IsBlank(pagePng)) return 0;
+
         // Landscape pages are meant to be read sideways. 表格型横版文件（征信/流水）的竖列识别框
         // 会把几何通道骗成 "sideways" 并强转竖向 — never auto-turn a page that is wider than tall.
         using (var probe = SkiaSharp.SKBitmap.Decode(pagePng))

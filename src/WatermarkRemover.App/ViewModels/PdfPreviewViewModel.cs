@@ -1121,6 +1121,9 @@ public sealed class PdfPreviewViewModel : ObservableObject
             byte[] pagePng = await GetPageBytesAsync(index, OrientationDpi, priority: true).ConfigureAwait(true);
             if (IsCancelled) return;
             probed.Add(index);
+            // Blank inserted sheets (a misfeed, or the back of a single-sided insert) have no
+            // direction to vote on; the pixel check keeps them from paying four OCR passes.
+            if (await Task.Run(() => BlankPageDetector.IsBlank(pagePng)).ConfigureAwait(true)) continue;
             int? steps = await Task.Run(() => detector.DetectClockwiseStepsAsync(pagePng, _cancellationToken)).ConfigureAwait(true);
             if (IsCancelled || steps is null) return; // unusable OCR: keep the pages as scanned
             if (steps != 0) turns.Add((index, steps.Value));

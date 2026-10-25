@@ -1,3 +1,4 @@
+using SkiaSharp;
 using WatermarkRemover.App.Ocr;
 using WatermarkRemover.App.Services;
 using WatermarkRemover.Core.Features.Naming;
@@ -61,6 +62,28 @@ public sealed class ContentNamingServiceTests : IDisposable
         Assert.True(File.Exists(moved));
         Assert.False(File.Exists(source));
         Assert.True(File.Exists(occupied), "the existing file must never be overwritten");
+    }
+
+    /// <summary>A genuinely blank sheet: white, ink-free pixels.</summary>
+    private static byte[] WhitePng(int width, int height)
+    {
+        var info = new SKImageInfo(width, height, SKColorType.Bgra8888, SKAlphaType.Premul);
+        using var bitmap = new SKBitmap(info);
+        using (var canvas = new SKCanvas(bitmap))
+            canvas.Clear(SKColors.White);
+        using var image = SKImage.FromBitmap(bitmap);
+        using var data = image.Encode(SKEncodedImageFormat.Png, 100);
+        return data.ToArray();
+    }
+
+    [Fact]
+    public async Task A_blank_page_is_never_sent_to_ocr()
+    {
+        var service = Create(new AppSettings { AutoNameByContent = true });
+
+        // NoOcr throws if reached: passing proves the pixel verdict ended the probe before any
+        // orientation vote or full-page recognition.
+        Assert.Null(await service.TrySuggestFromImageAsync(WhitePng(40, 30)));
     }
 
     [Fact]

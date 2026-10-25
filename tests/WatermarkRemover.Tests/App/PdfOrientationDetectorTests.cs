@@ -56,6 +56,18 @@ public class PdfOrientationDetectorTests
         return data.ToArray();
     }
 
+    /// <summary>A genuinely blank sheet: white ink-free pixels, unlike the transparent test PNG.</summary>
+    private static byte[] WhitePng(int width, int height)
+    {
+        var info = new SKImageInfo(width, height, SKColorType.Bgra8888, SKAlphaType.Premul);
+        using var bitmap = new SKBitmap(info);
+        using (var canvas = new SKCanvas(bitmap))
+            canvas.Clear(SKColors.White);
+        using var image = SKImage.FromBitmap(bitmap);
+        using var data = image.Encode(SKEncodedImageFormat.Png, 100);
+        return data.ToArray();
+    }
+
     /// <summary>Returns a scripted line per call — the detector queries 0°, 180° first and
     /// only then 90°/270° when the vertical pair is ambiguous, so the Nth call is the Nth
     /// queried candidate.</summary>
@@ -244,6 +256,20 @@ public class PdfOrientationDetectorTests
 
         Assert.Equal(4, ocr.Calls);
         Assert.Equal(1, steps);
+    }
+
+    [Fact]
+    public async Task A_blank_page_is_never_voted_on()
+    {
+        // Two 30-char readings would make the unguarded detector spend four OCR passes and
+        // return 0 anyway. A blank sheet has no direction, so the pixel verdict ends it first.
+        var ocr = new ScriptedOcr(30, 30);
+        var detector = new PdfOrientationDetector(ocr);
+
+        int? steps = await detector.DetectClockwiseStepsAsync(WhitePng(30, 40));
+
+        Assert.Equal(0, steps);
+        Assert.Equal(0, ocr.Calls); // not one recognition pass was paid
     }
 
     [Fact]
