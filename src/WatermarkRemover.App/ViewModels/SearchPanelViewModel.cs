@@ -27,6 +27,7 @@ public sealed class SearchPanelViewModel : ObservableObject
     private bool _isSearching;
     private bool _isAvailable;
     private bool _isInstalling;
+    private bool _availabilityChecked;
     private SearchResultItemViewModel? _selectedResult;
 
     public SearchPanelViewModel(IFileSearchProvider provider, IShellOpenService shell)
@@ -46,6 +47,7 @@ public sealed class SearchPanelViewModel : ObservableObject
 
         // The pipe is the only truth; the synchronous IsAvailable above is just an initial hint.
         if (provider is IIndexAvailability) _ = RefreshAvailabilityAsync();
+        else _availabilityChecked = true;
     }
 
     /// <summary>Live search waits for typing to settle; tests shorten it to zero.</summary>
@@ -101,20 +103,25 @@ public sealed class SearchPanelViewModel : ObservableObject
     public bool IsUnavailable => !IsAvailable;
 
     /// <summary>
-    /// The setup button is visible when the engine is missing AND when a newer sidecar is
-    /// shipped: an already-running (older) host would otherwise never be upgraded.
+    /// The setup button is visible only when the engine is missing or a newer sidecar is shipped,
+    /// and only after the first availability probe — otherwise every visit flickered a "start"
+    /// button while the automatic start was still running.
     /// </summary>
-    public bool ShowInstallButton => IsUnavailable || _setup?.NeedsUpdate == true;
+    public bool ShowInstallButton =>
+        _availabilityChecked && (IsUnavailable || _setup?.NeedsUpdate == true);
 
-    /// <summary>Text on the setup button, which is shown whenever the engine is unavailable.</summary>
+    /// <summary>
+    /// Text on the setup button. Every variant performs one UAC-authorized install/repair, so the
+    /// wording says 授权一次 — "启动索引引擎" read as a no-elevation start and misled users.
+    /// </summary>
     public string InstallButtonText
     {
         get
         {
             if (_setup is null) return "启用索引";
-            if (_setup.NeedsUpdate) return "更新索引引擎";
-            if (_setup.IsInstalled) return "启动索引引擎";
-            return "启用全盘索引（一次授权）";
+            if (_setup.NeedsUpdate) return "更新索引引擎（授权一次）";
+            if (_setup.IsInstalled) return "修复索引引擎（授权一次）";
+            return "启用全盘索引（授权一次）";
         }
     }
 
@@ -171,6 +178,7 @@ public sealed class SearchPanelViewModel : ObservableObject
         IsAvailable = _provider is IIndexAvailability availability
             ? await availability.CheckAvailableAsync(cancellationToken)
             : _provider.IsAvailable;
+        MarkAvailabilityChecked();
         if (!IsAvailable)
         {
             ReplaceResults(Array.Empty<FileSearchResult>());
@@ -262,6 +270,7 @@ public sealed class SearchPanelViewModel : ObservableObject
         {
             bool available = await availability.CheckAvailableAsync();
             IsAvailable = available;
+            MarkAvailabilityChecked();
             StatusText = available ? AvailableStatus() : UnavailableStatus();
             // Install/upgrade status is derived from the filesystem, so re-read it after a ping.
             OnPropertyChanged(nameof(InstallButtonText));
@@ -302,6 +311,14 @@ public sealed class SearchPanelViewModel : ObservableObject
         }
     }
 
+    /// <summary>First probe finished: the setup button may now appear or stay hidden.</summary>
+    private void MarkAvailabilityChecked()
+    {
+        if (_availabilityChecked) return;
+        _availabilityChecked = true;
+        OnPropertyChanged(nameof(ShowInstallButton));
+    }
+
     /// <summary>Status line while the engine answers.</summary>
     private string AvailableStatus()
     {
@@ -315,15 +332,22 @@ public sealed class SearchPanelViewModel : ObservableObject
         string counts = $"已索引 {status.Files:N0} 个文件、{status.Folders:N0} 个文件夹";
         return status.Scanning
             ? $"正在建立索引… {counts}"
-            : $"{counts} · 输入文件名即时搜索（最多 {MaxResults} 条）";
+            : $"索引引擎运行中 · 实时更新 · {counts} · 最多 {MaxResults} 条";
     }
 
-    /// <summary>Status line when the engine is absent: a setup hint, not an ad for another product.</summary>
+    /// <summary>
+    /// Status line when the engine is absent: a setup hint, not an ad for another product. The
+    /// wording separates the two things users mixed up — index DATA is always live, while the
+    /// engine PROGRAM only needs a one-time authorization when it is missing or too old.
+    /// </summary>
     private string UnavailableStatus()
     {
-        if (_setup is { NeedsUpdate: true }) return "索引引擎需要更新：点击右侧按钮授权一次";
-        if (_setup is { IsInstalled: true }) return "索引引擎未运行：点击右侧按钮启动";
-        if (_setup is not null) return $"尚未启用{ProviderName}：授权一次后开机自动运行";
+        if (_setup is { NeedsUpdate: true })
+            return "索引引擎有新版本：仅引擎程序变化时才需要授权一次，索引数据始终实时更新";
+        if (_setup is { IsInstalled: true })
+            return "索引引擎未运行：正在自动尝试启动，仍无响应可点击按钮修复";
+        if (_setup is not null)
+            return $"尚未启用{ProviderName}：授权一次后开机自动运行，实时索引本机 NTFS 磁盘";
         return $"未检测到 {ProviderName}，请安装并保持其在后台运行";
     }
 }

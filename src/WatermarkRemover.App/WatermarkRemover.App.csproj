@@ -130,7 +130,11 @@
 
   <!-- Index host publish (快速搜索): a separate self-contained single-file exe. It must run as an
        elevated logon task on its own, so it cannot share the app's bundle. Published once into
-       obj\IndexerPublish, then copied beside the app (publish tree + build tree). -->
+       obj\IndexerPublish, then copied beside the app (publish tree + build tree).
+       The sidecar keeps its OWN version on purpose: stamping it with the app version made every
+       app release look like an engine update, so the search page kept offering a UAC prompt for
+       an engine that had not changed. Bump WatermarkRemover.Indexer.csproj only when the host
+       itself changes. -->
   <Target Name="PublishFileIndexer" BeforeTargets="VerifyPublishLayout">
     <PropertyGroup>
       <_IndexerProject>..\WatermarkRemover.Indexer\WatermarkRemover.Indexer.csproj</_IndexerProject>
@@ -139,7 +143,7 @@
     <MSBuild Projects="$(_IndexerProject)" Targets="Restore"
              Properties="RuntimeIdentifier=win-x64;SelfContained=true" />
     <MSBuild Projects="$(_IndexerProject)" Targets="Publish"
-             Properties="Configuration=$(Configuration);RuntimeIdentifier=win-x64;SelfContained=true;PublishSingleFile=true;PublishDir=$(_IndexerPublishDir);Version=$(Version)" />
+             Properties="Configuration=$(Configuration);RuntimeIdentifier=win-x64;SelfContained=true;PublishSingleFile=true;PublishDir=$(_IndexerPublishDir)" />
     <ItemGroup>
       <_IndexerExe Include="$(_IndexerPublishDir)WatermarkRemover.Indexer.exe" />
     </ItemGroup>

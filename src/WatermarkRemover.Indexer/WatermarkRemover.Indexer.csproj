@@ -7,9 +7,10 @@
     <Nullable>enable</Nullable>
     <AssemblyName>WatermarkRemover.Indexer</AssemblyName>
     <RootNamespace>WatermarkRemover.Indexer</RootNamespace>
-    <!-- Fallback for a standalone build; PublishFileIndexer in the App passes the app's Version so
-         the sidecar always matches the release and NeedsUpdate can see sidecar↔installed drift. -->
-    <Version>1.16.7</Version>
+    <!-- The host carries its OWN version, independent of the app: NeedsUpdate must fire only when
+         the engine itself changed, not on every app release. Bump this when the indexing host
+         (not the app) changes. -->
+    <Version>1.16.23</Version>
     <!-- No console window: this runs as a hidden logon task and as the elevated installer.
          Hosted by the app as a sidecar beside WatermarkRemover.exe. -->
     <InvariantGlobalization>true</InvariantGlobalization>

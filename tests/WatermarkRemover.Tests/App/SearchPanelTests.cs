@@ -44,7 +44,7 @@ public class SearchPanelTests
         }
     }
 
-    private sealed class UpdatableProvider : IFileSearchProvider, IIndexAvailability, IIndexSetup
+    private sealed class UpdatableProvider(bool needsUpdate = true) : IFileSearchProvider, IIndexAvailability, IIndexSetup
     {
         public string DisplayName => "内置索引";
 
@@ -52,7 +52,7 @@ public class SearchPanelTests
 
         public bool IsInstalled => true;
 
-        public bool NeedsUpdate { get; private set; } = true;
+        public bool NeedsUpdate { get; private set; } = needsUpdate;
 
         public string InstalledVersion => "1.16.6";
 
@@ -84,13 +84,29 @@ public class SearchPanelTests
 
         Assert.True(vm.IsAvailable);
         Assert.True(vm.ShowInstallButton);
-        Assert.Equal("更新索引引擎", vm.InstallButtonText);
+        Assert.Equal("更新索引引擎（授权一次）", vm.InstallButtonText);
 
         vm.InstallProviderCommand.Execute(null);
         for (int i = 0; i < 200 && vm.ShowInstallButton; i++) await Task.Delay(10);
 
         Assert.Equal(1, provider.Installs);
         Assert.False(vm.ShowInstallButton);
+    }
+
+    [Fact]
+    public async Task A_running_up_to_date_engine_stays_button_free()
+    {
+        var provider = new UpdatableProvider(needsUpdate: false);
+        var vm = new SearchPanelViewModel(provider, new FakeShell());
+
+        vm.SearchText = "x";
+        await vm.RunSearchAsync();
+        Assert.True(vm.IsAvailable);
+        Assert.False(vm.ShowInstallButton); // no UAC button in normal use
+
+        vm.SearchText = string.Empty; // empty query shows the engine status line
+        await vm.RunSearchAsync();
+        Assert.Contains("实时更新", vm.StatusText);
     }
 
     private static (SearchPanelViewModel Vm, FakeProvider Provider, FakeShell Shell) NewPanel(bool available = true)
