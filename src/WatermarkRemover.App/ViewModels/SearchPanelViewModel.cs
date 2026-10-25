@@ -21,6 +21,8 @@ public sealed class SearchPanelViewModel : ObservableObject
     private readonly IFileSearchProvider _provider;
     private readonly IIndexSetup? _setup;
     private readonly IShellOpenService _shell;
+    private readonly IDialogService _dialogs;
+    private readonly IRecycleBinService _recycleBin;
     private CancellationTokenSource? _debounceCts;
     private string _searchText = string.Empty;
     private string _statusText = string.Empty;
@@ -30,16 +32,23 @@ public sealed class SearchPanelViewModel : ObservableObject
     private bool _availabilityChecked;
     private SearchResultItemViewModel? _selectedResult;
 
-    public SearchPanelViewModel(IFileSearchProvider provider, IShellOpenService shell)
+    public SearchPanelViewModel(
+        IFileSearchProvider provider,
+        IShellOpenService shell,
+        IDialogService? dialogs = null,
+        IRecycleBinService? recycleBin = null)
     {
         _provider = provider ?? throw new ArgumentNullException(nameof(provider));
         _shell = shell ?? throw new ArgumentNullException(nameof(shell));
+        _dialogs = dialogs ?? DialogService.Default;
+        _recycleBin = recycleBin ?? RecycleBinService.Default;
         _setup = provider as IIndexSetup;
 
         SearchCommand = new RelayCommand(() => _ = RunSearchAsync(), () => !IsSearching);
         OpenCommand = new RelayCommand(() => OpenSelected(SelectedResult), () => SelectedResult is not null);
         OpenFolderCommand = new RelayCommand(RevealSelected, () => SelectedResult is not null);
         CopyPathCommand = new RelayCommand(CopySelectedPath, () => SelectedResult is not null);
+        DeleteCommand = new RelayCommand(DeleteSelected, () => SelectedResult is not null);
         InstallProviderCommand = new RelayCommand(() => _ = InstallAsync(), () => !IsInstalling);
 
         _isAvailable = _provider.IsAvailable;
@@ -62,6 +71,8 @@ public sealed class SearchPanelViewModel : ObservableObject
     public RelayCommand OpenFolderCommand { get; }
 
     public RelayCommand CopyPathCommand { get; }
+
+    public RelayCommand DeleteCommand { get; }
 
     public RelayCommand InstallProviderCommand { get; }
 
@@ -260,6 +271,32 @@ public sealed class SearchPanelViewModel : ObservableObject
         {
             StatusText = "复制失败：" + ex.Message;
         }
+    }
+
+    /// <summary>
+    /// Removes a hit from the list by sending it to the Recycle Bin. Confirm first — the button
+    /// sits next to 打开 and a folder takes its whole contents with it. The index host sees the
+    /// delete through the USN journal within a second, so no local re-scan is needed.
+    /// </summary>
+    private void DeleteSelected()
+    {
+        if (SelectedResult is null) return;
+        var row = SelectedResult;
+
+        string detail = row.IsFolder
+            ? $"文件夹「{row.Name}」及其中的所有内容都会被移到回收站，之后可在回收站还原。"
+            : $"文件「{row.Name}」会被移到回收站，之后可在回收站还原。";
+        if (!_dialogs.ConfirmYesNo(detail, "移到回收站")) return;
+
+        if (!_recycleBin.TryDelete(row.FullPath, row.IsFolder, out string? error))
+        {
+            StatusText = "删除失败：" + error;
+            return;
+        }
+
+        Results.Remove(row);
+        SelectedResult = null;
+        StatusText = $"已移到回收站：{row.Name}";
     }
 
     private async Task RefreshAvailabilityAsync()

@@ -159,7 +159,8 @@ public sealed class MainViewModel : ObservableObject
         // --- 快速搜索 ---
         // The page asks the local index host over a named pipe. The index itself lives in a
         // privileged background process, so this app never needs elevation to search.
-        Search = new SearchPanelViewModel(new IndexServiceSearchProvider(), _shell);
+        Search = new SearchPanelViewModel(
+            new IndexServiceSearchProvider(), _shell, DialogService.Default, RecycleBinService.Default);
 
         // Last, once every service the restored rows talk to (netdisk accounts included) exists.
         RestoreJournal();

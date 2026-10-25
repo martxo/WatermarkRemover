@@ -44,6 +44,52 @@ public class SearchPanelTests
         }
     }
 
+    private sealed class FakeDialogs : IDialogService
+    {
+        public bool Answer { get; set; } = true;
+
+        public List<string> Confirms { get; } = new();
+
+        public bool Confirm(string message, string title)
+        {
+            Confirms.Add(message);
+            return Answer;
+        }
+
+        public bool ConfirmYesNo(string message, string title)
+        {
+            Confirms.Add(message);
+            return Answer;
+        }
+
+        public void Info(string message, string title) { }
+
+        public void Warn(string message, string title) { }
+
+        public void Error(string message, string title) { }
+    }
+
+    private sealed class FakeRecycleBin : IRecycleBinService
+    {
+        public List<(string Path, bool IsDirectory)> Deleted { get; } = new();
+
+        /// <summary>Non-null makes every delete fail with this message (locked file, bad share).</summary>
+        public string? Failure { get; set; }
+
+        public bool TryDelete(string path, bool isDirectory, out string? error)
+        {
+            if (Failure is not null)
+            {
+                error = Failure;
+                return false;
+            }
+
+            Deleted.Add((path, isDirectory));
+            error = null;
+            return true;
+        }
+    }
+
     private sealed class UpdatableProvider(bool needsUpdate = true) : IFileSearchProvider, IIndexAvailability, IIndexSetup
     {
         public string DisplayName => "内置索引";
@@ -175,6 +221,68 @@ public class SearchPanelTests
     }
 
     [Fact]
+    public async Task Deleting_a_hit_asks_first_and_removes_the_row()
+    {
+        var provider = new FakeProvider();
+        provider.Results.Add(new FileSearchResult(@"C:\photos\a.png", false, 10, null));
+        var dialogs = new FakeDialogs();
+        var bin = new FakeRecycleBin();
+        var vm = new SearchPanelViewModel(provider, new FakeShell(), dialogs, bin);
+
+        vm.SearchText = "a";
+        await vm.RunSearchAsync();
+        vm.SelectedResult = vm.Results[0];
+
+        vm.DeleteCommand.Execute(null);
+
+        Assert.Single(dialogs.Confirms);
+        Assert.Contains("回收站", dialogs.Confirms[0]);
+        Assert.Equal((@"C:\photos\a.png", false), bin.Deleted[0]);
+        Assert.Empty(vm.Results);
+        Assert.Null(vm.SelectedResult);
+        Assert.Equal("已移到回收站：a.png", vm.StatusText);
+    }
+
+    [Fact]
+    public async Task A_declined_delete_keeps_the_row_and_touches_nothing()
+    {
+        var provider = new FakeProvider();
+        provider.Results.Add(new FileSearchResult(@"C:\photos\a.png", false, 10, null));
+        var dialogs = new FakeDialogs { Answer = false };
+        var bin = new FakeRecycleBin();
+        var vm = new SearchPanelViewModel(provider, new FakeShell(), dialogs, bin);
+
+        vm.SearchText = "a";
+        await vm.RunSearchAsync();
+        vm.SelectedResult = vm.Results[0];
+
+        vm.DeleteCommand.Execute(null);
+
+        Assert.Single(dialogs.Confirms);
+        Assert.Empty(bin.Deleted);
+        Assert.Single(vm.Results);
+        Assert.NotNull(vm.SelectedResult);
+    }
+
+    [Fact]
+    public async Task A_failed_delete_keeps_the_row_and_reports_the_reason()
+    {
+        var provider = new FakeProvider();
+        provider.Results.Add(new FileSearchResult(@"C:\photos", true, 0, null));
+        var bin = new FakeRecycleBin { Failure = "拒绝访问。" };
+        var vm = new SearchPanelViewModel(provider, new FakeShell(), new FakeDialogs(), bin);
+
+        vm.SearchText = "photos";
+        await vm.RunSearchAsync();
+        vm.SelectedResult = vm.Results[0];
+
+        vm.DeleteCommand.Execute(null);
+
+        Assert.Equal("删除失败：拒绝访问。", vm.StatusText);
+        Assert.Single(vm.Results);
+    }
+
+    [Fact]
     public async Task Typing_searches_after_the_debounce_without_enter()
     {
         var (vm, provider, _) = NewPanel();
@@ -198,11 +306,13 @@ public class SearchPanelTests
 
         Assert.False(vm.OpenCommand.CanExecute(null));
         Assert.False(vm.OpenFolderCommand.CanExecute(null));
+        Assert.False(vm.DeleteCommand.CanExecute(null));
 
         vm.SelectedResult = vm.Results[0];
 
         Assert.True(vm.OpenCommand.CanExecute(null));
         Assert.True(vm.OpenFolderCommand.CanExecute(null));
+        Assert.True(vm.DeleteCommand.CanExecute(null));
 
         vm.OpenFolderCommand.Execute(null);
 
