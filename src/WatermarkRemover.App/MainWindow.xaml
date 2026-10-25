@@ -1172,15 +1172,21 @@
                                             </Grid.ColumnDefinitions>
 
                                             <TextBlock Grid.Column="0"
-                                                       Text="{Binding Detail}"
+                                                       Text="{Binding StatusLine}"
                                                        FontSize="12"
-                                                       Foreground="{StaticResource TextSecondaryBrush}"
                                                        TextTrimming="CharacterEllipsis">
                                                 <TextBlock.Style>
                                                     <Style TargetType="TextBlock">
+                                                        <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}"/>
                                                         <Setter Property="Cursor" Value="Hand"/>
                                                         <Setter Property="ToolTip" Value="点击打开文件所在位置"/>
                                                         <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding State}" Value="Processing">
+                                                                <Setter Property="Foreground" Value="{StaticResource AccentBrush}"/>
+                                                            </DataTrigger>
+                                                            <DataTrigger Binding="{Binding State}" Value="Failed">
+                                                                <Setter Property="Foreground" Value="{StaticResource DangerBrush}"/>
+                                                            </DataTrigger>
                                                             <DataTrigger Binding="{Binding OutputPath}" Value="{x:Null}">
                                                                 <Setter Property="Cursor" Value="Arrow"/>
                                                                 <Setter Property="ToolTip" Value="还没有输出文件，完成后可点击打开"/>
@@ -1213,57 +1219,9 @@
                                                 </TextBlock.Style>
                                             </TextBlock>
                                         </Grid>
-
-                                        <!-- background naming: what it is doing, or why the
-                                             timestamp name stayed — otherwise it is invisible -->
-                                        <TextBlock Text="{Binding NamingNote}"
-                                                   FontSize="12"
-                                                   Foreground="{StaticResource TextSecondaryBrush}"
-                                                   Margin="0,3,0,0"
-                                                   TextTrimming="CharacterEllipsis"
-                                                   Visibility="{Binding ShowNamingNote, Converter={StaticResource BoolToVis}}"/>
                                     </StackPanel>
 
                                     <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                        <!-- status chip: queued/processing/failed only; finished rows show the delete button -->
-                                        <Border CornerRadius="20" Padding="12,5" Margin="0,0,8,0"
-                                                Visibility="{Binding ShowStatusChip, Converter={StaticResource BoolToVis}}">
-                                            <Border.Style>
-                                                <Style TargetType="Border">
-                                                    <Setter Property="Background" Value="{StaticResource SurfaceAltBrush}"/>
-                                                    <Style.Triggers>
-                                                        <DataTrigger Binding="{Binding State}" Value="Succeeded">
-                                                            <Setter Property="Background" Value="{StaticResource SuccessSurfaceBrush}"/>
-                                                        </DataTrigger>
-                                                        <DataTrigger Binding="{Binding State}" Value="Failed">
-                                                            <Setter Property="Background" Value="{StaticResource DangerSurfaceBrush}"/>
-                                                        </DataTrigger>
-                                                        <DataTrigger Binding="{Binding State}" Value="Processing">
-                                                            <Setter Property="Background" Value="{StaticResource AccentSoftBrush}"/>
-                                                        </DataTrigger>
-                                                    </Style.Triggers>
-                                                </Style>
-                                            </Border.Style>
-                                            <TextBlock Text="{Binding StateText}" FontSize="12" FontWeight="SemiBold">
-                                                <TextBlock.Style>
-                                                    <Style TargetType="TextBlock">
-                                                        <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}"/>
-                                                        <Style.Triggers>
-                                                            <DataTrigger Binding="{Binding State}" Value="Succeeded">
-                                                                <Setter Property="Foreground" Value="{StaticResource SuccessBrush}"/>
-                                                            </DataTrigger>
-                                                            <DataTrigger Binding="{Binding State}" Value="Failed">
-                                                                <Setter Property="Foreground" Value="{StaticResource DangerBrush}"/>
-                                                            </DataTrigger>
-                                                            <DataTrigger Binding="{Binding State}" Value="Processing">
-                                                                <Setter Property="Foreground" Value="{StaticResource AccentBrush}"/>
-                                                            </DataTrigger>
-                                                        </Style.Triggers>
-                                                    </Style>
-                                                </TextBlock.Style>
-                                            </TextBlock>
-                                        </Border>
-
                                         <!-- failed scan rows: one click re-runs the scanner instead of
                                              making the user find the scan button again -->
                                         <Button Style="{StaticResource SmallButton}"

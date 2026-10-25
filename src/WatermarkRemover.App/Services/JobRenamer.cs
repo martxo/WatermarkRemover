@@ -73,7 +73,7 @@ public sealed class JobRenamer
 
             AppLog.Info($"重命名输出文件：{Path.GetFileName(job.OutputPath)} → {Path.GetFileName(target)}");
             job.UpdateRenamed(target);
-            if (numbered) ShowNameNote(job, $"同名已存在，已命名为 {Path.GetFileName(target)}");
+            if (numbered) job.ShowTransientNameNote($"同名已存在，已命名为 {Path.GetFileName(target)}");
             op.Complete($"→ {Path.GetFileName(target)}");
         }
         catch (Exception ex)
@@ -82,17 +82,5 @@ public sealed class JobRenamer
             op.Fail("重命名失败", ex);
             _dialogs.Warn($"重命名失败：{ex.Message}", "提示");
         }
-    }
-
-    /// <summary>Shows an explanation on the row for a few seconds, then clears it — but only if
-    /// nothing newer (e.g. the background naming note) has taken the line since.</summary>
-    private static void ShowNameNote(FileJobViewModel job, string note)
-    {
-        job.SetNamingNote(note);
-        _ = Task.Delay(TimeSpan.FromSeconds(4)).ContinueWith(_ =>
-        {
-            if (string.Equals(job.NamingNote, note, StringComparison.Ordinal))
-                job.SetNamingNote(null);
-        });
     }
 }

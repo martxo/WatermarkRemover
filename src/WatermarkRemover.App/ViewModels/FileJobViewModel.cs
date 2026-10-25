@@ -60,6 +60,9 @@ public sealed class FileJobViewModel : ObservableObject
     private PdfPreviewViewModel? _strip;
     private bool _stripOpen;
 
+    /// <summary>Numbered-rename explanations expire by the app's shared transient rule.</summary>
+    private readonly TransientStatus _transientNote;
+
     /// <summary>Which navigation section this record belongs to (scan / watermark / ocr…);
     /// the list is filtered per section so records never mix across pages.</summary>
     public string? OwnerFeatureId { get; internal set; }
@@ -69,6 +72,7 @@ public sealed class FileJobViewModel : ObservableObject
         InputPath = inputPath;
         FileName = Path.GetFileName(inputPath);
         _displayName = FileName;
+        _transientNote = new TransientStatus(() => NamingNote, text => SetNamingNote(text));
         RefreshSuffixChips(quickSuffixes);
         BeginEditCommand = new RelayCommand(BeginEdit, () => IsRenamable && !IsEditing);
         CommitEditCommand = new RelayCommand(CommitEdit, () => IsEditing);
@@ -117,32 +121,25 @@ public sealed class FileJobViewModel : ObservableObject
         {
             if (SetProperty(ref _state, value))
             {
-                OnPropertyChanged(nameof(StateText));
-                OnPropertyChanged(nameof(ShowStatusChip));
                 OnPropertyChanged(nameof(ShowCopyError));
                 OnPropertyChanged(nameof(ShowRetry));
                 OnPropertyChanged(nameof(ShowLiveStrip));
                 OnPropertyChanged(nameof(ShowUploadChip));
                 OnPropertyChanged(nameof(ShowUploadButton));
+                OnPropertyChanged(nameof(StatusLine));
             }
         }
     }
 
-    public string StateText => State switch
-    {
-        JobState.Queued => "待处理",
-        JobState.Processing => "处理中",
-        JobState.Succeeded => "完成",
-        JobState.Skipped => "无水印",
-        JobState.Failed => "失败",
-        _ => State.ToString(),
-    };
-
     /// <summary>
-    /// Queued/processing/failed carry real signal, so the status chip shows. Terminal states
-    /// (done / skipped) say nothing the user needs — the delete button takes that spot instead.
+    /// The row's single status line: a failure (and the stage/detail text) outranks the naming
+    /// note, which in turn outranks the normal detail. One line, one message — the old row showed
+    /// a separate status chip, a detail line and a naming line all at once.
     /// </summary>
-    public bool ShowStatusChip => State is JobState.Queued or JobState.Processing or JobState.Failed;
+    public string StatusLine =>
+        State == JobState.Failed ? Detail
+        : NamingNote is { Length: > 0 } note ? note
+        : Detail;
 
     /// <summary>Only a failed job has a diagnostic worth copying.</summary>
     public bool ShowCopyError => State == JobState.Failed;
@@ -246,12 +243,17 @@ public sealed class FileJobViewModel : ObservableObject
     public string Detail
     {
         get => _detail;
-        private set => SetProperty(ref _detail, value);
+        private set
+        {
+            if (SetProperty(ref _detail, value))
+                OnPropertyChanged(nameof(StatusLine));
+        }
     }
 
     /// <summary>
     /// Background naming is invisible by design (the row is already "完成" under a timestamp
     /// name). This one line is its whole surface: what it is doing, or why the name stayed.
+    /// While it has text it owns <see cref="StatusLine"/>.
     /// </summary>
     public string? NamingNote
     {
@@ -259,11 +261,12 @@ public sealed class FileJobViewModel : ObservableObject
         private set
         {
             if (SetProperty(ref _namingNote, value))
-                OnPropertyChanged(nameof(ShowNamingNote));
+                OnPropertyChanged(nameof(StatusLine));
         }
     }
 
-    public bool ShowNamingNote => !string.IsNullOrEmpty(NamingNote);
+    /// <summary>Explains a numbered rename for a few seconds, using the app's shared expiry rule.</summary>
+    public void ShowTransientNameNote(string note) => _transientNote.Show(note);
 
     /// <summary>Sets the naming line from any thread — naming runs off the UI thread.</summary>
     public void SetNamingNote(string? note)

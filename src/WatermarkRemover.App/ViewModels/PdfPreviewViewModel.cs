@@ -9,6 +9,7 @@ using SkiaSharp;
 using WatermarkRemover.App.Logging;
 using WatermarkRemover.App.Ocr;
 using WatermarkRemover.App.Scan;
+using WatermarkRemover.App.Services;
 using WatermarkRemover.Core.Features.Ocr;
 using WatermarkRemover.Core.Features.Preview;
 using WatermarkRemover.Core.Logging;
@@ -169,6 +170,9 @@ public sealed class PdfPreviewViewModel : ObservableObject
         _scanProvider = scanProvider;
         _seedThumbnails = seedThumbnails;
         Title = displayName;
+        _transientStatus = new TransientStatus(
+            read: () => StatusText,
+            write: text => StatusText = text ?? string.Empty);
         Thumbnails.CollectionChanged += (_, _) =>
         {
             OnPropertyChanged(nameof(HasThumbnails));
@@ -427,9 +431,8 @@ public sealed class PdfPreviewViewModel : ObservableObject
 
     public bool HasStatusText => !string.IsNullOrEmpty(_statusText);
 
-    /// <summary>Which transient confirmation owns the status line; a newer message supersedes an
-    /// older one so a late timer can never wipe text the user needs to read.</summary>
-    private int _statusToken;
+    /// <summary>Transient confirmations (rotate/delete/straighten) share the app's one expiry rule.</summary>
+    private readonly TransientStatus _transientStatus;
 
     /// <summary>
     /// Shows a confirmation for a couple of seconds, then clears it. Rotating, deleting and
@@ -437,21 +440,7 @@ public sealed class PdfPreviewViewModel : ObservableObject
     /// read as "it worked" — but a line that never goes away makes the next real error easy to
     /// miss, so done-messages expire.
     /// </summary>
-    private void ShowTransientStatus(string message, int seconds = 3)
-    {
-        StatusText = message;
-        int token = ++_statusToken;
-
-        var dispatcher = System.Windows.Application.Current?.Dispatcher;
-        if (dispatcher is null) return;
-
-        _ = Task.Delay(TimeSpan.FromSeconds(seconds)).ContinueWith(_ =>
-            dispatcher.BeginInvoke(() =>
-            {
-                if (token != _statusToken || StatusText != message) return;
-                StatusText = string.Empty;
-            }));
-    }
+    private void ShowTransientStatus(string message) => _transientStatus.Show(message);
 
     public RelayCommand PreviousCommand { get; }
 
