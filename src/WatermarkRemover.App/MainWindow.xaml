@@ -1593,21 +1593,58 @@
                     Orientation="Horizontal"
                     HorizontalAlignment="Right"
                     VerticalAlignment="Top">
-            <!-- Background-downloaded update: an accent icon appears the moment the package is
-                 verified, and stays until the user restarts into it. -->
+            <!-- Background-downloaded update: the icon reports the whole journey — pulsing while
+                 downloading (the percentage lives in the tooltip), a red dot once the package is
+                 verified, a warning glyph when the attempt failed (click = retry). -->
             <Button x:Name="UpdateReadyButton"
                     Style="{StaticResource CaptionButton}"
                     Command="{Binding InstallUpdateCommand}"
                     Visibility="{Binding UpdateReady.HasUpdate, Converter={StaticResource BoolToVis}}"
                     ToolTip="{Binding UpdateReady.Hint}">
                 <Grid Width="18" Height="18">
-                    <TextBlock Text="&#xE896;"
-                               FontFamily="Segoe MDL2 Assets" FontSize="14"
-                               Foreground="{StaticResource AccentBrush}"
-                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    <TextBlock FontFamily="Segoe MDL2 Assets" FontSize="14"
+                               HorizontalAlignment="Center" VerticalAlignment="Center">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Text" Value="&#xE896;"/>
+                                <Setter Property="Foreground" Value="{StaticResource AccentBrush}"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding UpdateReady.State}" Value="Downloading">
+                                        <Setter Property="Text" Value="&#xE895;"/>
+                                        <DataTrigger.EnterActions>
+                                            <BeginStoryboard>
+                                                <Storyboard>
+                                                    <DoubleAnimation Storyboard.TargetProperty="Opacity"
+                                                                     From="0.35" To="1"
+                                                                     Duration="0:0:0.7"
+                                                                     AutoReverse="True"
+                                                                     RepeatBehavior="Forever"/>
+                                                </Storyboard>
+                                            </BeginStoryboard>
+                                        </DataTrigger.EnterActions>
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding UpdateReady.State}" Value="Failed">
+                                        <Setter Property="Text" Value="&#xE783;"/>
+                                        <Setter Property="Foreground" Value="{StaticResource DangerBrush}"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
                     <Border Width="6" Height="6" CornerRadius="3"
-                            Background="#FFE5484D"
-                            HorizontalAlignment="Right" VerticalAlignment="Top"/>
+                            Background="{StaticResource DangerBrush}"
+                            HorizontalAlignment="Right" VerticalAlignment="Top">
+                        <Border.Style>
+                            <Style TargetType="Border">
+                                <Setter Property="Visibility" Value="Collapsed"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding UpdateReady.State}" Value="Ready">
+                                        <Setter Property="Visibility" Value="Visible"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Border.Style>
+                    </Border>
                 </Grid>
             </Button>
             <Button x:Name="MinimizeButton" Content="&#xE921;" Style="{StaticResource CaptionButton}"

@@ -14,6 +14,10 @@ public class UpdateReadyNotifierTests
     {
         public int ConfirmCalls { get; private set; }
 
+        public int InfoCalls { get; private set; }
+
+        public string? LastInfo { get; private set; }
+
         public bool ConfirmResult { get; set; } = true;
 
         public bool Confirm(string message, string title) => ConfirmResult;
@@ -26,6 +30,8 @@ public class UpdateReadyNotifierTests
 
         public void Info(string message, string title)
         {
+            InfoCalls++;
+            LastInfo = message;
         }
 
         public void Warn(string message, string title)
@@ -56,17 +62,33 @@ public class UpdateReadyNotifierTests
         notifier.PropertyChanged += OnChanged;
         try
         {
-            notifier.Publish("9.9.9", () => { });
+            notifier.BeginDownloading("9.9.9");
+            Assert.Equal(UpdateVisualState.Downloading, notifier.State);
+            Assert.Equal(0, notifier.Percent);
+            Assert.Contains("9.9.9", notifier.Hint);
 
+            notifier.ReportProgress(42);
+            Assert.Equal(42, notifier.Percent);
+            Assert.Contains("42%", notifier.Hint);
+
+            notifier.Publish("9.9.9", () => { });
             Assert.True(notifier.HasUpdate);
+            Assert.Equal(UpdateVisualState.Ready, notifier.State);
             Assert.Equal("9.9.9", notifier.Version);
             Assert.Contains("9.9.9", notifier.Hint);
             Assert.NotNull(notifier.Apply);
             Assert.Contains(nameof(UpdateReadyNotifier.HasUpdate), changes);
 
+            notifier.PublishFailed("9.9.9", "连接被重置");
+            Assert.Equal(UpdateVisualState.Failed, notifier.State);
+            Assert.Null(notifier.Apply);
+            Assert.Contains("连接被重置", notifier.Hint);
+            Assert.Contains("重试", notifier.Hint);
+
             notifier.Clear();
 
             Assert.False(notifier.HasUpdate);
+            Assert.Equal(UpdateVisualState.Idle, notifier.State);
             Assert.Null(notifier.Apply);
             Assert.Equal(string.Empty, notifier.Hint);
         }
@@ -95,6 +117,30 @@ public class UpdateReadyNotifierTests
 
             Assert.Equal(1, dialogs.ConfirmCalls);
             Assert.Equal(1, applied);
+        }
+        finally
+        {
+            notifier.Clear();
+        }
+    }
+
+    [Fact]
+    public void Clicking_while_downloading_explains_instead_of_restarting()
+    {
+        var notifier = UpdateReadyNotifier.Current;
+        var dialogs = new RecordingDialogs();
+        var vm = new MainViewModel(dialogs, new FakeShell());
+        try
+        {
+            notifier.BeginDownloading("9.9.9");
+            notifier.ReportProgress(37);
+
+            Assert.True(vm.InstallUpdateCommand.CanExecute(null));
+            vm.InstallUpdateCommand.Execute(null);
+
+            Assert.Equal(1, dialogs.InfoCalls);
+            Assert.Contains("37%", dialogs.LastInfo);
+            Assert.Equal(0, dialogs.ConfirmCalls);
         }
         finally
         {

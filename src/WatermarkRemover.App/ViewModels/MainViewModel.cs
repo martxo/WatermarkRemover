@@ -131,9 +131,7 @@ public sealed class MainViewModel : ObservableObject
 
         OpenOutputCommand = new RelayCommand(p => OpenOutput(p as string), p => p is string path && File.Exists(path));
         SaveSettingsCommand = new RelayCommand(() => SaveSettings());
-        InstallUpdateCommand = new RelayCommand(
-            () => UpdateCoordinator.ApplyReady(_dialogs),
-            () => UpdateReady.HasUpdate);
+        InstallUpdateCommand = new RelayCommand(OnUpdateIcon, () => UpdateReady.HasUpdate);
         UpdateReady.PropertyChanged += (_, e) =>
         {
             if (e.PropertyName == nameof(UpdateReadyNotifier.HasUpdate))
@@ -234,6 +232,34 @@ public sealed class MainViewModel : ObservableObject
     public UpdateReadyNotifier UpdateReady => UpdateReadyNotifier.Current;
 
     public RelayCommand InstallUpdateCommand { get; }
+
+    /// <summary>
+    /// The update icon does whatever its state needs: restart into a ready package, retry a
+    /// failed download, or say that a background download is still running (so the click never
+    /// looks dead, which is exactly what the reporting machine complained about).
+    /// </summary>
+    private void OnUpdateIcon()
+    {
+        switch (UpdateReady.State)
+        {
+            case UpdateVisualState.Failed:
+                AppLog.Info($"用户点击更新图标重试 v{UpdateReady.Version}");
+                _ = UpdateCoordinator.RetryAsync(Settings);
+                break;
+
+            case UpdateVisualState.Downloading:
+                _dialogs.Info(
+                    UpdateReady.Percent is { } percent
+                        ? $"更新正在后台下载（{percent}%），完成后图标会提示重启。\n关闭窗口不会中断下载。"
+                        : "更新正在后台下载，完成后图标会提示重启。\n关闭窗口不会中断下载。",
+                    "软件更新");
+                break;
+
+            case UpdateVisualState.Ready:
+                UpdateCoordinator.ApplyReady(_dialogs);
+                break;
+        }
+    }
 
     public RelayCommand ScanCommand { get; }
 

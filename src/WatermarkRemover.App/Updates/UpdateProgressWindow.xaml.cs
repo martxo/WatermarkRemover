@@ -10,7 +10,10 @@ public partial class UpdateProgressWindow : Window
     {
         InitializeComponent();
         Cts = new CancellationTokenSource();
-        Closed += (_, _) => Cts.Cancel(); // closing the window (X button) cancels the download
+        // Closing the window does NOT cancel: a download that vanished with its window left the
+        // user with nothing (no progress, no error, and the next attempt fell back to the full
+        // package). The download now keeps running and reports through the title-bar icon; only
+        // the explicit 「取消更新」 button cancels.
     }
 
     public CancellationTokenSource Cts { get; }
@@ -69,5 +72,9 @@ public partial class UpdateProgressWindow : Window
         _ => string.Empty,
     };
 
-    private void OnCancel(object sender, RoutedEventArgs e) => Close();
+    private void OnCancel(object sender, RoutedEventArgs e)
+    {
+        Cts.Cancel();
+        Close();
+    }
 }

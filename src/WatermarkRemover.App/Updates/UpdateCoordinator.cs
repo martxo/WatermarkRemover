@@ -1,3 +1,4 @@
+using System.IO;
 using System.Threading;
 using System.Windows;
 using WatermarkRemover.App.Logging;
@@ -28,7 +29,7 @@ public static class UpdateCoordinator
     /// outcome — unreachable channel, no update, not configured — stays quiet; only the actual
     /// update flow becomes visible.
     /// </summary>
-    public static async Task RunCheckAsync(Window owner, AppSettings settings, bool silent)
+    public static async Task RunCheckAsync(Window? owner, AppSettings settings, bool silent)
     {
         var dialogs = new DialogService(owner);
 
@@ -45,6 +46,10 @@ public static class UpdateCoordinator
         if (Interlocked.Exchange(ref _running, 1) == 1)
         {
             AppLog.Info("更新检查已在进行中，忽略重复触发");
+            // A background or manual download may still be running after its window was closed;
+            // silence here read as a dead button on the machine that reported it.
+            if (!silent)
+                dialogs.Info("更新检查或下载正在进行，请稍候。\n完成后标题栏的更新图标会给出提示。", "软件更新");
             return;
         }
 
@@ -58,7 +63,7 @@ public static class UpdateCoordinator
         }
     }
 
-    private static async Task RunCheckCoreAsync(Window owner, IDialogService dialogs, bool silent)
+    private static async Task RunCheckCoreAsync(Window? owner, IDialogService dialogs, bool silent)
     {
         // A downloaded update is already waiting: a manual click means "restart into it", and a
         // background pass has nothing left to do (never download the same package twice).
@@ -170,41 +175,64 @@ public static class UpdateCoordinator
         await DownloadAndApplyAsync(owner, dialogs, info).ConfigureAwait(true);
     }
 
-    private static async Task DownloadAndApplyAsync(Window owner, IDialogService dialogs, UpdateInfo info)
+    private static async Task DownloadAndApplyAsync(Window? owner, IDialogService dialogs, UpdateInfo info)
     {
-        var progressWindow = new UpdateProgressWindow { Owner = owner };
+        string version = info.Version.ToString();
+        var progressWindow = new UpdateProgressWindow();
+        if (owner is not null) progressWindow.Owner = owner;
         // This Show() is the whole reason a progress window exists: without it the download runs
         // invisible (regression fixed in v1.8.0).
         progressWindow.Show();
         progressWindow.Report(new UpdateProgress(UpdateStage.Downloading, 0, 0, info.SizeBytes, null, null));
 
+        var notifier = UpdateReadyNotifier.Current;
+        notifier.BeginDownloading(version);
+
         try
         {
-            var progress = new Progress<UpdateProgress>(progressWindow.Report);
+            var progress = new Progress<UpdateProgress>(p =>
+            {
+                if (progressWindow.IsLoaded) progressWindow.Report(p);
+                notifier.ReportProgress(ToPercent(p));
+            });
             string downloadedPath = await UpdateService
                 .DownloadUpdateAsync(info, progress, progressWindow.Cts.Token)
                 .ConfigureAwait(true);
 
-            AppLog.Info($"更新 v{info.Version} 已下载并通过校验：{downloadedPath}");
+            AppLog.Info($"更新 v{version} 已下载并通过校验：{downloadedPath}");
+            void Apply()
+            {
+                UpdateApplier.ApplyAndRestart(downloadedPath);
+                AppLog.Info($"准备退出当前程序以完成 v{version} 更新");
+                Application.Current.Shutdown();
+            }
+            notifier.PublishReady(version, Apply);
 
-            // Hold the "ready" state briefly — a window that closes and an app that vanishes in
-            // the same frame reads as a crash, not a completed update.
+            // The window may have been closed mid-download: the download kept running (closing
+            // no longer cancels it), so hand over to the title icon instead of restarting
+            // unannounced. Otherwise hold "ready" briefly, then restart.
+            if (!progressWindow.IsLoaded)
+            {
+                AppLog.Info($"更新 v{version} 已下载完成（进度窗口已关闭），等待用户从更新图标重启");
+                return;
+            }
+
             progressWindow.Report(new UpdateProgress(UpdateStage.ReadyToRestart, 100, 0, null, null, null));
             await Task.Delay(1200).ConfigureAwait(true);
 
             progressWindow.Close();
-            UpdateApplier.ApplyAndRestart(downloadedPath);
-            AppLog.Info($"准备退出当前程序以完成 v{info.Version} 更新");
-            Application.Current.Shutdown();
+            Apply();
         }
         catch (OperationCanceledException)
         {
             AppLog.Info("更新下载已取消");
-            // The user cancelled deliberately; closing the window is feedback enough.
+            notifier.PublishFailed(version, "下载已取消");
+            dialogs.Info("已取消本次更新下载。当前版本不受影响，可稍后重试。", "软件更新");
         }
         catch (Exception ex)
         {
-            AppLog.Error($"更新到 v{info.Version} 失败", ex);
+            AppLog.Error($"更新到 v{version} 失败", ex);
+            notifier.PublishFailed(version, ex.Message);
             if (progressWindow.IsLoaded) progressWindow.Close();
             dialogs.Warn(
                 "更新失败，当前版本不受影响。\n\n" +
@@ -220,52 +248,115 @@ public static class UpdateCoordinator
 
     /// <summary>
     /// Startup path (legacy channel): download without any window, then let the shell announce
-    /// it with the update icon. Failures stay in the log — a background pass must never open a
-    /// dialog over the user's work.
+    /// it with the update icon. Every outcome is reflected in that icon — a failed download is
+    /// visible (with a retry) and logged with its exception, never swallowed.
     /// </summary>
     private static async Task DownloadSilentlyAsync(UpdateInfo info)
     {
+        string version = info.Version.ToString();
+        UpdateReadyNotifier.Current.BeginDownloading(version);
+        LogPackageCache($"开始下载 v{version} 前");
+
         try
         {
-            var quiet = new Progress<UpdateProgress>(_ => { });
+            var progress = new Progress<UpdateProgress>(p =>
+                UpdateReadyNotifier.Current.ReportProgress(ToPercent(p)));
             string downloadedPath = await UpdateService
-                .DownloadUpdateAsync(info, quiet, CancellationToken.None)
+                .DownloadUpdateAsync(info, progress, CancellationToken.None)
                 .ConfigureAwait(true);
 
-            AppLog.Info($"更新 v{info.Version} 已在后台下载并通过校验：{downloadedPath}");
-            UpdateReadyNotifier.Current.Publish(info.Version.ToString(), () =>
+            AppLog.Info($"更新 v{version} 已在后台下载并通过校验：{downloadedPath}");
+            UpdateReadyNotifier.Current.PublishReady(version, () =>
             {
-                AppLog.Info($"用户从更新图标确认，应用 v{info.Version}");
+                AppLog.Info($"用户从更新图标确认，应用 v{version}");
                 UpdateApplier.ApplyAndRestart(downloadedPath);
                 Application.Current.Shutdown();
             });
         }
+        catch (OperationCanceledException)
+        {
+            AppLog.Info($"后台下载更新 v{version} 已取消");
+            UpdateReadyNotifier.Current.PublishFailed(version, "下载已取消");
+        }
         catch (Exception ex)
         {
-            AppLog.Warn($"后台下载更新 v{info.Version} 失败：{ex.Message}");
+            AppLog.Error($"后台下载更新 v{version} 失败", ex);
+            LogPackageCache($"更新 v{version} 下载失败后");
+            UpdateReadyNotifier.Current.PublishFailed(version, ex.Message);
         }
     }
 
     /// <summary>Startup path (Velopack channel): same quiet download against the increment feed.</summary>
     private static async Task DownloadVelopackSilentlyAsync(VelopackCheckResult result)
     {
+        string version = result.LatestVersion.ToString();
+        UpdateReadyNotifier.Current.BeginDownloading(version);
+        LogPackageCache($"开始下载 v{version} 前（增量={result.IsDelta}）");
+
         try
         {
-            var quiet = new Progress<UpdateProgress>(_ => { });
+            var progress = new Progress<UpdateProgress>(p =>
+                UpdateReadyNotifier.Current.ReportProgress(ToPercent(p)));
             Velopack.UpdateInfo update = await VelopackService
-                .DownloadAsync(result.Update!, quiet, CancellationToken.None)
+                .DownloadAsync(result.Update!, progress, CancellationToken.None)
                 .ConfigureAwait(true);
 
-            AppLog.Info($"更新 v{result.LatestVersion} 已在后台下载并通过 Velopack 校验");
-            UpdateReadyNotifier.Current.Publish(result.LatestVersion.ToString(), () =>
+            AppLog.Info($"更新 v{version} 已在后台下载并通过 Velopack 校验");
+            LogPackageCache($"更新 v{version} 下载完成后");
+            UpdateReadyNotifier.Current.PublishReady(version, () =>
             {
-                AppLog.Info($"用户从更新图标确认，应用 v{result.LatestVersion}");
+                AppLog.Info($"用户从更新图标确认，应用 v{version}");
                 VelopackService.ApplyAndRestart(update);
             });
         }
+        catch (OperationCanceledException)
+        {
+            AppLog.Info($"后台下载更新 v{version} 已取消");
+            UpdateReadyNotifier.Current.PublishFailed(version, "下载已取消");
+        }
         catch (Exception ex)
         {
-            AppLog.Warn($"后台下载更新 v{result.LatestVersion} 失败：{ex.Message}");
+            AppLog.Error($"后台下载更新 v{version} 失败", ex);
+            LogPackageCache($"更新 v{version} 下载失败后");
+            UpdateReadyNotifier.Current.PublishFailed(version, ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Retry after a failed background download (the icon's click action). Same quiet path as
+    /// startup: the result returns to the icon, not to a dialog the user has to dismiss.
+    /// </summary>
+    public static Task RetryAsync(AppSettings settings) =>
+        RunCheckAsync(Application.Current?.MainWindow, settings, silent: true);
+
+    private static int? ToPercent(UpdateProgress progress) =>
+        progress.Percent is { } percent ? (int)Math.Round(percent) : null;
+
+    /// <summary>
+    /// Records the Velopack package cache around a download. The machine that reported "delta
+    /// first, full package after the window vanished" had no evidence; the cache listing is what
+    /// tells us whether a failed attempt really lost the delta base.
+    /// </summary>
+    private static void LogPackageCache(string context)
+    {
+        try
+        {
+            string? directory = VelopackUpdateService.PackagesDirectory;
+            if (directory is null || !Directory.Exists(directory))
+            {
+                AppLog.Info($"{context}：Velopack 包缓存目录不存在");
+                return;
+            }
+
+            var entries = Directory.EnumerateFiles(directory)
+                .Select(file => $"{Path.GetFileName(file)}（{new FileInfo(file).Length / 1024} KB）")
+                .ToList();
+            AppLog.Info($"{context}：包缓存={directory}，文件：{(entries.Count == 0 ? "空" : string.Join("、", entries))}，" +
+                        $"本地完整包={VelopackUpdateService.HasLocalBasePackage}");
+        }
+        catch (Exception ex)
+        {
+            AppLog.Warn($"{context}：读取包缓存失败（{ex.Message}）");
         }
     }
 
@@ -301,7 +392,7 @@ public static class UpdateCoordinator
 
     // ── Velopack channel (增量推送) — mirrors the legacy flow above against the Velopack feed ──
 
-    private static async Task RunVelopackCheckCoreAsync(Window owner, IDialogService dialogs, bool silent)
+    private static async Task RunVelopackCheckCoreAsync(Window? owner, IDialogService dialogs, bool silent)
     {
         UpdateProgressWindow? checkingWindow = null;
         if (!silent)
@@ -378,25 +469,54 @@ public static class UpdateCoordinator
 
         if (!accepted) return;
 
-        await DownloadAndApplyVelopackAsync(dialogs, result).ConfigureAwait(true);
+        await DownloadAndApplyVelopackAsync(owner, dialogs, result).ConfigureAwait(true);
     }
 
-    private static async Task DownloadAndApplyVelopackAsync(IDialogService dialogs, VelopackCheckResult result)
+    private static async Task DownloadAndApplyVelopackAsync(
+        Window? owner, IDialogService dialogs, VelopackCheckResult result)
     {
+        string version = result.LatestVersion.ToString();
         var progressWindow = new UpdateProgressWindow();
+        if (owner is not null) progressWindow.Owner = owner;
         progressWindow.Show();
         progressWindow.Report(new UpdateProgress(
             UpdateStage.Downloading, 0, 0, result.PackageBytes, null,
             result.IsDelta ? "增量更新" : "全量更新"));
 
+        var notifier = UpdateReadyNotifier.Current;
+        notifier.BeginDownloading(version);
+        LogPackageCache($"开始下载 v{version} 前（增量={result.IsDelta}）");
+
         try
         {
-            var progress = new Progress<UpdateProgress>(progressWindow.Report);
+            var progress = new Progress<UpdateProgress>(p =>
+            {
+                if (progressWindow.IsLoaded) progressWindow.Report(p);
+                notifier.ReportProgress(ToPercent(p));
+            });
             Velopack.UpdateInfo update = await VelopackService
                 .DownloadAsync(result.Update!, progress, progressWindow.Cts.Token)
                 .ConfigureAwait(true);
 
-            AppLog.Info($"更新 v{update.TargetFullRelease.Version} 已下载并通过 Velopack 校验");
+            AppLog.Info($"更新 v{version} 已下载并通过 Velopack 校验");
+            LogPackageCache($"更新 v{version} 下载完成后");
+            void Apply()
+            {
+                // Update.exe waits for this process to exit, applies the package and relaunches;
+                // the current process terminates inside the call — nothing after it runs.
+                AppLog.Info($"准备退出当前程序以完成 v{version} 更新");
+                VelopackService.ApplyAndRestart(update);
+            }
+            notifier.PublishReady(version, Apply);
+
+            // Closing the progress window no longer cancels the download. If it happened, the
+            // package is ready now and the title icon asks for the restart instead of us
+            // restarting a user who walked away.
+            if (!progressWindow.IsLoaded)
+            {
+                AppLog.Info($"更新 v{version} 已下载完成（进度窗口已关闭），等待用户从更新图标重启");
+                return;
+            }
 
             // Hold the "ready" state briefly — a window that closes and an app that vanishes in
             // the same frame reads as a crash, not a completed update.
@@ -404,18 +524,19 @@ public static class UpdateCoordinator
             await Task.Delay(1200).ConfigureAwait(true);
 
             progressWindow.Close();
-            // Update.exe waits for this process to exit, applies the package and relaunches;
-            // the current process terminates inside the call — nothing after it runs.
-            VelopackService.ApplyAndRestart(update);
-            AppLog.Info($"准备退出当前程序以完成 v{result.LatestVersion} 更新");
+            Apply();
         }
         catch (OperationCanceledException)
         {
             AppLog.Info("更新下载已取消");
+            notifier.PublishFailed(version, "下载已取消");
+            dialogs.Info("已取消本次更新下载。当前版本不受影响，可稍后重试。", "软件更新");
         }
         catch (Exception ex)
         {
-            AppLog.Error($"更新到 v{result.LatestVersion} 失败", ex);
+            AppLog.Error($"更新到 v{version} 失败", ex);
+            LogPackageCache($"更新 v{version} 下载失败后");
+            notifier.PublishFailed(version, ex.Message);
             dialogs.Warn(
                 "更新失败，当前版本不受影响。\n\n" +
                 $"原因：{ex.Message}\n\n" +
