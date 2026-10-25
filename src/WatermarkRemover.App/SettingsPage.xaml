@@ -425,6 +425,19 @@
                             </StackPanel>
                         </Border>
 
+                        <TextBlock Text="连续扫描" Style="{StaticResource SectionTitle}" Margin="0,16,0,8"/>
+                        <Border Style="{StaticResource InsetCard}">
+                            <StackPanel>
+                                <CheckBox Content="开启连续扫描"
+                                          FontSize="13"
+                                          VerticalContentAlignment="Center"
+                                          IsChecked="{Binding Settings.ContinuousScan, Mode=TwoWay}"/>
+                                <TextBlock Text="开启后，点一次「开始扫描」就会一份接一份地扫完：每份原稿各自生成一个 PDF，完成后停 1.2 秒自动开始下一份，进纸器空了自动结束。适合自动进纸器上一叠彼此独立的单页文件（合同、票据、证件）。一份多页文件、或想逐份慢慢校对时不要开启。改动随「返回应用」保存生效。"
+                                           Style="{StaticResource RowCaption}"
+                                           Margin="0,10,0,0"/>
+                            </StackPanel>
+                        </Border>
+
                         <TextBlock Text="输出目录" Style="{StaticResource SectionTitle}" Margin="0,16,0,8"/>
                         <Border Style="{StaticResource InsetCard}">
                             <StackPanel>

@@ -233,11 +233,6 @@
                              Content="双面短边" Margin="0,0,0,0"
                              VerticalContentAlignment="Center"
                              IsChecked="{Binding IsScanDuplexShortEdge, Mode=TwoWay}"/>
-                <CheckBox Content="连续扫描"
-                          IsChecked="{Binding ContinuousScan, Mode=TwoWay}"
-                          VerticalAlignment="Center"
-                          Margin="20,0,0,0"
-                          ToolTip="每份完成后自动开始下一份；纸盒空了会自动结束"/>
                 <Button Content="开始扫描"
                         Style="{StaticResource PrimaryButton}"
                         Command="{Binding ScanCommand}"

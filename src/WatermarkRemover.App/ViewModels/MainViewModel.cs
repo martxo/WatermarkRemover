@@ -1151,22 +1151,9 @@ public sealed class MainViewModel : ObservableObject
         set { if (value) ApplyScanDuplex(2); }
     }
 
-    /// <summary>连续扫描: chain documents without touching the button again. Persisted at once,
-    /// exactly like the layout radios — the scan page has no save button.</summary>
-    public bool ContinuousScan
-    {
-        get => Settings.ContinuousScan;
-        set
-        {
-            if (Settings.ContinuousScan == value) return;
-
-            Settings.ContinuousScan = value;
-            if (!SettingsService.Save(Settings))
-                AppLog.Error("连续扫描设置保存失败（目录不可写？）");
-            OnPropertyChanged();
-            AppLog.Info($"连续扫描：{(value ? "开启" : "关闭")}");
-        }
-    }
+    /// <summary>连续扫描: chain documents without touching the button again. Edited in 设置 →
+    /// 扫描 and persisted with the rest of that page; the scan loop always reads the live value.</summary>
+    public bool ContinuousScan => Settings.ContinuousScan;
 
     private void OnJobRenameRequested(object? sender, string desiredName)
     {

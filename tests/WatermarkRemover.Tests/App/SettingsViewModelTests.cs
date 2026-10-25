@@ -140,6 +140,7 @@ public class SettingsViewModelTests
         vm.Settings.MaxConcurrency = 4;
         vm.Settings.CheckUpdatesOnStartup = false;
         vm.Settings.ScanColor = 1;
+        vm.Settings.ContinuousScan = true;
         vm.Settings.ScanOutputDirectory = @"D:\scans";
         vm.QuickSuffixes.Clear();
         vm.QuickSuffixes.Add("新");
@@ -153,6 +154,7 @@ public class SettingsViewModelTests
         Assert.Equal(4, target.MaxConcurrency);
         Assert.False(target.CheckUpdatesOnStartup);
         Assert.Equal(1, target.ScanColor);
+        Assert.True(target.ContinuousScan); // moved onto the settings page; committed with the rest
         Assert.Equal(@"D:\scans", target.ScanOutputDirectory);
         Assert.Equal(new[] { "新" }, target.QuickSuffixes.ToArray());
     }

@@ -62,7 +62,7 @@ public sealed class SettingsViewModel : ObservableObject
         NavItems = new ObservableCollection<SettingsNavItemViewModel>
         {
             new("general", "通用设置", "\uE713", "输出 文件名 后缀 目录 自动命名 去除标注 并发"),
-            new("scan", "扫描设置", "\uE7F4", "扫描 色彩 黑白 彩色 灰度 自动 扫描仪"),
+            new("scan", "扫描设置", "\uE7F4", "扫描 色彩 黑白 彩色 灰度 自动 连续 批量 ADF 进纸 扫描仪"),
             new("netdisk", "网盘设置", "\uE753", "网盘 云盘 阿里云盘 授权 令牌 密钥 账号 上传"),
             new("ocr", "OCR 识别", "\uE7C3", "识别 引擎 微信 OCR PP-OCR Windows 文字"),
             new("updates", "软件更新", "\uE72C", "升级 版本 检查更新 startup"),
@@ -476,6 +476,7 @@ public sealed class SettingsViewModel : ObservableObject
         _target.PreferredOcrEngine = Settings.PreferredOcrEngine;
         _target.PreferredLayoutStage = Settings.PreferredLayoutStage;
         _target.ScanColor = Settings.ScanColor;
+        _target.ContinuousScan = Settings.ContinuousScan;
         _target.ScanOutputDirectory = Settings.ScanOutputDirectory?.Trim() ?? string.Empty;
         _target.TransferOutputDirectory = Settings.TransferOutputDirectory?.Trim() ?? string.Empty;
     }
