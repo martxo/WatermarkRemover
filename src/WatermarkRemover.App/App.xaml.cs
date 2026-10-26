@@ -33,6 +33,9 @@ public partial class App : Application
             AppLog.Error($"安装清单为 v{manifest}，正在运行的程序却是 v{UpdateService.CurrentVersion}：" +
                          "更新只替换了一部分文件，请重新安装最新版。");
         }
+        // Velopack applies updates with Environment.Exit, which bypasses OnExit/AppLog.Shutdown —
+        // these startup facts must already be on disk before any updater can replace this process.
+        AppLog.Flush();
 
         // Environment baseline: without these three facts a support log cannot distinguish a
         // code defect from a machine-specific component/OS problem.

@@ -71,6 +71,7 @@ public static class UpdateCoordinator
 
         try
         {
+            AppLog.Flush(); // Update.exe exits this process without OnExit — get the facts on disk
             VelopackService.ApplyPendingAndRestart(pending);
             return true; // the process exits inside the call
         }
@@ -392,6 +393,7 @@ public static class UpdateCoordinator
             UpdateReadyNotifier.Current.PublishReady(version, () =>
             {
                 AppLog.Info($"用户从更新图标确认，应用 v{version}；{VelopackUpdateService.DescribeInstall()}");
+                AppLog.Flush();
                 VelopackService.ApplyAndRestart(update);
             });
         }
@@ -592,6 +594,7 @@ public static class UpdateCoordinator
                 // the current process terminates inside the call — nothing after it runs.
                 AppLog.Info($"准备退出当前程序以完成 v{version} 更新；" +
                             VelopackUpdateService.DescribeInstall());
+                AppLog.Flush();
                 VelopackService.ApplyAndRestart(update);
             }
             notifier.PublishReady(version, Apply);
