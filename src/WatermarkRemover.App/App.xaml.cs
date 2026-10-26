@@ -4,6 +4,7 @@ using System.Windows;
 using System.Windows.Threading;
 using Velopack;
 using WatermarkRemover.App.Logging;
+using WatermarkRemover.App.Updates;
 using WatermarkRemover.Core.Settings;
 
 namespace WatermarkRemover.App;
@@ -22,6 +23,16 @@ public partial class App : Application
         AppFolders.EnsureRoot();
         AppLog.Initialize();
         AppLog.Info($"应用启动 v{GetVersion()}，数据目录：{AppFolders.Root}");
+        // Where this process runs and what Velopack thinks is installed: the two answers differ
+        // whenever an old shortcut or a second copy is launched, which otherwise looks exactly
+        // like "the update downloaded but the version never changed".
+        AppLog.Info($"安装信息：{VelopackUpdateService.DescribeInstall()}");
+        if (VelopackUpdateService.InstalledManifestVersion is { } manifest
+            && manifest > UpdateService.CurrentVersion)
+        {
+            AppLog.Error($"安装清单为 v{manifest}，正在运行的程序却是 v{UpdateService.CurrentVersion}：" +
+                         "更新只替换了一部分文件，请重新安装最新版。");
+        }
 
         // Environment baseline: without these three facts a support log cannot distinguish a
         // code defect from a machine-specific component/OS problem.

@@ -19,6 +19,13 @@ public static class UpdateConfig
     public const string AssetName = "WatermarkRemover.zip";
 
     /// <summary>
+    /// Velopack installer attached to the same release. A green/unzipped copy has no incremental
+    /// feed and cannot safely replace its own running exe, so it installs this instead — the
+    /// only way a portable copy can actually move onto a newer version.
+    /// </summary>
+    public const string SetupAssetName = "WatermarkRemover-win-Setup.exe";
+
+    /// <summary>
     /// Fallback download accelerators for networks where github.com is unreliable. Each entry
     /// is a prefix prepended to the direct download URL. The GitHub API digest still guards
     /// integrity — a mirror can withhold the file, never alter it.

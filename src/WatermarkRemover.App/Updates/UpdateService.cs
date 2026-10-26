@@ -14,7 +14,8 @@ public sealed record UpdateInfo(
     string DownloadUrl,
     string ReleasePageUrl,
     long SizeBytes,
-    string? Sha256Hex);
+    string? Sha256Hex,
+    bool IsSetup = false);
 
 /// <summary>Outcome of one channel query, including why there is no update.</summary>
 public enum UpdateCheckStatus
@@ -121,31 +122,54 @@ public sealed class UpdateService
         string? downloadUrl = null;
         long sizeBytes = 0;
         string? sha256Hex = null;
+        string? setupUrl = null;
+        long setupSize = 0;
+        string? setupSha256 = null;
         if (root.TryGetProperty("assets", out JsonElement assets) && assets.ValueKind == JsonValueKind.Array)
         {
             foreach (JsonElement asset in assets.EnumerateArray())
             {
                 string? name = asset.TryGetProperty("name", out JsonElement n) ? n.GetString() : null;
-                if (!string.Equals(name, UpdateConfig.AssetName, StringComparison.OrdinalIgnoreCase)) continue;
-
-                downloadUrl = asset.TryGetProperty("browser_download_url", out JsonElement u) ? u.GetString() : null;
-                sizeBytes = asset.TryGetProperty("size", out JsonElement s) && s.TryGetInt64(out long l) ? l : 0;
-                sha256Hex = ParseSha256(asset.TryGetProperty("digest", out JsonElement d) ? d.GetString() : null);
-                break;
+                if (string.Equals(name, UpdateConfig.AssetName, StringComparison.OrdinalIgnoreCase))
+                {
+                    downloadUrl = asset.TryGetProperty("browser_download_url", out JsonElement u) ? u.GetString() : null;
+                    sizeBytes = asset.TryGetProperty("size", out JsonElement s) && s.TryGetInt64(out long l) ? l : 0;
+                    sha256Hex = ParseSha256(asset.TryGetProperty("digest", out JsonElement d) ? d.GetString() : null);
+                    continue;
+                }
+                if (string.Equals(name, UpdateConfig.SetupAssetName, StringComparison.OrdinalIgnoreCase))
+                {
+                    setupUrl = asset.TryGetProperty("browser_download_url", out JsonElement su) ? su.GetString() : null;
+                    setupSize = asset.TryGetProperty("size", out JsonElement ss) && ss.TryGetInt64(out long sl) ? sl : 0;
+                    setupSha256 = ParseSha256(asset.TryGetProperty("digest", out JsonElement sd) ? sd.GetString() : null);
+                }
             }
+        }
+
+        // Releases no longer carry the legacy zip, so a green copy finds nothing to self-replace.
+        // The Velopack Setup on the same release is its way forward: installing it puts the app
+        // in the standard location, which has the incremental feed from then on.
+        bool isSetup = false;
+        if (string.IsNullOrEmpty(downloadUrl) && !string.IsNullOrEmpty(setupUrl))
+        {
+            downloadUrl = setupUrl;
+            sizeBytes = setupSize;
+            sha256Hex = setupSha256;
+            isSetup = true;
         }
 
         if (string.IsNullOrEmpty(downloadUrl))
             return new UpdateCheckResult(
                 UpdateCheckStatus.NoUpdateSource, null, releaseVersion,
-                $"发布通道最新发布为 v{releaseVersion}，但未附带 {UpdateConfig.AssetName} 安装包。");
+                $"发布通道最新发布为 v{releaseVersion}，但未附带可安装的更新包" +
+                $"（{UpdateConfig.AssetName} 或 {UpdateConfig.SetupAssetName}）。");
 
         if (!UpdateVersion.IsNewer(CurrentVersion, releaseVersion))
             return new UpdateCheckResult(UpdateCheckStatus.UpToDate, null, releaseVersion, null);
 
         return new UpdateCheckResult(
             UpdateCheckStatus.UpdateAvailable,
-            new UpdateInfo(releaseVersion, downloadUrl, pageUrl, sizeBytes, sha256Hex),
+            new UpdateInfo(releaseVersion, downloadUrl, pageUrl, sizeBytes, sha256Hex, isSetup),
             releaseVersion,
             null);
     }
@@ -161,7 +185,9 @@ public sealed class UpdateService
         IProgress<UpdateProgress> progress,
         CancellationToken cancellationToken)
     {
-        string extension = Path.GetExtension(UpdateConfig.AssetName);
+        // Zip for the legacy channel, exe for a Velopack Setup fallback — the extension decides
+        // how the applier opens the file, so it must follow the actual asset.
+        string extension = info.IsSetup ? ".exe" : Path.GetExtension(UpdateConfig.AssetName);
         string targetPath = Path.Combine(Path.GetTempPath(), $"WatermarkRemover-{info.Version}{extension}");
         Exception? lastError = null;
 

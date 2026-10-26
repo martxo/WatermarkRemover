@@ -136,6 +136,20 @@ public sealed class SettingsViewModel : ObservableObject
     /// <summary>Current version, shown at the top of the updates section.</summary>
     public string VersionText => $"当前版本：v{UpdateService.CurrentVersion}";
 
+    /// <summary>
+    /// Where this copy of the app actually runs. Reinstalling while an old shortcut or a second
+    /// copy keeps being opened looks exactly like "updated but still the old version"; this line
+    /// makes that difference visible instead of leaving it to a log file.
+    /// </summary>
+    public string InstallPathText
+    {
+        get
+        {
+            string? exe = Environment.ProcessPath;
+            return string.IsNullOrEmpty(exe) ? "运行位置：未知" : $"运行位置：{exe}";
+        }
+    }
+
     // ── 更新下载位置与残留清理（updates section, second card）──
 
     private string _updateResidueSummary = "正在扫描更新缓存…";

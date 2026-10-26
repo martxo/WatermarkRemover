@@ -145,6 +145,91 @@ public sealed class VelopackUpdateService
     }
 
     /// <summary>
+    /// The newest downloaded package that still needs Update.exe to be applied. Non-null after a
+    /// background download in an earlier session that the user closed instead of restarting
+    /// into: Velopack never applies a staged package on its own, so without this the old version
+    /// kept running forever no matter how often the app was restarted.
+    /// </summary>
+    public static VelopackAsset? PendingRestart
+    {
+        get
+        {
+            try
+            {
+                return CreateManager().UpdatePendingRestart;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+    }
+
+    /// <summary>Where Velopack believes this install lives; null for green/unzipped copies.</summary>
+    public static string? InstallRoot
+    {
+        get
+        {
+            try
+            {
+                return VelopackLocator.Current.RootAppDir;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+    }
+
+    /// <summary>The version recorded in the install manifest (<c>current\sq.version</c>), which
+    /// is what Velopack compares against the feed. Null when the app is not installed.</summary>
+    public static Version? InstalledManifestVersion
+    {
+        get
+        {
+            try
+            {
+                SemanticVersion? version = CreateManager().CurrentVersion;
+                return version is null
+                    ? null
+                    : new Version(version.Major, version.Minor, version.Patch);
+            }
+            catch
+            {
+                return null;
+            }
+        }
+    }
+
+    /// <summary>
+    /// One-line install identity for logs and failure dialogs: where this process actually runs,
+    /// where Velopack believes the install root is, and what each side thinks the version is.
+    /// A machine stuck on an old version needs exactly these facts — a stale shortcut or a
+    /// second install is otherwise indistinguishable from a failed update.
+    /// </summary>
+    public static string DescribeInstall()
+    {
+        try
+        {
+            IVelopackLocator locator = VelopackLocator.Current;
+            UpdateManager manager = CreateManager();
+            return $"运行位置={Environment.ProcessPath}；安装根目录={locator.RootAppDir}；" +
+                   $"应用目录={locator.AppContentDir}；Update.exe={locator.UpdateExePath}；" +
+                   $"包缓存={locator.PackagesDir}；清单版本={manager.CurrentVersion}；" +
+                   $"已安装={manager.IsInstalled}；便携版={manager.IsPortable}；" +
+                   $"程序集版本={UpdateService.CurrentVersion}";
+        }
+        catch (Exception ex)
+        {
+            return $"运行位置={Environment.ProcessPath}；读取安装信息失败：{ex.Message}";
+        }
+    }
+
+    /// <summary>Applies a package that was downloaded earlier, possibly by a previous process.</summary>
+    public void ApplyPendingAndRestart(VelopackAsset pending) =>
+        _manager.ApplyUpdatesAndRestart(pending);
+
+    /// <summary>
     /// Downloads the pending update (delta preferred; Velopack retries with the full package if
     /// the delta turns out unusable), mapping percent-only progress onto the shared record.
     /// </summary>

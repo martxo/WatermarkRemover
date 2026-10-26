@@ -664,6 +664,12 @@
                                                Style="{StaticResource RowTitle}"/>
                                     <TextBlock Text="更新包自动下载、校验，完成后重启生效。"
                                                Style="{StaticResource RowCaption}" Margin="0,3,0,0"/>
+                                    <!-- The copy actually running: a stale shortcut makes a
+                                         successful install look like a failed update. -->
+                                    <TextBlock Text="{Binding InstallPathText}"
+                                               Style="{StaticResource RowCaption}" Margin="0,2,0,0"
+                                               TextTrimming="CharacterEllipsis"
+                                               ToolTip="{Binding InstallPathText}"/>
                                     <CheckBox Content="启动时自动检查更新"
                                               IsChecked="{Binding Settings.CheckUpdatesOnStartup}"
                                               FontSize="13" Margin="0,8,0,0"/>

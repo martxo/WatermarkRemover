@@ -67,6 +67,26 @@ public static class UpdateApplier
             throw new InvalidOperationException("无法启动更新脚本。");
     }
 
+    /// <summary>
+    /// Green/unzipped copies update by installing the Velopack Setup rather than replacing their
+    /// own running exe: the installer puts the app in the standard per-user location (which has
+    /// the incremental feed from then on) and launches that copy. The caller exits this process
+    /// immediately afterwards, so the installer never races a running instance.
+    /// </summary>
+    public static void ApplySetup(string setupPath)
+    {
+        if (string.IsNullOrWhiteSpace(setupPath) || !File.Exists(setupPath))
+            throw new InvalidOperationException("更新安装程序不存在，请重新下载。");
+
+        using Process? process = Process.Start(new ProcessStartInfo
+        {
+            FileName = setupPath,
+            Arguments = "--silent",
+            UseShellExecute = false,
+        });
+        if (process is null) throw new InvalidOperationException("无法启动更新安装程序。");
+    }
+
     /// <summary>Legacy shape: the package is the executable itself.</summary>
     private static string BuildExeApplyCommands(string downloadedExePath, string currentExe) =>
         $"move /y \"{downloadedExePath}\" \"{currentExe}\" >nul 2>&1\r\n" +

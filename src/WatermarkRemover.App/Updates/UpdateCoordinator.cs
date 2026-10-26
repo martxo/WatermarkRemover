@@ -1,6 +1,7 @@
 using System.IO;
 using System.Threading;
 using System.Windows;
+using Velopack;
 using WatermarkRemover.App.Logging;
 using WatermarkRemover.App.Services;
 using WatermarkRemover.Core.Settings;
@@ -25,13 +26,81 @@ public static class UpdateCoordinator
     private static int _running;
 
     /// <summary>
-    /// Runs one check. When <paramref name="silent"/> is true (startup path) every negative
-    /// outcome — unreachable channel, no update, not configured — stays quiet; only the actual
-    /// update flow becomes visible.
+    /// Startup path for an update that was downloaded but never applied — the user closed the app
+    /// instead of clicking the restart icon, or Update.exe failed to swap the files. Without this
+    /// the staged package sat in the cache forever while every restart kept the old version, which
+    /// is exactly the "installed and restarted, still 1.16.24" report. Returns true when startup
+    /// should stop here: the app is either restarting into the update or a warning was shown.
+    /// </summary>
+    private static bool TryApplyPendingUpdate(IDialogService dialogs)
+    {
+        VelopackAsset? pending;
+        try
+        {
+            pending = VelopackUpdateService.PendingRestart;
+        }
+        catch (Exception ex)
+        {
+            AppLog.Warn($"读取待应用更新失败：{ex.Message}");
+            return false;
+        }
+        if (pending is null) return false;
+
+        string target = pending.Version.ToString();
+        string running = UpdateService.CurrentVersion.ToString();
+        AppLog.Info($"发现已下载待应用的更新 v{target}（正在运行 v{running}）；" +
+                    VelopackUpdateService.DescribeInstall());
+
+        string guardDir = Path.Combine(AppFolders.Root, "updates");
+        if (!UpdateApplyGuard.ShouldAttempt(
+                guardDir, target, running, Environment.ProcessPath ?? string.Empty, DateTime.UtcNow))
+        {
+            string root = VelopackUpdateService.InstallRoot ?? "未识别";
+            AppLog.Error($"更新 v{target} 已下载但重启后仍未应用，停止自动重试。" +
+                         $"运行位置 {Environment.ProcessPath}，安装根目录 {root}");
+            dialogs.Warn(
+                $"新版本 v{target} 已下载，但重启后仍在运行 v{running}。\n\n" +
+                "可能的原因：\n" +
+                $"• 当前启动的不是安装版程序（运行位置：{Environment.ProcessPath}）；\n" +
+                "• 安装目录无法写入，更新程序没能替换文件。\n\n" +
+                $"安装位置：{root}\n\n" +
+                "请从桌面或开始菜单的「办公助理」重新打开；仍不行请到发布页下载最新安装包重新安装。",
+                "软件更新");
+            return true;
+        }
+
+        try
+        {
+            VelopackService.ApplyPendingAndRestart(pending);
+            return true; // the process exits inside the call
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error($"启动时应用更新 v{target} 失败", ex);
+            dialogs.Warn(
+                $"更新 v{target} 已下载，但启动时应用失败。\n\n原因：{ex.Message}\n\n" +
+                $"运行位置：{Environment.ProcessPath}\n" +
+                $"安装位置：{VelopackUpdateService.InstallRoot ?? "未识别"}\n\n" +
+                "可到设置中重新检查更新，或到发布页下载最新安装包。",
+                "软件更新");
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// End-to-end update flow shared by the startup check and the manual "check for updates"
+    /// button: query the channel, prompt, download with visible progress, verify, swap and restart.
+    /// Every phase the user waits through is reflected in the progress window — the only silent step
+    /// is the startup check itself.
     /// </summary>
     public static async Task RunCheckAsync(Window? owner, AppSettings settings, bool silent)
     {
         var dialogs = new DialogService(owner);
+
+        // A package downloaded by an earlier session is applied before anything else: this is
+        // what makes a plain close-and-reopen ("安装后重启") actually update. Startup checks being
+        // disabled or the network being down must not leave a verified package unapplied.
+        if (silent && TryApplyPendingUpdate(dialogs)) return;
 
         if (!UpdateConfig.IsConfigured)
         {
@@ -164,10 +233,16 @@ public static class UpdateCoordinator
         checkingWindow?.Close();
 
         string sizeText = info.SizeBytes > 0 ? $"约 {ProgressTextFormatter.FormatBytes(info.SizeBytes)}" : "未知大小";
+        // A green copy cannot replace its own running exe; the Setup installs the app properly
+        // (and the shortcut it creates is the copy that gets future incremental updates).
+        string setupHint = info.IsSetup
+            ? "\n\n当前是从解压目录直接运行，更新会把程序安装到系统默认位置并自动打开新版本；" +
+              "之后请使用桌面或开始菜单的「办公助理」。"
+            : string.Empty;
         bool accepted = dialogs.ConfirmYesNo(
             $"发现新版本 v{info.Version}（当前 v{UpdateService.CurrentVersion}），是否立即下载并更新？\n\n" +
             $"更新包大小：{sizeText}\n" +
-            "下载、校验均有进度显示，更新完成后程序会自动重启，无需重新安装。",
+            "下载、校验均有进度显示，更新完成后程序会自动重启，无需重新安装。" + setupHint,
             "软件更新");
 
         if (!accepted) return;
@@ -202,7 +277,15 @@ public static class UpdateCoordinator
             AppLog.Info($"更新 v{version} 已下载并通过校验：{downloadedPath}");
             void Apply()
             {
-                UpdateApplier.ApplyAndRestart(downloadedPath);
+                if (info.IsSetup)
+                {
+                    AppLog.Info($"解压版更新：启动安装程序 v{version}；{VelopackUpdateService.DescribeInstall()}");
+                    UpdateApplier.ApplySetup(downloadedPath);
+                }
+                else
+                {
+                    UpdateApplier.ApplyAndRestart(downloadedPath);
+                }
                 AppLog.Info($"准备退出当前程序以完成 v{version} 更新");
                 Application.Current.Shutdown();
             }
@@ -268,8 +351,11 @@ public static class UpdateCoordinator
             AppLog.Info($"更新 v{version} 已在后台下载并通过校验：{downloadedPath}");
             UpdateReadyNotifier.Current.PublishReady(version, () =>
             {
-                AppLog.Info($"用户从更新图标确认，应用 v{version}");
-                UpdateApplier.ApplyAndRestart(downloadedPath);
+                AppLog.Info($"用户从更新图标确认，应用 v{version}；{VelopackUpdateService.DescribeInstall()}");
+                if (info.IsSetup)
+                    UpdateApplier.ApplySetup(downloadedPath);
+                else
+                    UpdateApplier.ApplyAndRestart(downloadedPath);
                 Application.Current.Shutdown();
             });
         }
@@ -305,7 +391,7 @@ public static class UpdateCoordinator
             LogPackageCache($"更新 v{version} 下载完成后");
             UpdateReadyNotifier.Current.PublishReady(version, () =>
             {
-                AppLog.Info($"用户从更新图标确认，应用 v{version}");
+                AppLog.Info($"用户从更新图标确认，应用 v{version}；{VelopackUpdateService.DescribeInstall()}");
                 VelopackService.ApplyAndRestart(update);
             });
         }
@@ -504,7 +590,8 @@ public static class UpdateCoordinator
             {
                 // Update.exe waits for this process to exit, applies the package and relaunches;
                 // the current process terminates inside the call — nothing after it runs.
-                AppLog.Info($"准备退出当前程序以完成 v{version} 更新");
+                AppLog.Info($"准备退出当前程序以完成 v{version} 更新；" +
+                            VelopackUpdateService.DescribeInstall());
                 VelopackService.ApplyAndRestart(update);
             }
             notifier.PublishReady(version, Apply);
