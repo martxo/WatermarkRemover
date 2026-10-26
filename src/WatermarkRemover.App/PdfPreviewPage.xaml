@@ -1,6 +1,7 @@
 <UserControl x:Class="WatermarkRemover.App.PdfPreviewPage"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:behaviors="clr-namespace:WatermarkRemover.App.Behaviors"
              Background="Transparent">
 
     <!-- Screen-level image viewer content (hosted by FullscreenViewerWindow, which paints the
@@ -38,7 +39,9 @@
                               Focusable="False">
                     <ItemsControl ItemsSource="{Binding Thumbnails}"
                                   ItemTemplate="{StaticResource PdfThumbnailTileTemplate}"
-                                  Visibility="{Binding HasThumbnails, Converter={StaticResource BoolToVis}}">
+                                  Visibility="{Binding HasThumbnails, Converter={StaticResource BoolToVis}}"
+                                  behaviors:PdfPageDragReorder.IsEnabled="True"
+                                  behaviors:PdfPageDragReorder.Orientation="Vertical">
                         <ItemsControl.ItemContainerStyle>
                             <Style TargetType="ContentPresenter">
                                 <Setter Property="Margin" Value="0,0,0,8"/>

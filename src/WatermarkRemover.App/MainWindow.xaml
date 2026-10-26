@@ -1365,7 +1365,9 @@
                                             <ItemsControl DataContext="{Binding Strip}"
                                                           ItemsSource="{Binding StripItems}"
                                                           ItemTemplateSelector="{StaticResource PdfStripItemTemplateSelector}"
-                                                          Visibility="{Binding HasThumbnails, Converter={StaticResource BoolToVis}}">
+                                                          Visibility="{Binding HasThumbnails, Converter={StaticResource BoolToVis}}"
+                                                          behaviors:PdfPageDragReorder.IsEnabled="True"
+                                                          behaviors:PdfPageDragReorder.Orientation="Horizontal">
                                                 <ItemsControl.ItemsPanel>
                                                     <ItemsPanelTemplate>
                                                         <WrapPanel/>

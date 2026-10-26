@@ -365,6 +365,42 @@ public class PdfStripInsertTests : IDisposable
     }
 
     [Fact]
+    public async Task Dragging_a_page_to_another_slot_reorders_the_pdf_and_the_strip()
+    {
+        string pdf = WritePdf("target.pdf", 100, 110, 120);
+        var vm = new PdfPreviewViewModel(pdf, "scan.pdf", new FakeRenderer(3),
+            scanProvider: _ => Task.FromResult<string?>(null));
+        try
+        {
+            await vm.LoadAsync();
+            await DrainAsync(vm);
+            var tiles = vm.Thumbnails.ToList();
+
+            await vm.MovePageAsync(0, 2); // drag page 1 onto the right half of page 3
+
+            Assert.Equal(new double[] { 110, 120, 100 }, WidthsOf(pdf));
+            Assert.Equal(2, vm.PageIndex); // the canvas shows the page where it landed
+
+            // The dragged tile travels with its pixels rather than being rebuilt.
+            Assert.Same(tiles[0], vm.Thumbnails[2]);
+            Assert.Same(tiles[1], vm.Thumbnails[0]);
+            Assert.Same(tiles[2], vm.Thumbnails[1]);
+            Assert.Equal(new[] { "1", "2", "3" }, vm.Thumbnails.Select(t => t.PageLabel));
+
+            // Every gap now points at its new neighbour; the trailing append slot moved to the end.
+            Assert.Equal(vm.Thumbnails.Count + 1, vm.StripItems.Count);
+            Assert.Equal(new[] { -1, 0, 1 }, vm.StripItems.OfType<PdfPreviewStripUnitViewModel>()
+                .Select(unit => unit.Gap.InsertAfterIndex));
+            Assert.Equal(2, Assert.IsType<PdfPreviewGapViewModel>(vm.StripItems[^1]).InsertAfterIndex);
+            Assert.Contains("移到第 3 页", vm.StatusText);
+        }
+        finally
+        {
+            File.Delete(pdf);
+        }
+    }
+
+    [Fact]
     public async Task The_leading_gap_prepends_scanned_pages_before_page_one()
     {
         string pdf = WritePdf("target.pdf", 100, 110, 120);

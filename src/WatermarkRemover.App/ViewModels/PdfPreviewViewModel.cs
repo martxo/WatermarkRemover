@@ -910,6 +910,79 @@ public sealed class PdfPreviewViewModel : ObservableObject
     }
 
     /// <summary>
+    /// Drag-and-drop reorder: write the new page order into the PDF in one save, then move the
+    /// tile in place (its image travels with it) and show the page where it landed. The whole
+    /// strip is locked for the write — dropping onto another tile while a rotation is saving
+    /// would race the file swap, exactly like the corner edit buttons.
+    /// </summary>
+    internal async Task MovePageAsync(int fromIndex, int toIndex)
+    {
+        if (IsCancelled || IsRotating || IsOrienting) return;
+        if (fromIndex == toIndex) return;
+        if (fromIndex < 0 || fromIndex >= PageCount) return;
+        if (toIndex < 0 || toIndex >= PageCount) return;
+
+        using var op = AppLog.BeginOperation(
+            LogCategory.Preview, "调整页面顺序",
+            $"第 {fromIndex + 1} 页 → 第 {toIndex + 1} 页 / {Path.GetFileName(_pdfPath)}");
+
+        IsRotating = true;
+        StatusText = "正在调整页面顺序…";
+        try
+        {
+            // Cancel any in-flight tile fill: it reads by index, and the indexes are about to
+            // change. Already-loaded images travel with their tiles and stay correct.
+            int generation = ++_thumbnailLoadGeneration;
+
+            await WritePdfAsync(() => PdfPageOrderer.MovePage(_pdfPath, fromIndex, toIndex))
+                .ConfigureAwait(true);
+            op.Step("调整顺序写盘", $"第 {fromIndex + 1} 页 → 第 {toIndex + 1} 页");
+
+            if (IsCancelled)
+            {
+                op.Complete("已取消（文件已保存）");
+                return; // the file is saved; nothing is on screen any more
+            }
+            RememberFileStamp(force: true);
+
+            // Render cache is keyed by index, so every entry is stale now.
+            InvalidateAllPages();
+            Thumbnails.Move(fromIndex, toIndex);
+            for (int i = 0; i < Thumbnails.Count; i++)
+                Thumbnails[i].SetIndex(i);
+            RebuildStripItems();
+            SyncThumbnailSelection();
+            foreach (var thumb in Thumbnails) thumb.RefreshCommands();
+            op.Step("重排缩略图", $"第 {fromIndex + 1} 页 → 第 {toIndex + 1} 页");
+
+            // Only tiles that never got an image need pixels; the moved ones kept theirs.
+            var empty = Thumbnails.Where(tile => tile.Image is null).ToList();
+            if (empty.Count > 0)
+                _ = LoadThumbnailsAsync(empty, generation);
+
+            await RenderAsync(toIndex, force: true).ConfigureAwait(true);
+            op.Step("画布刷新", $"第 {PageIndex + 1} 页");
+            if (StatusText.Length == 0 || StatusText.StartsWith("正在调整", StringComparison.Ordinal))
+                ShowTransientStatus($"已把第 {fromIndex + 1} 页移到第 {toIndex + 1} 页");
+            op.Complete($"第 {fromIndex + 1} 页 → 第 {toIndex + 1} 页，共 {PageCount} 页");
+        }
+        catch (FileNotFoundException ex)
+        {
+            op.Fail($"调整顺序失败（文件不可达）：{ex.FileName}", ex);
+            if (!IsCancelled) StatusText = ex.Message;
+        }
+        catch (Exception ex)
+        {
+            op.Fail($"调整顺序失败：第 {fromIndex + 1} 页 → 第 {toIndex + 1} 页", ex);
+            if (!IsCancelled) StatusText = $"调整页面顺序失败：{ex.Message}";
+        }
+        finally
+        {
+            IsRotating = false;
+        }
+    }
+
+    /// <summary>
     /// Waits until no load / orientation / page-write pass is touching the file. The host's
     /// background naming (a rename = File.Move) races those writers otherwise — a move during
     /// a strip rewrite throws and the scan silently keeps its timestamp name.
