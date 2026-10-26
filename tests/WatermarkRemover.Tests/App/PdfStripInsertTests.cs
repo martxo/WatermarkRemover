@@ -93,8 +93,10 @@ public class PdfStripInsertTests : IDisposable
             // between units, so every row — including a wrapped one — opens with a plus slot
             // (a flat gap/tile list used to let the wrap fall between a tile and its next plus,
             // leaving the second row's first tile bare and the columns misaligned). Unit i opens
-            // with gap(i-1); between two adjacent pages one plus serves both edges.
-            Assert.Equal(3, vm.StripItems.Count);
+            // with gap(i-1); between two adjacent pages one plus serves both edges. The final
+            // item is the standalone trailing gap (append after the last page) — it must not be
+            // folded into the last unit, which is what used to widen that page's cell.
+            Assert.Equal(4, vm.StripItems.Count);
             var first = Assert.IsType<PdfPreviewStripUnitViewModel>(vm.StripItems[0]);
             Assert.Equal(-1, first.Gap.InsertAfterIndex);
             Assert.Same(vm.Thumbnails[0], first.Tile);
@@ -104,6 +106,9 @@ public class PdfStripInsertTests : IDisposable
             var last = Assert.IsType<PdfPreviewStripUnitViewModel>(vm.StripItems[2]);
             Assert.Equal(1, last.Gap.InsertAfterIndex);
             Assert.Same(vm.Thumbnails[2], last.Tile);
+            var trailing = Assert.IsType<PdfPreviewGapViewModel>(vm.StripItems[3]);
+            Assert.Equal(2, trailing.InsertAfterIndex); // after the last page = append
+            Assert.Contains("最后一页", trailing.ToolTip);
         }
         finally
         {
@@ -133,7 +138,7 @@ public class PdfStripInsertTests : IDisposable
             Assert.Equal(1, scans);
             Assert.Equal(5, vm.PageCount);
             Assert.Equal(new double[] { 100, 210, 220, 110, 120 }, WidthsOf(pdf));
-            Assert.Equal(5, vm.StripItems.Count); // one atomic unit per page, rebuilt around the insert
+            Assert.Equal(6, vm.StripItems.Count); // one atomic unit per page + the trailing gap
             Assert.Equal(1, vm.PageIndex); // the canvas lands on the first scanned page
             Assert.False(File.Exists(scanned), "the intermediate scan file is removed once spliced in");
             Assert.Contains("已插入 2 页", vm.StatusText);
@@ -196,7 +201,7 @@ public class PdfStripInsertTests : IDisposable
 
             Assert.Contains("未发现扫描仪", vm.StatusText);
             Assert.Equal(3, vm.PageCount);
-            Assert.Equal(3, vm.StripItems.Count);
+            Assert.Equal(4, vm.StripItems.Count); // 3 page units + the trailing gap
             Assert.Equal(before, File.ReadAllBytes(pdf));
         }
         finally
@@ -310,9 +315,12 @@ public class PdfStripInsertTests : IDisposable
             await vm.LoadAsync();
             await DrainAsync(vm);
 
-            var single = Assert.IsType<PdfPreviewStripUnitViewModel>(Assert.Single(vm.StripItems));
+            var single = Assert.IsType<PdfPreviewStripUnitViewModel>(vm.StripItems[0]);
             Assert.Equal(-1, single.Gap.InsertAfterIndex);
+            var trailing = Assert.IsType<PdfPreviewGapViewModel>(vm.StripItems[1]);
+            Assert.Equal(0, trailing.InsertAfterIndex); // after the only page
             Assert.True(vm.InsertScanAfterCommand.CanExecute(-1), "front slot of a one-page document");
+            Assert.True(vm.InsertScanAfterCommand.CanExecute(0), "trailing slot of a one-page document");
             Assert.True(vm.AppendScanCommand.CanExecute(null), "back slot of a one-page document");
         }
         finally
@@ -327,8 +335,8 @@ public class PdfStripInsertTests : IDisposable
         // The end-of-document slot used to be a trailing plus inside the last unit, which made
         // that unit 14px wider than every other one. A row with room for a tile but not for
         // tile+14 bumped the whole last page to the next row and left a cell-sized hole
-        // (2026-10-22 report). The entry is now a rail button outside the wrap flow: every unit
-        // stays [gap | tile] of equal width, and appending still lands at the end of the file.
+        // (2026-10-22 report). Now the flow's trailing plus is a SEPARATE item (so no page unit
+        // grows) and the rail keeps a second entry; appending still lands at the end of the file.
         string pdf = WritePdf("target.pdf", 100, 110);
         string scanned = WritePdf("scanned.pdf", 210);
         var vm = new PdfPreviewViewModel(pdf, "scan.pdf", new FakeRenderer(2),
@@ -345,9 +353,10 @@ public class PdfStripInsertTests : IDisposable
 
             Assert.Equal(3, vm.PageCount);
             Assert.Equal(new double[] { 100, 110, 210 }, WidthsOf(pdf));
-            Assert.Equal(3, vm.StripItems.Count);
-            Assert.All(vm.StripItems,
-                item => Assert.NotNull(Assert.IsType<PdfPreviewStripUnitViewModel>(item).Tile));
+            Assert.Equal(4, vm.StripItems.Count); // 3 page units + the trailing gap
+            Assert.All(vm.StripItems.OfType<PdfPreviewStripUnitViewModel>(),
+                unit => Assert.NotNull(unit.Tile));
+            Assert.Equal(2, Assert.IsType<PdfPreviewGapViewModel>(vm.StripItems[3]).InsertAfterIndex);
         }
         finally
         {

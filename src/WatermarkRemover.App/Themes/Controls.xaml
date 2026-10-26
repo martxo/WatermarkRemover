@@ -1,5 +1,6 @@
 <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:presentation="clr-namespace:WatermarkRemover.App.Presentation"
                     xmlns:vm="clr-namespace:WatermarkRemover.App.ViewModels">
 
     <!-- Shared control styles. Every window pulls these in via App.xaml; window-specific
@@ -528,11 +529,10 @@
          units, so every row — including a wrapped second row — opens with its own plus slot
          and the columns stay vertically aligned.
          FLOW INVARIANT: every unit is exactly this wide (gap + tile), the last page included.
-         A third part here — e.g. the old trailing "append after the last page" plus, which
-         only the last unit carried — makes that unit 14px wider than its siblings; a row with
-         room for a tile but not for tile+14 then pushes the whole last page to the next row
-         and leaves a cell-sized hole (2026-10-22 report). The append action lives in the
-         strip's zoom rail instead. Never add a width-bearing decoration to one unit only. -->
+         The trailing "append after the last page" slot is a SEPARATE item after the units —
+         never a third part of the last unit. Inside the unit it made that unit 14px wider than
+         its siblings; a row with room for a tile but not for tile+14 then pushed the last page
+         to the next row and left a cell-sized hole (2026-10-22 report). -->
     <DataTemplate x:Key="PdfStripUnitTemplate">
         <StackPanel Orientation="Horizontal">
             <ContentControl Content="{Binding Gap}"
@@ -541,6 +541,12 @@
                             ContentTemplate="{StaticResource PdfThumbnailTileTemplate}"/>
         </StackPanel>
     </DataTemplate>
+
+    <!-- Units and the trailing gap item share one ItemsControl; this picks the right shape
+         for each without widening the unit that carries the last page. -->
+    <presentation:PdfStripItemTemplateSelector x:Key="PdfStripItemTemplateSelector"
+                                               Unit="{StaticResource PdfStripUnitTemplate}"
+                                               Gap="{StaticResource PdfGapInsertTemplate}"/>
 
     <!-- Hairline scrollbars, the way web apps do it: no arrow buttons, a thin rounded thumb
          floating in a narrow gutter instead of the fat Windows default. Every scroll bar in

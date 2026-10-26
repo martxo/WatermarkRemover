@@ -682,9 +682,11 @@ public sealed class PdfPreviewViewModel : ObservableObject
     /// <summary>Rebuilds the display sequence: one atomic unit per page — [gap | tile]. Unit i
     /// opens with the gap after page i-1 (-1 = in front of page one), so every slot between
     /// pages still takes a scan while the wrap panel can only break between units — a wrapped
-    /// row never starts with a bare tile, and the columns line up across rows. Every unit keeps
-    /// the same shape (gap + tile) on purpose: a wider last unit is what pushed the last page
-    /// to its own row and left a hole; see <see cref="PdfPreviewStripUnitViewModel"/>.</summary>
+    /// row never starts with a bare tile, and the columns line up across rows. Every page unit
+    /// keeps the same shape (gap + tile) on purpose: a wider last unit is what pushed the last
+    /// page to its own row and left a hole; see <see cref="PdfPreviewStripUnitViewModel"/>.
+    /// The trailing "append after the last page" slot closes the strip as its own item: adding
+    /// it to the last unit would widen that unit by a gap and reintroduce the same hole.</summary>
     private void RebuildStripItems()
     {
         StripItems.Clear();
@@ -696,6 +698,10 @@ public sealed class PdfPreviewViewModel : ObservableObject
             StripItems.Add(new PdfPreviewStripUnitViewModel(
                 new PdfPreviewGapViewModel(i - 1, gapToolTip), Thumbnails[i]));
         }
+
+        if (Thumbnails.Count == 0) return;
+        StripItems.Add(new PdfPreviewGapViewModel(
+            Thumbnails.Count - 1, "点击扫描，把新页追加到最后一页之后"));
     }
 
     /// <summary>Exactly one tile carries the accent ring: the page the canvas is showing.</summary>

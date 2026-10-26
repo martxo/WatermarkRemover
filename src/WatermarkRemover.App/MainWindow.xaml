@@ -1364,7 +1364,7 @@
                                                       PreviewMouseWheel="OnStripPreviewMouseWheel">
                                             <ItemsControl DataContext="{Binding Strip}"
                                                           ItemsSource="{Binding StripItems}"
-                                                          ItemTemplate="{StaticResource PdfStripUnitTemplate}"
+                                                          ItemTemplateSelector="{StaticResource PdfStripItemTemplateSelector}"
                                                           Visibility="{Binding HasThumbnails, Converter={StaticResource BoolToVis}}">
                                                 <ItemsControl.ItemsPanel>
                                                     <ItemsPanelTemplate>
