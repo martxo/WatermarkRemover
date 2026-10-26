@@ -16,6 +16,26 @@ public static class PdfPageInserter
     public static int InsertAfter(string targetPdfPath, int insertAfterIndex, string sourcePdfPath) =>
         Insert(targetPdfPath, insertAfterIndex + 1, sourcePdfPath);
 
+    /// <summary>Appends every page of <paramref name="sourcePdfPath"/> to the end of the target
+    /// and returns how many pages were added — the continuation of an interrupted scan lands on
+    /// the same document instead of becoming a second file.</summary>
+    public static int Append(string targetPdfPath, string sourcePdfPath)
+    {
+        if (string.IsNullOrWhiteSpace(targetPdfPath))
+            throw new ArgumentException("PDF path must not be empty.", nameof(targetPdfPath));
+        if (string.IsNullOrWhiteSpace(sourcePdfPath))
+            throw new ArgumentException("PDF path must not be empty.", nameof(sourcePdfPath));
+
+        int inserted = 0;
+        PdfDocumentEditor.EditDocument(targetPdfPath, doc =>
+        {
+            using PdfDocument source = PdfReader.Open(sourcePdfPath, PdfDocumentOpenMode.Import);
+            doc.Pages.InsertRange(doc.PageCount, source);
+            inserted = source.PageCount;
+        });
+        return inserted;
+    }
+
     /// <summary>Inserts every page of the source PDF at the given zero-based position of the
     /// target (PageCount = append at the end) and returns how many pages were added.</summary>
     public static int Insert(string targetPdfPath, int position, string sourcePdfPath)

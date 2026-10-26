@@ -1223,6 +1223,16 @@
                                     </StackPanel>
 
                                     <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                        <!-- interrupted / cancelled scans kept their pages: one click
+                                             appends the rest to this same PDF instead of a new file -->
+                                        <Button Style="{StaticResource SmallButton}"
+                                                Content="继续扫描"
+                                                Padding="10,3"
+                                                Margin="0,0,8,0"
+                                                Visibility="{Binding ShowContinueScan, Converter={StaticResource BoolToVis}}"
+                                                Command="{Binding ContinueScanCommand}"
+                                                ToolTip="接续这份文档的末尾再扫几页，页面会追加到同一个 PDF"/>
+
                                         <!-- failed scan rows: one click re-runs the scanner instead of
                                              making the user find the scan button again -->
                                         <Button Style="{StaticResource SmallButton}"

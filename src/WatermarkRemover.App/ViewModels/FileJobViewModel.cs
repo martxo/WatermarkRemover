@@ -59,6 +59,7 @@ public sealed class FileJobViewModel : ObservableObject
     private bool _suppressCloseStamp;
     private PdfPreviewViewModel? _strip;
     private bool _stripOpen;
+    private bool _canContinueScan;
 
     /// <summary>Numbered-rename explanations expire by the app's shared transient rule.</summary>
     private readonly TransientStatus _transientNote;
@@ -82,10 +83,16 @@ public sealed class FileJobViewModel : ObservableObject
         CopyErrorCommand = new RelayCommand(CopyErrorReport, _ => State == JobState.Failed);
         RetryCommand = new RelayCommand(_ => RetryRequested?.Invoke(this, EventArgs.Empty), _ => ShowRetry);
         UploadCommand = new RelayCommand(_ => UploadRequested?.Invoke(this, EventArgs.Empty), _ => ShowUploadButton);
+        ContinueScanCommand = new RelayCommand(
+            _ => ContinueScanRequested?.Invoke(this, EventArgs.Empty), _ => ShowContinueScan);
     }
 
     /// <summary>Raised when the user asks to run this failed scan again; the host owns the scanner.</summary>
     public event EventHandler? RetryRequested;
+
+    /// <summary>Raised when the user asks to append another scanned batch to this row's PDF;
+    /// the host owns the scanner and the file write.</summary>
+    public event EventHandler? ContinueScanRequested;
 
     /// <summary>Raised when the user asks to send this row's file to the netdisk; the host owns the account.</summary>
     public event EventHandler? UploadRequested;
@@ -123,6 +130,7 @@ public sealed class FileJobViewModel : ObservableObject
             {
                 OnPropertyChanged(nameof(ShowCopyError));
                 OnPropertyChanged(nameof(ShowRetry));
+                OnPropertyChanged(nameof(ShowContinueScan));
                 OnPropertyChanged(nameof(ShowLiveStrip));
                 OnPropertyChanged(nameof(ShowUploadChip));
                 OnPropertyChanged(nameof(ShowUploadButton));
@@ -147,6 +155,13 @@ public sealed class FileJobViewModel : ObservableObject
     /// <summary>A failed scan can simply be re-run — there is no source file to reprocess, so the
     /// generic "drop the file again" recovery does not exist for it.</summary>
     public bool ShowRetry => State == JobState.Failed && OwnerFeatureId == "scan.page";
+
+    /// <summary>An interrupted or cancelled scan kept its pages, so the row offers
+    /// 「继续扫描」: another batch is appended to this same PDF instead of starting a new file.
+    /// Only rows the host marked as continuable show it (restored / untouched scans do not).</summary>
+    public bool ShowContinueScan =>
+        _canContinueScan && State == JobState.Succeeded &&
+        OutputPath is { } path && File.Exists(path);
 
     /// <summary>A PDF output exists on disk, so the in-app preview can be offered for this row.</summary>
     public bool ShowPreview =>
@@ -361,6 +376,7 @@ public sealed class FileJobViewModel : ObservableObject
                 OnPropertyChanged(nameof(IsRenamable));
                 OnPropertyChanged(nameof(ChipsVisible));
                 OnPropertyChanged(nameof(ShowPreview));
+                OnPropertyChanged(nameof(ShowContinueScan));
                 OnPropertyChanged(nameof(PreviewButtonVisibility));
             }
         }
@@ -450,6 +466,9 @@ public sealed class FileJobViewModel : ObservableObject
     /// <summary>Re-runs the scan for this failed row (host handles the scanner session).</summary>
     public RelayCommand RetryCommand { get; }
 
+    /// <summary>Appends another scanned batch to this row's PDF (host handles the scanner).</summary>
+    public RelayCommand ContinueScanCommand { get; }
+
     /// <summary>Sends this row's file to the netdisk (host owns the configured account).</summary>
     public RelayCommand UploadCommand { get; }
 
@@ -477,6 +496,30 @@ public sealed class FileJobViewModel : ObservableObject
     {
         State = JobState.Processing;
         Detail = processingText;
+    }
+
+    /// <summary>Host side: this scan kept a partial document, so 「继续扫描」 becomes available.</summary>
+    internal void AllowContinueScan()
+    {
+        if (_canContinueScan) return;
+        _canContinueScan = true;
+        OnPropertyChanged(nameof(ShowContinueScan));
+        ContinueScanCommand.RaiseCanExecuteChanged();
+    }
+
+    /// <summary>Progress / result line for a continuation pass. The row is already Succeeded, so
+    /// <see cref="ReportStage"/> would ignore it; this writes the same line without that gate.</summary>
+    public void ReportContinuation(string text)
+    {
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (dispatcher is null || dispatcher.CheckAccess())
+        {
+            Detail = text;
+        }
+        else
+        {
+            dispatcher.Invoke(() => Detail = text);
+        }
     }
 
     /// <summary>Live stage text while the row is processing (检测水印 / 识别文字 / 检查朝向 …).

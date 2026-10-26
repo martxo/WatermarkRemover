@@ -67,6 +67,19 @@ public class PageInserterTests : IDisposable
     }
 
     [Fact]
+    public void Appending_lands_the_source_pages_after_the_last_page()
+    {
+        string target = WritePdf("target.pdf", 100, 110);
+        string source = WritePdf("source.pdf", 210, 220);
+
+        int added = PdfPageInserter.Append(target, source);
+
+        Assert.Equal(2, added);
+        Assert.Equal(new double[] { 100, 110, 210, 220 }, WidthsOf(target));
+        Assert.False(File.Exists(target + ".edit.tmp"), "temporary file must not survive the swap");
+    }
+
+    [Fact]
     public void An_out_of_range_position_fails_before_anything_is_written()
     {
         string target = WritePdf("target.pdf", 100, 110, 120);

@@ -623,16 +623,14 @@ public sealed class PdfPreviewViewModel : ObservableObject
                 return;
             }
 
-            // Blank detection is a heuristic running unattended: keep the pre-cleanup document
-            // aside first, so a misjudged content page can still be recovered afterwards.
-            string? backup = TryBackupBeforeCleanup(blankPages.Count);
-
+            // Blank detection is a heuristic running unattended, so it runs in one in-place save
+            // and says how many pages went; no copy of the pre-cleanup document is kept — the
+            // user asked for a clean scan, not a backup pile.
             int removed = 0;
             await WritePdfAsync(() => removed = PdfPageRotator.DeletePages(_pdfPath, blankPages));
             op.Step("删除空白页写盘", $"删除 {removed} 页");
             if (IsCancelled || removed == 0)
             {
-                TryDeleteBackup(backup);
                 op.Complete("写盘未生效");
                 return;
             }
@@ -645,9 +643,7 @@ public sealed class PdfPreviewViewModel : ObservableObject
             BuildThumbnails();
             StartThumbnailLoad();
             await RenderAsync(Math.Min(PageIndex, PageCount - 1), force: true);
-            StatusText = backup is null
-                ? $"已自动删除 {removed} 页空白页"
-                : $"已自动删除 {removed} 页空白页（原件备份：{Path.GetFileName(backup)}）";
+            StatusText = $"已自动删除 {removed} 页空白页";
             op.Complete($"删除 {removed} 页空白页，剩余 {PageCount} 页");
         }
         catch (FileNotFoundException ex)
@@ -663,57 +659,6 @@ public sealed class PdfPreviewViewModel : ObservableObject
         finally
         {
             IsRotating = false;
-        }
-    }
-
-    /// <summary>Where pre-cleanup copies live: next to logs/settings, never in the user's
-    /// scan folder (70 duplex scans a day would bury it).</summary>
-    private static string CleanupBackupDirectory => Path.Combine(AppFolders.Root, "pages-backup");
-
-    /// <summary>Only the newest few are kept; the rest is pruned on every cleanup.</summary>
-    private const int CleanupBackupsToKeep = 20;
-
-    /// <summary>Copies the PDF aside before pages are deleted automatically. Best effort — the
-    /// cleanup itself still runs when the copy fails, and null means there is nothing to undo.</summary>
-    private string? TryBackupBeforeCleanup(int blankCount)
-    {
-        try
-        {
-            Directory.CreateDirectory(CleanupBackupDirectory);
-            string name = $"{Path.GetFileNameWithoutExtension(_pdfPath)}-{blankCount}页空白-" +
-                          $"{DateTime.Now:yyyyMMdd-HHmmss}.pdf";
-            string backup = OutputNameGenerator.FindAvailablePath(CleanupBackupDirectory, name);
-            File.Copy(_pdfPath, backup, overwrite: false);
-            PruneOldCleanupBackups();
-            AppLog.Debug($"空白页清理前备份：{backup}");
-            return backup;
-        }
-        catch (Exception ex)
-        {
-            AppLog.Warn($"空白页清理前备份失败：{ex.Message}");
-            return null;
-        }
-    }
-
-    private static void TryDeleteBackup(string? backup)
-    {
-        if (backup is null) return;
-        try { File.Delete(backup); } catch { /* best effort */ }
-    }
-
-    private static void PruneOldCleanupBackups()
-    {
-        try
-        {
-            var stale = new DirectoryInfo(CleanupBackupDirectory)
-                .GetFiles("*.pdf")
-                .OrderByDescending(f => f.LastWriteTimeUtc)
-                .Skip(CleanupBackupsToKeep);
-            foreach (FileInfo file in stale) file.Delete();
-        }
-        catch (Exception ex)
-        {
-            AppLog.Debug($"清理过期空白页备份失败：{ex.Message}");
         }
     }
 
@@ -1085,6 +1030,51 @@ public sealed class PdfPreviewViewModel : ObservableObject
                     // A leftover scan file beats losing the pages; the log already recorded the insert.
                 }
             }
+        }
+    }
+
+    /// <summary>
+    /// Grows the strip after a continuation scan the host already appended to the file: the
+    /// existing tiles keep their indexes, the new pages get tiles and renders, and the canvas
+    /// lands on the first page that just came in. Runs under the same edit lock as an insert so
+    /// no tile can start a rotation while the file is being re-read. Quiet on blank backs — the
+    /// same scoped orientation pass the gap insert uses.
+    /// </summary>
+    internal async Task AppendScannedPagesAsync(int added)
+    {
+        if (added <= 0 || IsCancelled) return;
+
+        IsRotating = true;
+        try
+        {
+            RememberFileStamp(force: true);
+            int firstNew = PageCount;
+            PageCount += added;
+
+            var fresh = new List<PdfPreviewThumbnailViewModel>(added);
+            for (int i = 0; i < added; i++)
+            {
+                var tile = new PdfPreviewThumbnailViewModel(this, firstNew + i);
+                fresh.Add(tile);
+                Thumbnails.Add(tile);
+            }
+            SyncThumbnailSelection();
+            foreach (var thumb in Thumbnails) thumb.RefreshCommands();
+            RebuildStripItems();
+            // Same generation: the initial fill may still be running for the first pages, and
+            // bumping it would abandon their remaining tiles.
+            _ = LoadThumbnailsAsync(fresh, _thumbnailLoadGeneration);
+
+            await OrientInsertedPagesAsync(firstNew, added).ConfigureAwait(true);
+            await RenderAsync(firstNew, force: true).ConfigureAwait(true);
+
+            if (StatusText.Length == 0) StatusText = $"已续扫 {added} 页，共 {PageCount} 页。";
+            AppLog.Info($"续扫页面已并入预览：{Path.GetFileName(_pdfPath)}，" +
+                        $"新增 {added} 页，共 {PageCount} 页");
+        }
+        finally
+        {
+            IsRotating = false;
         }
     }
 

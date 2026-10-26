@@ -773,8 +773,25 @@ public sealed class MainViewModel : ObservableObject
         job.AdoptSource(path);
         string summary = outcome.Cancelled
             ? $"已取消，保留 {outcome.PageCount} 页"
-            : $"扫描 {outcome.PageCount} 页";
+            : outcome.Interruption is { Length: > 0 }
+                ? $"扫描中断，已保存 {outcome.PageCount} 页"
+                : $"扫描 {outcome.PageCount} 页";
         job.Apply(FeatureResult.Success(path, path, summary, outcome.PageCount));
+        // A device failure mid-document (paper jam, cable) used to lose every page already
+        // pulled off the hardware. The partial PDF is saved now, and the row offers
+        // 「继续扫描」 so the rest is appended to this same document instead of a new file.
+        if (outcome.Interruption is { Length: > 0 } interruption)
+        {
+            job.AllowContinueScan();
+            job.ReportContinuation(
+                $"扫描中断（{interruption}），已保存 {outcome.PageCount} 页；点「继续扫描」接着扫");
+            AppLog.Warn($"扫描中断但已保存 {outcome.PageCount} 页：{path}，原因：{interruption}");
+            op.Step("扫描中断", $"已保存 {outcome.PageCount} 页，可继续扫描");
+        }
+        else if (outcome.Cancelled && outcome.PageCount > 0)
+        {
+            job.AllowContinueScan();
+        }
         // Hand the pages already on screen to the strip so it opens with real thumbnails instead
         // of an empty grid: the live row then disappears without the strip visibly rebuilding.
         var livePages = job.LiveThumbnails.ToArray();
@@ -801,7 +818,9 @@ public sealed class MainViewModel : ObservableObject
 
         op.Complete(summary);
         // 「取消扫描」 with pages kept means the user is done: never roll into another document.
-        return !outcome.Cancelled;
+        // An interrupted session is the same — the next sheet stack belongs on this same
+        // document via 「继续扫描」, not a fresh one.
+        return !outcome.Cancelled && outcome.Interruption is not { Length: > 0 };
     }
 
     /// <summary>A row that exists for the whole scan: live page count first, the finished PDF
@@ -932,6 +951,7 @@ public sealed class MainViewModel : ObservableObject
         job.SuffixToggleRequested += OnJobSuffixToggleRequested;
         job.UploadRequested += OnJobUploadRequested;
         job.RetryRequested += OnJobRetryRequested;
+        job.ContinueScanRequested += OnJobContinueScanRequested;
         job.PropertyChanged += OnJobPropertyChanged;
     }
 
@@ -1175,6 +1195,149 @@ public sealed class MainViewModel : ObservableObject
         AppLog.Info("扫描失败记录：重新扫描");
         Board.Remove(job);
         _ = RunScanAsync();
+    }
+
+    /// <summary>
+    /// An interrupted scan row's 「继续扫描」: another session whose pages are appended to the
+    /// row's existing PDF, so the document stays one file across a paper jam or a cancel.
+    /// </summary>
+    private void OnJobContinueScanRequested(object? sender, EventArgs e)
+    {
+        if (sender is not FileJobViewModel job) return;
+        if (IsScanning)
+        {
+            job.ReportContinuation("扫描仪正在使用，等这次结束后再继续");
+            return;
+        }
+
+        if (job.OutputPath is not { } path || !File.Exists(path))
+        {
+            job.ReportContinuation("原文件已被移动或删除，无法继续扫描");
+            return;
+        }
+        _ = ContinueScanAsync(job, path);
+    }
+
+    /// <summary>
+    /// One more scan pass for an existing record: the pages are appended to that record's PDF
+    /// (one in-place save), the row's page total is refreshed, and the open strip grows in place.
+    /// A pass that produces nothing leaves the document untouched and says why.
+    /// </summary>
+    private async Task ContinueScanAsync(FileJobViewModel job, string target)
+    {
+        using var op = AppLog.BeginOperation(LogCategory.Scan, "继续扫描", Path.GetFileName(target));
+
+        IsScanning = true;
+        try
+        {
+            ScanOutcome outcome;
+            try
+            {
+                outcome = await _scan.ScanOnceAsync(
+                    new Progress<string>(job.ReportContinuation)).ConfigureAwait(true);
+            }
+            catch (ScannerBusyException ex)
+            {
+                op.Complete($"未开始：{ex.Message}");
+                job.ReportContinuation("扫描仪正忙，稍后再试");
+                return;
+            }
+
+            if (!outcome.Success || string.IsNullOrEmpty(outcome.OutputPath))
+            {
+                string reason = outcome.Error ?? "没有读取到页面";
+                op.Complete($"未追加：{reason}");
+                job.ReportContinuation($"继续扫描失败（{reason}），原文件未改动");
+                return;
+            }
+
+            string scanned = outcome.OutputPath;
+            // The open strip may still be writing its own passes (blank cleanup, auto-orient);
+            // appending under that write would race the file swap.
+            if (job.Strip is { } settling)
+                await settling.WaitForSettledAsync().ConfigureAwait(true);
+
+            // Background naming may have moved the file while the scanner ran: append to where
+            // the row's document actually is now, not the path captured at click time.
+            if (job.OutputPath is { } current && File.Exists(current))
+                target = current;
+            if (!File.Exists(target))
+            {
+                op.Complete("未追加：原文件已被移动或删除");
+                job.ReportContinuation(
+                    $"原文件已被移动或删除，无法继续扫描。新扫的 {outcome.PageCount} 页在 {scanned}");
+                return;
+            }
+
+            int added;
+            try
+            {
+                added = await Task.Run(() => PdfPageInserter.Append(target, scanned)).ConfigureAwait(true);
+            }
+            catch (Exception ex)
+            {
+                op.Fail("追加扫描页失败", ex);
+                // The freshly scanned pages still exist as their own file; say where they are
+                // instead of silently dropping them.
+                job.ReportContinuation(
+                    $"追加失败：{ex.Message}。新扫的 {outcome.PageCount} 页在 {scanned}");
+                return;
+            }
+
+            // The scan file's pages now live inside the target: remove the intermediate so the
+            // output folder does not collect half-documents.
+            try { File.Delete(scanned); }
+            catch (IOException) { /* a leftover file beats losing pages */ }
+
+            op.Step("追加页面", $"新增 {added} 页 → {Path.GetFileName(target)}");
+
+            int total = await SharedPdfRenderer.GetPageCountAsync(target).ConfigureAwait(true);
+            string summary = outcome.Cancelled
+                ? $"已取消，共保留 {total} 页"
+                : outcome.Interruption is { Length: > 0 }
+                    ? $"扫描中断，已保存 {total} 页"
+                    : $"扫描 {total} 页";
+            job.Apply(FeatureResult.Success(target, target, summary, total));
+            Board.MoveToTop(job);
+            ScheduleJournalSave();
+
+            // The row is already finished, so Apply's State setter did not notify listeners; the
+            // status line is this pass's own surface.
+            if (outcome.Interruption is { Length: > 0 } interruption)
+            {
+                job.ReportContinuation(
+                    $"又中断（{interruption}），已保存 {total} 页；可再点「继续扫描」");
+                op.Complete($"中断，共 {total} 页");
+            }
+            else if (outcome.Cancelled)
+            {
+                job.ReportContinuation($"已取消，已保存 {total} 页；可再点「继续扫描」接着扫");
+                op.Complete($"已取消，共 {total} 页");
+            }
+            else
+            {
+                job.ReportContinuation($"已续扫 {added} 页，共 {total} 页");
+                op.Complete($"新增 {added} 页，共 {total} 页");
+            }
+
+            if (job.Strip is { } strip)
+            {
+                try
+                {
+                    await strip.AppendScannedPagesAsync(added).ConfigureAwait(true);
+                    op.Step("刷新预览", $"新增 {added} 页");
+                }
+                catch (Exception ex)
+                {
+                    // The file is already correct; only the on-screen strip lags behind.
+                    op.Note($"预览刷新失败：{ex.Message}", LogLevel.Debug);
+                }
+            }
+        }
+        finally
+        {
+            IsScanning = false;
+        }
     }
 
     /// <summary>

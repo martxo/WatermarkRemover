@@ -24,7 +24,8 @@ public sealed record ScanOutcome(
     string? Error,
     string? ErrorDetails,
     bool Cancelled = false,
-    string? Warning = null);
+    string? Warning = null,
+    string? Interruption = null);
 
 /// <summary>One page just pulled from the device, delivered while the scan is still running.
 /// The final PDF does not exist yet; the small PNG lets the row show the page immediately.</summary>
@@ -193,6 +194,10 @@ public sealed class ScanService
         double dpi = PdfDocumentBuilder.ResolveDpi(settings);
         int captured = 0;
         bool cancelled = false;
+        // The device can fail mid-document (paper jam, cable, driver). That must not throw away
+        // the pages already pulled off the hardware: the reason is kept and the partial document
+        // is assembled and saved below, exactly like a cancel.
+        string? readError = null;
         try
         {
             while (true)
@@ -233,15 +238,40 @@ public sealed class ScanService
             // Keep every page that already reached us: the partial document is assembled below.
             cancelled = true;
         }
+        catch (Exception ex)
+        {
+            readError = ex.Message;
+            AppLog.Error($"扫描中断（已读取 {captured} 页），保留页面并继续保存", ex);
+            op.Step("读取中断", $"{ex.Message}（已读 {captured} 页）");
+        }
         finally
         {
             // Release the device before assembling the PDF, so a cancel stops the hardware now
-            // instead of after the (potentially long) document build.
-            await session.DisposeAsync();
+            // instead of after the (potentially long) document build. A broken device often
+            // fails here too — that must not discard the pages already in hand.
+            try
+            {
+                await session.DisposeAsync();
+            }
+            catch (Exception ex)
+            {
+                AppLog.Warn($"释放扫描设备失败（已读取 {captured} 页）：{ex.Message}");
+            }
+
             op.Step("释放扫描设备", $"已读取 {captured} 页");
             while (pendingEncodes.Count > 0)
             {
-                TimedEncode done = await pendingEncodes.Dequeue();
+                TimedEncode done;
+                try
+                {
+                    done = await pendingEncodes.Dequeue();
+                }
+                catch (Exception ex)
+                {
+                    AppLog.Error("页面编码失败，已跳过该页", ex);
+                    op.Step("页面编码失败", ex.Message);
+                    continue;
+                }
                 encodedPages.Add(done.Payload);
                 op.Step($"第 {done.PageNumber} 页编码（收尾）",
                     $"{done.Width}×{done.Height}，编码 {done.EncodeMs} ms，{PayloadKb(done.Payload)} KB");
@@ -250,13 +280,21 @@ public sealed class ScanService
 
         if (encodedPages.Count == 0)
         {
+            if (readError is not null)
+            {
+                return new ScanOutcome(false, null, 0, device.Name,
+                    $"扫描中断：{readError}", null);
+            }
+
             return cancelled
                 ? new ScanOutcome(false, null, 0, device.Name, "扫描已取消", null, Cancelled: true)
                 : new ScanOutcome(false, null, 0, device.Name,
                     "未读取到任何页面，请确认原稿已正确放入。", null);
         }
 
-        progress.Report(cancelled ? "已取消，正在保存已扫描的页面…" : "正在生成 PDF…");
+        progress.Report(cancelled
+            ? "已取消，正在保存已扫描的页面…"
+            : readError is not null ? "扫描中断，正在保存已读取的页面…" : "正在生成 PDF…");
 
         // Reorder finished payloads (not raw rasters) into reading order.
         IReadOnlyList<int> order = PageOrderNormalizer.NormalizeOrder(encodedPages.Count, settings);
@@ -318,7 +356,9 @@ public sealed class ScanService
         AppLog.Info(cancelled
             ? $"扫描已取消，已保留 {pages.Count} 页：{path}（{pdf.Length / 1024.0:0} KB）"
             : $"扫描完成：{path}（{pages.Count} 页，{pdf.Length / 1024.0:0} KB，来源 {device.Name}，版面 {duplex}）");
-        return new ScanOutcome(true, path, pages.Count, device.Name, null, null, cancelled, warning);
+        if (readError is not null)
+            AppLog.Warn($"扫描中断但已保存 {pages.Count} 页：{path}，原因：{readError}");
+        return new ScanOutcome(true, path, pages.Count, device.Name, null, null, cancelled, warning, readError);
     }
 
     /// <summary>One page's finished payload plus the per-page numbers the log step reports.</summary>

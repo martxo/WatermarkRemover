@@ -57,4 +57,33 @@ public class FileJobViewModelTests
         Assert.StartsWith("同名已存在", job.StatusLine);
         Assert.Equal("同名已存在，已命名为 a_处理完成 (2).pdf", job.NamingNote);
     }
+
+    [Fact]
+    public void Only_a_marked_scan_with_a_file_on_disk_offers_continue()
+    {
+        string pdf = Path.Combine(Path.GetTempPath(), "wm-continue-" + Guid.NewGuid().ToString("N") + ".pdf");
+        File.WriteAllBytes(pdf, [1, 2, 3]);
+        try
+        {
+            var job = new FileJobViewModel("扫描中", Array.Empty<string>())
+            {
+                OwnerFeatureId = "scan.page",
+            };
+            job.MarkProcessing("正在扫描…");
+            job.Apply(FeatureResult.Success(pdf, pdf, "扫描中断，已保存 3 页", 3));
+
+            // A plain finished scan has nothing to continue yet.
+            Assert.False(job.ShowContinueScan);
+            Assert.False(job.ContinueScanCommand.CanExecute(null));
+
+            job.AllowContinueScan();
+
+            Assert.True(job.ShowContinueScan);
+            Assert.True(job.ContinueScanCommand.CanExecute(null));
+        }
+        finally
+        {
+            File.Delete(pdf);
+        }
+    }
 }
