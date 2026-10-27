@@ -177,6 +177,11 @@ public sealed class SettingsViewModel : ObservableObject
         try
         {
             CloudUpdateService.ImportLoginPack(path);
+            if (AliyunpanCliRuntime.TryBuildAccountValues() is { } values)
+            {
+                Netdisk?.AddImportedCliAccount("阿里云盘（导入）", values);
+            }
+
             LoginPackStatusText = "登录状态已导入，本机已具备阿里云盘登录。";
             NotifyCloudChanged();
             _dialogs.Info(

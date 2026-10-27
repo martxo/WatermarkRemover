@@ -178,6 +178,16 @@ public sealed class NetdiskAccountSettingViewModel : ObservableObject
         return new NetdiskCredentials(values);
     }
 
+    /// <summary>
+    /// Adds an account produced by a portable login pack (CLI-hosted credentials) and refreshes
+    /// the account-name list, so the 网盘 section shows it without a restart.
+    /// </summary>
+    public void AddImportedCliAccount(string name, IReadOnlyDictionary<string, string> values)
+    {
+        _upsertAccount(new NetdiskAccountState("alipan", name, values));
+        RefreshAccountNames();
+    }
+
     private void SaveAccount()
     {
         if (SelectedProvider is null || string.IsNullOrWhiteSpace(AccountName))
