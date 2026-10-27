@@ -87,6 +87,7 @@ public sealed class CloudUpdateViewModel : ObservableObject
     private readonly Action _openNetdiskSettings;
     private CloudCheckResult? _check;
     private bool _busy;
+    private bool _needsLogin;
     private string _statusText = "正在准备…";
     private string _detailText = string.Empty;
     private double _progressPercent;
@@ -107,11 +108,13 @@ public sealed class CloudUpdateViewModel : ObservableObject
 
     public string CurrentVersionText => $"当前版本 v{UpdateService.CurrentVersion}";
 
-    public string AccountText => _service.IsConfigured
-        ? $"阿里云盘账号：{_service.AccountName}（资源库 / WatermarkRemover）"
-        : "阿里云盘：未登录。每台电脑首次使用请扫码登录一次。";
+    public string AccountText => !_service.IsConfigured
+        ? "阿里云盘：未登录。每台电脑首次使用请扫码登录一次。"
+        : _needsLogin
+            ? $"阿里云盘：登录已失效（{_service.AccountName}），请重新扫码登录。"
+            : $"阿里云盘账号：{_service.AccountName}（资源库 / WatermarkRemover）";
 
-    public bool NeedsLogin => !_service.IsConfigured;
+    public bool NeedsLogin => _needsLogin || !_service.IsConfigured;
 
     public bool IsBusy
     {
@@ -183,6 +186,7 @@ public sealed class CloudUpdateViewModel : ObservableObject
     private async Task CheckAsync()
     {
         IsBusy = true;
+        _needsLogin = !_service.IsConfigured;
         HasUpdate = false;
         ApplyButtonText = "立即更新";
         OnPropertyChanged(nameof(HasUpdate));
@@ -209,6 +213,8 @@ public sealed class CloudUpdateViewModel : ObservableObject
     private void ShowCheck(CloudCheckResult result)
     {
         _check = result;
+        _needsLogin = !_service.IsConfigured ||
+                      (result.Status == CloudCheckStatus.Failed && LooksLikeAuthFailure(result.Message));
         StatusText = result.Message;
         DetailText = result.Plan is null ? string.Empty : string.Join(Environment.NewLine, result.Plan.Describe());
 
@@ -335,6 +341,13 @@ public sealed class CloudUpdateViewModel : ObservableObject
             IsBusy = false;
         }
     }
+
+    /// <summary>Auth-shaped failures get the login button instead of a silent GitHub fallback.</summary>
+    private static bool LooksLikeAuthFailure(string message) =>
+        message.Contains("令牌", StringComparison.Ordinal) ||
+        message.Contains("授权", StringComparison.Ordinal) ||
+        message.Contains("登录", StringComparison.Ordinal) ||
+        message.Contains("AccessToken", StringComparison.OrdinalIgnoreCase);
 
     private void ReloadHistory()
     {

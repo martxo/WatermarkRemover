@@ -558,6 +558,17 @@ public sealed class CloudUpdateService
         param([string]$PlanPath)
         $ErrorActionPreference = 'Stop'
         $plan = Get-Content -LiteralPath $PlanPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        function Copy-WithRetry([string]$Source, [string]$Target) {
+            for ($i = 0; $i -lt 6; $i++) {
+                try {
+                    Copy-Item -LiteralPath $Source -Destination $Target -Force
+                    return
+                } catch {
+                    if ($i -eq 5) { throw }
+                    Start-Sleep -Milliseconds 500
+                }
+            }
+        }
         $deadline = (Get-Date).AddMinutes(3)
         while ((Get-Process -Id $plan.waitPid -ErrorAction SilentlyContinue) -and ((Get-Date) -lt $deadline)) {
             Start-Sleep -Milliseconds 400
@@ -573,18 +584,18 @@ public sealed class CloudUpdateService
                 if (Test-Path -LiteralPath $target) {
                     $bak = Join-Path $plan.backupDir $rel
                     New-Item -ItemType Directory -Force -Path (Split-Path $bak -Parent) | Out-Null
-                    Copy-Item -LiteralPath $target -Destination $bak -Force
+                    Copy-WithRetry $target $bak
                 }
                 $src = Join-Path $plan.stagingDir $rel
                 New-Item -ItemType Directory -Force -Path (Split-Path $target -Parent) | Out-Null
-                Copy-Item -LiteralPath $src -Destination $target -Force
+                Copy-WithRetry $src $target
             }
             foreach ($rel in $plan.deletes) {
                 $target = Join-Path $plan.appDir $rel
                 if (Test-Path -LiteralPath $target) {
                     $bak = Join-Path $plan.backupDir $rel
                     New-Item -ItemType Directory -Force -Path (Split-Path $bak -Parent) | Out-Null
-                    Copy-Item -LiteralPath $target -Destination $bak -Force
+                    Copy-WithRetry $target $bak
                     Remove-Item -LiteralPath $target -Force
                 }
             }
@@ -593,7 +604,7 @@ public sealed class CloudUpdateService
             # the next startup sees sq.version older than the running assembly.
             $sq = Join-Path $plan.appDir 'sq.version'
             if (Test-Path -LiteralPath $sq) {
-                Copy-Item -LiteralPath $sq -Destination (Join-Path $plan.backupDir 'sq.version') -Force
+                Copy-WithRetry $sq (Join-Path $plan.backupDir 'sq.version')
                 $xml = Get-Content -LiteralPath $sq -Raw
                 $xml = [regex]::Replace($xml, '<version>[^<]+</version>', "<version>$($plan.toVersion)</version>")
                 [IO.File]::WriteAllText($sq, $xml, [Text.UTF8Encoding]::new($false))

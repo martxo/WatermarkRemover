@@ -37,8 +37,21 @@ public static class CloudUpdateCoordinator
         switch (check.Status)
         {
             case CloudCheckStatus.NoRelease:
+                AppLog.Info($"云更新通道不可用（{check.Status}）：{check.Message}，改走 GitHub 兜底");
+                return false;
+
             case CloudCheckStatus.Failed:
                 AppLog.Info($"云更新通道不可用（{check.Status}）：{check.Message}，改走 GitHub 兜底");
+                if (!silent && (check.Message.Contains("令牌", StringComparison.Ordinal) ||
+                                check.Message.Contains("授权", StringComparison.Ordinal) ||
+                                check.Message.Contains("登录", StringComparison.Ordinal)))
+                {
+                    dialogs.Warn(
+                        "阿里云盘登录已失效，本次改用 GitHub 兜底更新。\n\n" +
+                        "请到「设置 → 网盘设置」重新扫码登录一次，之后的更新会恢复走阿里云盘增量。",
+                        "软件更新");
+                }
+
                 return false;
 
             case CloudCheckStatus.NotConfigured:
