@@ -46,6 +46,50 @@ public class AppFoldersTests
     }
 
     [Fact]
+    public void Velopack_install_uses_stable_folder_and_migrates_settings()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"wr-test-{Guid.NewGuid():N}");
+        string preferred = Path.Combine(root, "current");
+        string stable = Path.Combine(root, "data");
+        Directory.CreateDirectory(preferred);
+        // Update.exe in the parent is exactly how a Velopack install is laid out.
+        File.WriteAllText(Path.Combine(root, "Update.exe"), string.Empty);
+        File.WriteAllText(Path.Combine(preferred, "WatermarkRemover.settings.json"), "{}");
+
+        try
+        {
+            string resolved = AppFolders.ResolveRootFor(preferred, stable);
+
+            Assert.Equal(stable, resolved);
+            Assert.True(File.Exists(Path.Combine(stable, "WatermarkRemover.settings.json")),
+                "升级到稳定目录后设置必须跟过来");
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Portable_copy_keeps_settings_next_to_the_exe()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"wr-test-{Guid.NewGuid():N}");
+        string preferred = Path.Combine(root, "portable");
+        Directory.CreateDirectory(preferred);
+
+        try
+        {
+            string resolved = AppFolders.ResolveRootFor(preferred, Path.Combine(root, "data"));
+
+            Assert.Equal(preferred, resolved);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public void Writability_probe_leaves_no_files_behind()
     {
         string dir = Path.Combine(Path.GetTempPath(), $"wr-test-{Guid.NewGuid():N}");

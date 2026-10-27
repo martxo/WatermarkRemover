@@ -126,7 +126,41 @@ public sealed class CloudUpdateService
         _protector = protector;
         IEnumerable<NetdiskAccountState> accounts = NetdiskAccountPersistence.Decode(
             settings.NetdiskAccounts, protector, (message, ex) => AppLog.Warn(message));
-        _account = accounts.FirstOrDefault(a => a.ProviderId == ProviderId);
+        _account = accounts.FirstOrDefault(a => a.ProviderId == ProviderId) ?? TryCreateCliAccount();
+    }
+
+    /// <summary>
+    /// Fallback for machines where the app has no saved netdisk account but the local aliyunpan
+    /// CLI is already logged in (this is how the publishing machine is set up). The CLI owns the
+    /// credential lifecycle, so no app account is needed for cloud updates.
+    /// </summary>
+    private static NetdiskAccountState? TryCreateCliAccount()
+    {
+        try
+        {
+            string? executable = AliyunpanCliRuntime.LocateExecutable();
+            if (executable is null) return null;
+            if (!AliyunpanCliRuntime.TryReadConfig(
+                    AliyunpanCliRuntime.ConfigPathFor(executable), out string? deviceId, out var token) ||
+                string.IsNullOrEmpty(token.AccessToken))
+            {
+                return null;
+            }
+
+            var values = new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                [AliyunpanCliRuntime.CliLoginKey] = "true",
+                [AliyunpanCliRuntime.CliDeviceIdKey] = deviceId ?? string.Empty,
+                [AliyunTokenService.AccessTokenKey] = token.AccessToken,
+                [AliyunTokenService.ExpiresAtKey] = token.ExpiredAt.ToString("O"),
+            };
+            return new NetdiskAccountState(ProviderId, "本机 aliyunpan", values);
+        }
+        catch (Exception ex)
+        {
+            AppLog.Warn($"读取本机 aliyunpan 登录信息失败：{ex.Message}");
+            return null;
+        }
     }
 
     public bool IsConfigured => _account is not null;
@@ -864,6 +898,14 @@ public sealed class CloudUpdateService
 
     private void PersistRotatedCredentials(NetdiskCredentials credentials)
     {
+        // CLI-hosted credentials are renewed by the CLI's own config; there is no app account to
+        // write back.
+        if (string.Equals(_account?.Values.GetValueOrDefault(AliyunpanCliRuntime.CliLoginKey),
+                "true", StringComparison.Ordinal))
+        {
+            return;
+        }
+
         try
         {
             var accounts = NetdiskAccountPersistence.Decode(_settings.NetdiskAccounts, _protector);
