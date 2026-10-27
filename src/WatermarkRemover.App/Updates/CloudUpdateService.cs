@@ -146,43 +146,14 @@ public sealed class CloudUpdateService
     {
         try
         {
-            // The stable config is readable even when the CLI binary is not installed, which is
-            // what makes an imported login pack immediately usable.
-            if (AliyunpanCliRuntime.TryReadStableConfig(out string? deviceId, out var stable) &&
-                !string.IsNullOrEmpty(stable.AccessToken))
-            {
-                return BuildCliAccount(deviceId, stable);
-            }
-
-            string? executable = AliyunpanCliRuntime.LocateExecutable();
-            if (executable is null) return null;
-            if (!AliyunpanCliRuntime.TryReadConfig(
-                    AliyunpanCliRuntime.ConfigPathFor(executable), out deviceId, out var token) ||
-                string.IsNullOrEmpty(token.AccessToken))
-            {
-                return null;
-            }
-
-            return BuildCliAccount(deviceId, token);
+            IReadOnlyDictionary<string, string>? values = AliyunpanCliRuntime.TryBuildAccountValues();
+            return values is null ? null : new NetdiskAccountState(ProviderId, "本机 aliyunpan", values);
         }
         catch (Exception ex)
         {
             AppLog.Warn($"读取本机 aliyunpan 登录信息失败：{ex.Message}");
             return null;
         }
-    }
-
-    private static NetdiskAccountState BuildCliAccount(
-        string? deviceId, (string AccessToken, DateTimeOffset ExpiredAt) token)
-    {
-        var values = new Dictionary<string, string>(StringComparer.Ordinal)
-        {
-            [AliyunpanCliRuntime.CliLoginKey] = "true",
-            [AliyunpanCliRuntime.CliDeviceIdKey] = deviceId ?? string.Empty,
-            [AliyunTokenService.AccessTokenKey] = token.AccessToken,
-            [AliyunTokenService.ExpiresAtKey] = token.ExpiredAt.ToString("O"),
-        };
-        return new NetdiskAccountState(ProviderId, "本机 aliyunpan", values);
     }
 
     /// <summary>

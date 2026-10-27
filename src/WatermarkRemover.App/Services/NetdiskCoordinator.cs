@@ -5,6 +5,7 @@ using WatermarkRemover.App.Settings;
 using WatermarkRemover.App.ViewModels;
 using WatermarkRemover.Core.Netdisk;
 using WatermarkRemover.Core.Settings;
+using WatermarkRemover.Netdisk;
 
 namespace WatermarkRemover.App.Services;
 
@@ -31,6 +32,9 @@ public sealed class NetdiskCoordinator : ObservableObject
         Catalog.RegisterDiscovered(typeof(WatermarkRemover.Netdisk.AliyunDriveProvider).Assembly, AppLog.Trace);
         Accounts = new ObservableCollection<NetdiskAccountState>(
             NetdiskAccountPersistence.Decode(settings.NetdiskAccounts, new DpapiSecretProtector(), AppLog.Trace));
+        // A portable login pack only writes the stable CLI config; materialize it as a real app
+        // account so the 网盘 page and management window can use the same login immediately.
+        EnsureCliAccount();
         Settings = new NetdiskAccountSettingViewModel(
             Catalog,
             Accounts,
@@ -125,6 +129,23 @@ public sealed class NetdiskCoordinator : ObservableObject
         }
 
         return failures;
+    }
+
+    /// <summary>
+    /// Adds the stable CLI login as an app account when no 阿里云盘 account is configured. This
+    /// is what makes an imported login pack usable by the 网盘 page without another scan.
+    /// </summary>
+    private void EnsureCliAccount()
+    {
+        if (Accounts.Any(a => a.ProviderId == "alipan")) return;
+
+        IReadOnlyDictionary<string, string>? values = AliyunpanCliRuntime.TryBuildAccountValues();
+        if (values is null) return;
+
+        Accounts.Add(new NetdiskAccountState("alipan", "阿里云盘（本机登录）", values));
+        Persist();
+        RefreshSummary();
+        AppLog.Info("已从本机 aliyunpan 登录状态创建阿里云盘账号");
     }
 
     /// <summary>Inserts or replaces the account with the same product + name, then persists.</summary>

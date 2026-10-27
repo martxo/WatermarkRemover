@@ -121,6 +121,29 @@ public static class AliyunpanCliRuntime
         => TryReadConfig(StableConfigPath, out deviceId, out token);
 
     /// <summary>
+    /// Credential bag for the stable CLI login, usable by both cloud updates and the 网盘 page.
+    /// Null when no usable token exists. This is the one place that turns a CLI login into the
+    /// app's account vocabulary.
+    /// </summary>
+    public static IReadOnlyDictionary<string, string>? TryBuildAccountValues()
+    {
+        EnsureStableConfig();
+        if (!TryReadStableConfig(out string? deviceId, out var token) ||
+            string.IsNullOrEmpty(token.AccessToken))
+        {
+            return null;
+        }
+
+        return new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [CliLoginKey] = "true",
+            [CliDeviceIdKey] = deviceId ?? string.Empty,
+            [AliyunTokenService.AccessTokenKey] = token.AccessToken,
+            [AliyunTokenService.ExpiresAtKey] = token.ExpiredAt.ToString("O", CultureInfo.InvariantCulture),
+        };
+    }
+
+    /// <summary>
     /// Writes a portable login pack into the stable config the app (and bundled CLI) use. The
     /// pack is validated first; an invalid file never replaces a working login.
     /// </summary>
