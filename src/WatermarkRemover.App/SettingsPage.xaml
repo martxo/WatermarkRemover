@@ -683,6 +683,29 @@
                             </Grid>
                         </Border>
 
+                        <!-- 云更新（阿里云盘增量）：只传变更文件、有版本记录、可回滚 -->
+                        <Border Style="{StaticResource InsetCard}" Margin="0,10,0,0">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                    <TextBlock Text="阿里云盘增量更新"
+                                               Style="{StaticResource RowTitle}"/>
+                                    <TextBlock Text="{Binding CloudAccountText}"
+                                               Style="{StaticResource RowCaption}" Margin="0,3,0,0"/>
+                                    <TextBlock Text="每次只上传/下载变更的文件分块；云端保留最近 5 个版本，可一键回滚。GitHub 安装包仍作为兜底。"
+                                               Style="{StaticResource RowCaption}" Margin="0,2,0,0"/>
+                                </StackPanel>
+                                <Button Grid.Column="1" Content="打开云更新中心"
+                                        VerticalAlignment="Center"
+                                        Style="{StaticResource SmallButton}"
+                                        Padding="14,8"
+                                        Click="OnOpenCloudUpdate"/>
+                            </Grid>
+                        </Border>
+
                         <!-- 更新包落点 + 残留清理：路径只读展示，清理保留增量所需的基底包 -->
                         <Border Style="{StaticResource InsetCard}" Margin="0,10,0,0">
                             <Grid>

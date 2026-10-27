@@ -125,7 +125,7 @@ public static class UpdateCoordinator
 
         try
         {
-            await RunCheckCoreAsync(owner, dialogs, silent).ConfigureAwait(true);
+            await RunCheckCoreAsync(owner, dialogs, settings, silent).ConfigureAwait(true);
         }
         finally
         {
@@ -133,7 +133,8 @@ public static class UpdateCoordinator
         }
     }
 
-    private static async Task RunCheckCoreAsync(Window? owner, IDialogService dialogs, bool silent)
+    private static async Task RunCheckCoreAsync(
+        Window? owner, IDialogService dialogs, AppSettings settings, bool silent)
     {
         // A downloaded update is already waiting: a manual click means "restart into it", and a
         // background pass has nothing left to do (never download the same package twice).
@@ -147,6 +148,14 @@ public static class UpdateCoordinator
             {
                 AppLog.Info($"v{UpdateReadyNotifier.Current.Version} 已下载待重启，跳过启动检查");
             }
+            return;
+        }
+
+        // 阿里云盘 is the primary channel: file-level chunks, version records and rollback. It
+        // only declines (false) when no account is configured or the cloud repository is
+        // unreachable, so GitHub/Velopack stay as the fallback.
+        if (await CloudUpdateCoordinator.TryRunAsync(owner, dialogs, settings, silent).ConfigureAwait(true))
+        {
             return;
         }
 

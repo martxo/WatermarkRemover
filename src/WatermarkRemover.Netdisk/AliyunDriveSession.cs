@@ -202,9 +202,26 @@ public sealed class AliyunDriveSession : INetdiskSession
         }
     }
 
-    public async Task<NetdiskFile> UploadAsync(
+    public Task<NetdiskFile> UploadAsync(
         string parentFolderId,
         string localPath,
+        IProgress<NetdiskTransferProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        var file = new FileInfo(localPath);
+        return UploadAsAsync(parentFolderId, localPath, file.Name, false, progress, cancellationToken);
+    }
+
+    /// <summary>
+    /// Uploads under an explicit name; <paramref name="overwrite"/> replaces the existing entry
+    /// (the API's <c>refuse</c> mode becomes <c>ignore</c> conversion via delete + create, because
+    /// the platform has no in-place overwrite mode for the create call used here).
+    /// </summary>
+    public async Task<NetdiskFile> UploadAsAsync(
+        string parentFolderId,
+        string localPath,
+        string name,
+        bool overwrite,
         IProgress<NetdiskTransferProgress>? progress = null,
         CancellationToken cancellationToken = default)
     {
@@ -214,15 +231,24 @@ public sealed class AliyunDriveSession : INetdiskSession
             throw new FileNotFoundException("待上传的文件不存在。", localPath);
         }
 
+        if (overwrite)
+        {
+            var existing = await this.FindChildAsync(parentFolderId, name, cancellationToken).ConfigureAwait(false);
+            if (existing is not null)
+            {
+                await DeleteAsync(new[] { existing.Id }, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
         var parts = AlipanUpload.PlanParts(file.Length, AlipanUpload.DefaultPartSize);
         var createBody = new Dictionary<string, object?>
         {
             ["drive_id"] = _driveId,
             ["parent_file_id"] = NormalizeParent(parentFolderId),
-            ["name"] = file.Name,
+            ["name"] = name,
             ["type"] = "file",
             ["size"] = file.Length,
-            ["check_name_mode"] = "auto_rename",
+            ["check_name_mode"] = overwrite ? "refuse" : "auto_rename",
             ["part_info_list"] = parts
                 .Select(p => new Dictionary<string, object?> { ["part_number"] = p.PartNumber, ["part_size"] = p.Length })
                 .ToList(),

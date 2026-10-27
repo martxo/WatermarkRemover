@@ -15,7 +15,11 @@
 
 param(
     [Parameter(Mandatory = $true)]
-    [string]$Version
+    [string]$Version,
+    # Release note shown in the 云更新版本列表 (defaults to the version tag).
+    [string]$Note = '',
+    # Skip the 阿里云盘 step (GitHub-only publish).
+    [switch]$SkipCloud
 )
 
 $ErrorActionPreference = 'Stop'
@@ -28,7 +32,7 @@ $Tag = "v$Version"
 # from the compiled dll, not the package metadata). Forgetting to bump the csproj therefore
 # shipped installers that said 1.16.3 but apps that reported 1.16.2 forever. Stamping the
 # csproj and publishing here makes the whole chain — installer, UI, update feed — agree.
-Write-Host "== 0/3 stamp csproj version $Version + dotnet publish =="
+Write-Host "== 0/4 stamp csproj version $Version + dotnet publish =="
 $Csproj = 'd:\code\src\WatermarkRemover.App\WatermarkRemover.App.csproj'
 # Explicit UTF-8 via .NET: PS 5.1's Get-Content/Set-Content default to ANSI (GBK), which
 # mangles the file's Chinese comments and swallows quotes — MSB4025 on the next build.
@@ -39,7 +43,7 @@ $stamped = $text -replace '<Version>[^<]+</Version>', "<Version>$Version</Versio
 & 'C:\Users\dx\.dotnet\dotnet.exe' publish $Csproj -c Release -o d:\code\publish-staging --nologo -v q
 if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed ($LASTEXITCODE)" }
 
-Write-Host "== 1/3 vpk pack $Version =="
+Write-Host "== 1/4 vpk pack $Version =="
 # --noPortable: the Portable zip is a second 236MB copy of the same payload, uploaded only for
 # people who unzip instead of installing — which we no longer support (Setup installs get
 # deltas; an unzipped copy never can). Skipping it cuts ~1/5 of every release upload.
@@ -48,7 +52,17 @@ vpk pack --packId WatermarkRemover --packVersion $Version `
     --packDir d:\code\publish-staging --mainExe WatermarkRemover.exe --noPortable
 if ($LASTEXITCODE -ne 0) { throw "vpk pack failed ($LASTEXITCODE)" }
 
-Write-Host "== 2/3 vpk upload github $Tag =="
+if (-not $SkipCloud) {
+    Write-Host "== 2/4 publish 阿里云盘 incremental (only changed chunks) =="
+    $cloudNote = if ([string]::IsNullOrWhiteSpace($Note)) { "v$Version" } else { $Note }
+    & 'C:\Users\dx\.dotnet\dotnet.exe' run --project d:\code\src\WatermarkRemover.CloudPublisher\WatermarkRemover.CloudPublisher.csproj `
+        -c Release -- --version $Version --source d:\code\publish-staging --note $cloudNote
+    if ($LASTEXITCODE -ne 0) { throw "cloud publish failed ($LASTEXITCODE)" }
+} else {
+    Write-Host "== 2/4 cloud publish skipped =="
+}
+
+Write-Host "== 3/4 vpk upload github $Tag =="
 # git credential fill via a temp file: piping into a native command from a -File child
 # process proved encoding-unreliable (the protocol line could arrive mangled).
 $tmpCredReq = Join-Path $env:TEMP 'credential-request.txt'
@@ -60,7 +74,7 @@ vpk upload github --repoUrl "https://github.com/$Repo" --token $token.ToString()
     --releaseName "WatermarkRemover v$Version" --tag $Tag --publish
 if ($LASTEXITCODE -ne 0) { throw "vpk upload failed ($LASTEXITCODE)" }
 
-Write-Host "== 3/3 verify the REMOTE release (current-only feed) =="
+Write-Host "== 4/4 verify the REMOTE release (current-only feed) =="
 # gh prints JSON lines; PS 5.1 does not auto-parse native output — join and convert, or every
 # property read below silently yields $null and the check passes without looking at anything.
 $viewJson = (& $Gh release view $Tag --repo $Repo --json isDraft,assets) -join ''

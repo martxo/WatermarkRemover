@@ -1,0 +1,341 @@
+using System.Globalization;
+using System.IO;
+using System.Text;
+using WatermarkRemover.Core.Netdisk;
+using WatermarkRemover.Core.Updates;
+using WatermarkRemover.Netdisk;
+
+// 阿里云盘增量发布工具.
+//
+//   dotnet run --project src/WatermarkRemover.CloudPublisher -- \
+//       --version 1.16.36 --source d:\code\publish-staging --note "修复身份证排序"
+//
+// Layout written into the account's 资源库:
+//   /WatermarkRemover/latest.json          newest full manifest
+//   /WatermarkRemover/versions.json        retained-version index (newest first, keep 5)
+//   /WatermarkRemover/history/<version>.json
+//   /WatermarkRemover/files/<sha256>       content-addressed chunks (shared by all versions)
+//
+// Only chunks absent from the repository are uploaded, so a typical code-only release ships a
+// couple of megabytes instead of the 236 MB full Velopack package.
+
+var options = ParseArgs(args);
+if (options is null)
+{
+    Console.Error.WriteLine(
+        "用法: WatermarkRemover.CloudPublisher --version <版本> --source <发布目录> [--note 说明] [--keep 5] [--dry-run]\n" +
+        "      --compare <上一版目录>  只计算增量大小，不连接云盘");
+    return 2;
+}
+
+// Local-only estimate: how much of this release would actually be uploaded compared to another
+// published output. Used to verify the incremental story before touching the cloud.
+if (options.CompareSource is { } previousDir)
+{
+    if (!Directory.Exists(previousDir))
+    {
+        Console.Error.WriteLine($"对比目录不存在：{previousDir}");
+        return 2;
+    }
+
+    CloudManifest oldManifest = CloudUpdatePlanner.BuildManifest(previousDir, "old", string.Empty, null);
+    var sources = new Dictionary<string, (string Path, int Offset, int Length)>(StringComparer.Ordinal);
+    CloudManifest newManifest = CloudUpdatePlanner.BuildManifest(
+        options.Source, options.Version, string.Empty, null, chunkSources: sources);
+    var oldChunks = oldManifest.AllChunkHashes().ToHashSet(StringComparer.Ordinal);
+    var added = newManifest.AllChunkHashes().Where(sha => !oldChunks.Contains(sha)).ToList();
+    long bytes = added.Sum(sha => (long)sources[sha].Length);
+    Console.WriteLine($"对比：{previousDir} → {options.Source}");
+    Console.WriteLine($"  发布体积 {FormatBytes(newManifest.TotalBytes)}，仅需上传 {added.Count} 个分块 / {FormatBytes(bytes)}");
+    Console.WriteLine($"  复用 {newManifest.AllChunkHashes().Count() - added.Count}/{newManifest.AllChunkHashes().Count()} 个分块");
+    return 0;
+}
+
+const string DriveName = "资源库";
+string rootPath = CloudUpdateFormat.RootFolder;
+string chunksPath = $"{rootPath}/{CloudUpdateFormat.ChunksFolder}";
+string historyPath = $"{rootPath}/{CloudUpdateFormat.HistoryFolder}";
+var ct = CancellationToken.None;
+
+Console.WriteLine($"[1/6] 读取本机 aliyunpan 登录信息…");
+string cli = AliyunpanCliRuntime.LocateExecutable()
+    ?? throw new InvalidOperationException("未找到 aliyunpan 命令行工具，请先安装并登录。");
+if (!AliyunpanCliRuntime.TryReadConfig(AliyunpanCliRuntime.ConfigPathFor(cli), out string? deviceId, out var token) ||
+    string.IsNullOrEmpty(token.AccessToken))
+{
+    throw new InvalidOperationException("读取 aliyunpan 配置失败，请先在命令行执行 aliyunpan login。");
+}
+
+var values = new Dictionary<string, string>(StringComparer.Ordinal)
+{
+    [AliyunpanCliRuntime.CliLoginKey] = "true",
+    [AliyunpanCliRuntime.CliDeviceIdKey] = deviceId ?? string.Empty,
+    [AliyunTokenService.AccessTokenKey] = token.AccessToken,
+    [AliyunTokenService.ExpiresAtKey] = token.ExpiredAt.ToString("O", CultureInfo.InvariantCulture),
+};
+
+await using var session = await new AliyunDriveProvider().ConnectAsync(new NetdiskCredentials(values));
+NetdiskDrive drive = session.Drives.FirstOrDefault(d => d.Name == DriveName)
+    ?? throw new InvalidOperationException($"账号没有「{DriveName}」，无法发布云更新。");
+await session.SwitchDriveAsync(drive.Id, ct);
+Console.WriteLine($"      账号 {session.Account.DisplayName} · 网盘 {drive.Name}");
+
+Console.WriteLine("[2/6] 确认云盘目录…");
+string rootId = await session.EnsureFolderAsync(rootPath, ct);
+string chunksId = await session.EnsureFolderAsync(chunksPath, ct);
+string historyId = await session.EnsureFolderAsync(historyPath, ct);
+
+CloudManifest? latest = await DownloadManifestAsync(session, rootId, CloudUpdateFormat.LatestFile);
+CloudVersionIndex index = await DownloadIndexAsync(session, rootId) ?? new CloudVersionIndex();
+
+// Re-publishing the same version diffs against the version below it, so the recorded change
+// summary describes what actually differs from the previous installable version.
+CloudManifest? previous = latest is not null &&
+                          !string.Equals(latest.Version, options.Version, StringComparison.OrdinalIgnoreCase)
+    ? latest
+    : await DownloadManifestAsync(session, historyId, index.Versions.Skip(1).FirstOrDefault()?.Version);
+
+Console.WriteLine("[3/6] 计算清单与分块…");
+var chunkSources = new Dictionary<string, (string Path, int Offset, int Length)>(StringComparer.Ordinal);
+CloudManifest manifest = CloudUpdatePlanner.BuildManifest(
+    options.Source, options.Version, options.Note, previous, chunkSources: chunkSources);
+Console.WriteLine(
+    $"      文件 {manifest.Files.Count} 个 / {FormatBytes(manifest.TotalBytes)}，分块 {manifest.AllChunkHashes().Count()} 个");
+
+var remoteChunks = new HashSet<string>(StringComparer.Ordinal);
+foreach (NetdiskFile item in await session.ListAllAsync(chunksId, ct))
+{
+    if (!item.IsFolder && IsChunkName(item.Name)) remoteChunks.Add(item.Name.ToLowerInvariant());
+}
+
+var newChunks = manifest.AllChunkHashes()
+    .Where(sha => !remoteChunks.Contains(sha))
+    .Distinct(StringComparer.Ordinal)
+    .ToList();
+long newChunkBytes = newChunks.Sum(sha => (long)chunkSources[sha].Length);
+Console.WriteLine($"      远端已有分块 {remoteChunks.Count} 个；本次需上传 {newChunks.Count} 个 / {FormatBytes(newChunkBytes)}");
+
+var summary = new CloudVersionSummary
+{
+    Version = manifest.Version,
+    PublishedAt = manifest.PublishedAt,
+    Note = manifest.Note,
+    FileCount = manifest.Files.Count,
+    TotalBytes = manifest.TotalBytes,
+    ChangedFiles = CountChanged(previous, manifest),
+    DeletedFiles = manifest.Deleted.Count,
+    NewChunks = newChunks.Count,
+    NewBytes = newChunkBytes,
+};
+
+if (options.DryRun)
+{
+    Console.WriteLine("[dry-run] 不上传、不删除。");
+    PrintSummary(summary);
+    return 0;
+}
+
+Console.WriteLine("[4/6] 上传新分块…");
+string tempDir = Path.Combine(Path.GetTempPath(), "wr-cloud-publish", Guid.NewGuid().ToString("N"));
+Directory.CreateDirectory(tempDir);
+try
+{
+    int done = 0;
+    await Parallel.ForEachAsync(
+        newChunks,
+        new ParallelOptions { MaxDegreeOfParallelism = 3, CancellationToken = ct },
+        async (sha, token) =>
+        {
+            (string path, int offset, int length) = chunkSources[sha];
+            string temp = Path.Combine(tempDir, sha);
+            await SliceToFileAsync(path, offset, length, temp, token);
+            await session.UploadAsAsync(chunksId, temp, sha, overwrite: false, null, token);
+            File.Delete(temp);
+
+            int finished = Interlocked.Increment(ref done);
+            if (finished % 10 == 0 || finished == newChunks.Count)
+            {
+                Console.WriteLine($"      已上传 {finished}/{newChunks.Count}");
+            }
+        });
+}
+finally
+{
+    try { Directory.Delete(tempDir, recursive: true); } catch { /* best effort */ }
+}
+
+Console.WriteLine("[5/6] 写入版本清单…");
+await session.UploadBytesAsync(rootId, CloudUpdateFormat.LatestFile,
+    Encoding.UTF8.GetBytes(CloudUpdateFormat.Serialize(manifest)), ct);
+await session.UploadBytesAsync(historyId, $"{manifest.Version}.json",
+    Encoding.UTF8.GetBytes(CloudUpdateFormat.Serialize(manifest)), ct);
+
+index.Versions.RemoveAll(v => string.Equals(v.Version, manifest.Version, StringComparison.OrdinalIgnoreCase));
+index.Versions.Insert(0, summary);
+var dropped = index.Versions.Skip(options.Keep).ToList();
+index.Versions = index.Versions.Take(options.Keep).ToList();
+index.Keep = options.Keep;
+index.UpdatedAt = DateTimeOffset.UtcNow.ToString("O");
+
+await session.UploadBytesAsync(rootId, CloudUpdateFormat.VersionsFile,
+    Encoding.UTF8.GetBytes(CloudUpdateFormat.Serialize(index)), ct);
+
+Console.WriteLine("[6/6] 清理超出保留数量的旧版本…");
+foreach (CloudVersionSummary old in dropped)
+{
+    await session.DeleteByNameAsync(historyId, $"{old.Version}.json", ct);
+    Console.WriteLine($"      已删除历史 {old.Version}");
+}
+
+if (index.Versions.Count > 1)
+{
+    var retainedChunks = new HashSet<string>(manifest.AllChunkHashes(), StringComparer.Ordinal);
+    bool complete = true;
+    foreach (CloudVersionSummary version in index.Versions.Skip(1))
+    {
+        CloudManifest? old = await DownloadManifestAsync(session, historyId, version.Version);
+        if (old is null)
+        {
+            complete = false;
+            break;
+        }
+
+        retainedChunks.UnionWith(old.AllChunkHashes());
+    }
+
+    if (complete)
+    {
+        var orphanSet = remoteChunks
+            .Where(name => !retainedChunks.Contains(name))
+            .ToHashSet(StringComparer.Ordinal);
+        if (orphanSet.Count > 0)
+        {
+            var ids = (await session.ListAllAsync(chunksId, ct))
+                .Where(i => !i.IsFolder && orphanSet.Contains(i.Name.ToLowerInvariant()))
+                .Select(i => i.Id)
+                .ToList();
+            if (ids.Count > 0)
+            {
+                await session.DeleteAsync(ids, ct);
+            }
+
+            Console.WriteLine($"      清理无引用分块 {ids.Count} 个");
+        }
+    }
+    else
+    {
+        Console.WriteLine("      部分历史清单缺失，跳过无引用分块清理（避免误删）。");
+    }
+}
+
+PrintSummary(summary);
+return 0;
+
+static CloudManifest? ManifestFromBytes(byte[]? bytes) =>
+    bytes is null ? null : CloudUpdateFormat.TryParse<CloudManifest>(Encoding.UTF8.GetString(bytes));
+
+static async Task<CloudManifest?> DownloadManifestAsync(
+    INetdiskSession session, string folderId, string? name)
+{
+    if (string.IsNullOrEmpty(name)) return null;
+    string fileName = name.EndsWith(".json", StringComparison.OrdinalIgnoreCase) ? name : $"{name}.json";
+    byte[]? bytes = await session.DownloadBytesAsync(folderId, fileName);
+    return ManifestFromBytes(bytes);
+}
+
+static async Task<CloudVersionIndex?> DownloadIndexAsync(INetdiskSession session, string rootId)
+{
+    byte[]? bytes = await session.DownloadBytesAsync(rootId, CloudUpdateFormat.VersionsFile);
+    return bytes is null ? null : CloudUpdateFormat.TryParse<CloudVersionIndex>(Encoding.UTF8.GetString(bytes));
+}
+
+static int CountChanged(CloudManifest? previous, CloudManifest current)
+{
+    if (previous is null) return current.Files.Count;
+    var old = previous.Files.ToDictionary(f => f.Path, f => f.Sha256, StringComparer.OrdinalIgnoreCase);
+    return current.Files.Count(f =>
+        !old.TryGetValue(f.Path, out string? sha) ||
+        !string.Equals(sha, f.Sha256, StringComparison.OrdinalIgnoreCase));
+}
+
+static async Task SliceToFileAsync(string path, int offset, int length, string target, CancellationToken ct)
+{
+    await using var source = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+    source.Seek(offset, SeekOrigin.Begin);
+    var buffer = new byte[length];
+    int filled = 0;
+    while (filled < length)
+    {
+        int read = await source.ReadAsync(buffer.AsMemory(filled, length - filled), ct);
+        if (read == 0) throw new IOException($"读取 {path} 的 {offset}+{length} 分块时提前结束。");
+        filled += read;
+    }
+
+    await File.WriteAllBytesAsync(target, buffer, ct);
+}
+
+static bool IsChunkName(string name) =>
+    name.Length == 64 && name.All(c => (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'));
+
+static void PrintSummary(CloudVersionSummary summary)
+{
+    Console.WriteLine();
+    Console.WriteLine($"发布完成：v{summary.Version}");
+    Console.WriteLine($"  文件 {summary.FileCount} 个 / {FormatBytes(summary.TotalBytes)}");
+    Console.WriteLine($"  变更文件 {summary.ChangedFiles} 个，删除 {summary.DeletedFiles} 个");
+    Console.WriteLine($"  本次上传 {summary.NewChunks} 个分块 / {FormatBytes(summary.NewBytes)}");
+}
+
+static string FormatBytes(long bytes) => bytes switch
+{
+    >= 1L << 30 => $"{bytes / 1073741824.0:F2} GB",
+    >= 1L << 20 => $"{bytes / 1048576.0:F1} MB",
+    >= 1L << 10 => $"{bytes / 1024.0:F0} KB",
+    _ => $"{bytes} B",
+};
+
+static PublishOptions? ParseArgs(string[] arguments)
+{
+    string? version = null;
+    string? source = null;
+    string? compare = null;
+    string note = string.Empty;
+    int keep = CloudUpdateFormat.DefaultKeep;
+    bool dryRun = false;
+
+    for (int i = 0; i < arguments.Length; i++)
+    {
+        switch (arguments[i])
+        {
+            case "--version":
+                version = ++i < arguments.Length ? arguments[i] : null;
+                break;
+            case "--source":
+                source = ++i < arguments.Length ? arguments[i] : null;
+                break;
+            case "--note":
+                note = ++i < arguments.Length ? arguments[i] : string.Empty;
+                break;
+            case "--compare":
+                compare = ++i < arguments.Length ? arguments[i] : null;
+                break;
+            case "--keep":
+                if (++i < arguments.Length && int.TryParse(arguments[i], out int k)) keep = Math.Max(1, k);
+                break;
+            case "--dry-run":
+                dryRun = true;
+                break;
+        }
+    }
+
+    if (string.IsNullOrWhiteSpace(version) || string.IsNullOrWhiteSpace(source) || !Directory.Exists(source))
+    {
+        return null;
+    }
+
+    return new PublishOptions(version.Trim().TrimStart('v', 'V'), Path.GetFullPath(source),
+        note.Trim(), keep, dryRun, compare is null ? null : Path.GetFullPath(compare));
+}
+
+internal sealed record PublishOptions(
+    string Version, string Source, string Note, int Keep, bool DryRun, string? CompareSource);

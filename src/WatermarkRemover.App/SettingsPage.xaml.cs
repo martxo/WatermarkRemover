@@ -136,6 +136,25 @@ public partial class SettingsPage : UserControl
             vm.ExportLogTo(dialog.FileName);
     }
 
+    /// <summary>
+    /// Opens the 云更新中心. The window owns the cloud check/download/rollback flow; the login
+    /// button just switches this page to the 网盘设置 section so the existing scan login can run.
+    /// </summary>
+    private void OnOpenCloudUpdate(object sender, RoutedEventArgs e)
+    {
+        if (ViewModel is not { } vm || Window.GetWindow(this) is not { } window) return;
+
+        CloudUpdateWindow? dialog = null;
+        var cloud = new CloudUpdateViewModel(vm.SourceSettings, new Services.DialogService(window), () =>
+        {
+            dialog?.Close();
+            vm.SelectedNav = vm.NavItems.First(n => n.Id == "netdisk");
+        });
+        dialog = new CloudUpdateWindow(cloud) { Owner = window };
+        dialog.ShowDialog();
+        vm.NotifyCloudChanged();
+    }
+
     private async void OnCheckUpdate(object sender, RoutedEventArgs e)
     {
         if (ViewModel is not { } vm || Window.GetWindow(this) is not { } window) return;

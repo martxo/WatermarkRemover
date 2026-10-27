@@ -97,6 +97,20 @@ public interface INetdiskSession : IAsyncDisposable
         IProgress<NetdiskTransferProgress>? progress = null,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Uploads <paramref name="localPath"/> under an explicit remote <paramref name="name"/>.
+    /// <paramref name="overwrite"/> replaces an existing entry (default providers auto-rename).
+    /// Used by the update repository, whose manifests and chunk blobs keep fixed names.
+    /// </summary>
+    Task<NetdiskFile> UploadAsAsync(
+        string parentFolderId,
+        string localPath,
+        string name,
+        bool overwrite,
+        IProgress<NetdiskTransferProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("该网盘不支持指定文件名上传。");
+
     Task DownloadAsync(
         string fileId,
         string localPath,

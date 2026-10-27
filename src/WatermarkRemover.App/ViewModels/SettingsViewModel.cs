@@ -65,7 +65,7 @@ public sealed class SettingsViewModel : ObservableObject
             new("scan", "扫描设置", "\uE7F4", "扫描 色彩 黑白 彩色 灰度 自动 连续 批量 ADF 进纸 扫描仪"),
             new("netdisk", "网盘设置", "\uE753", "网盘 云盘 阿里云盘 授权 令牌 密钥 账号 上传"),
             new("ocr", "OCR 识别", "\uE7C3", "识别 引擎 微信 OCR PP-OCR Windows 文字"),
-            new("updates", "软件更新", "\uE72C", "升级 版本 检查更新 startup"),
+            new("updates", "软件更新", "\uE72C", "升级 版本 检查更新 云更新 阿里云盘 增量 回滚 startup"),
             new("logs", "日志与排障", "\uE81C", "诊断 排查 导出 预览 记录"),
             new("reports", "识别报告", "\uE8D6", "识别 报告 类型 字段 坐标 复核 训练 朝向"),
         };
@@ -94,6 +94,23 @@ public sealed class SettingsViewModel : ObservableObject
 
     /// <summary>The working copy the window binds to; untouched on cancel.</summary>
     public AppSettings Settings { get; }
+
+    /// <summary>The shared settings (committed state) — cloud updates read account credentials from here.</summary>
+    internal AppSettings SourceSettings => _target;
+
+    /// <summary>One-line 阿里云盘 status for the updates section (re-read after the cloud window closes).</summary>
+    public string CloudAccountText
+    {
+        get
+        {
+            var service = new CloudUpdateService(_target, new DpapiSecretProtector());
+            return service.IsConfigured
+                ? $"阿里云盘：已登录「{service.AccountName}」，云更新已启用。"
+                : "阿里云盘：未登录。每台电脑首次使用请先在「网盘设置」扫码登录一次。";
+        }
+    }
+
+    public void NotifyCloudChanged() => OnPropertyChanged(nameof(CloudAccountText));
 
     /// <summary>Netdisk account section; accounts persist on their own timeline (instant),
     /// independent of the settings working copy / Commit.</summary>

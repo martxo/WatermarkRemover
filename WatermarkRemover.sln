@@ -29,6 +29,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "WatermarkRemover.Index", "s
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "WatermarkRemover.Indexer", "src\WatermarkRemover.Indexer\WatermarkRemover.Indexer.csproj", "{9F79590E-7F0C-4524-8EC3-EFAECB15D6AD}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "WatermarkRemover.CloudPublisher", "src\WatermarkRemover.CloudPublisher\WatermarkRemover.CloudPublisher.csproj", "{BFA7512E-E87E-47DF-AE46-A3EB622E960B}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -82,6 +84,10 @@ Global
 		{9F79590E-7F0C-4524-8EC3-EFAECB15D6AD}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{9F79590E-7F0C-4524-8EC3-EFAECB15D6AD}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{9F79590E-7F0C-4524-8EC3-EFAECB15D6AD}.Release|Any CPU.Build.0 = Release|Any CPU
+		{BFA7512E-E87E-47DF-AE46-A3EB622E960B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{BFA7512E-E87E-47DF-AE46-A3EB622E960B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{BFA7512E-E87E-47DF-AE46-A3EB622E960B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{BFA7512E-E87E-47DF-AE46-A3EB622E960B}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{FA625EA8-477F-474F-B1DE-7DA667FE451E} = {4B314BD7-D56C-4EF5-9736-DDCC32843AB4}
@@ -95,5 +101,6 @@ Global
 		{3F6A2C81-5E4D-4B7A-9C12-7D8E0A6B4F35} = {4B314BD7-D56C-4EF5-9736-DDCC32843AB4}
 		{F6F8B7DC-DF31-489E-A55C-479BC6421252} = {4B314BD7-D56C-4EF5-9736-DDCC32843AB4}
 		{9F79590E-7F0C-4524-8EC3-EFAECB15D6AD} = {4B314BD7-D56C-4EF5-9736-DDCC32843AB4}
+		{BFA7512E-E87E-47DF-AE46-A3EB622E960B} = {4B314BD7-D56C-4EF5-9736-DDCC32843AB4}
 	EndGlobalSection
 EndGlobal
