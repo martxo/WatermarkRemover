@@ -26,8 +26,55 @@ if (options is null)
     Console.Error.WriteLine(
         "用法: WatermarkRemover.CloudPublisher --version <版本> --source <发布目录> [--note 说明] [--keep 5] [--dry-run]\n" +
         "      --compare <上一版目录>  只计算增量大小，不连接云盘\n" +
-        "      --probe <文件>          上传该文件的第 1 个分块，验证云端上传链路");
+        "      --probe <文件>          上传该文件的第 1 个分块，验证云端上传链路\n" +
+        "      --export-login          导出私有登录包并上传到 /WatermarkRemover/private/\n" +
+        "      --import-login <文件>   把私有登录包导入本机稳定配置");
     return 2;
+}
+
+// Import a portable login pack into the stable config (same path the app uses).
+if (options.ImportLogin is { } importFile)
+{
+    if (!File.Exists(importFile))
+    {
+        Console.Error.WriteLine($"登录状态文件不存在：{importFile}");
+        return 2;
+    }
+
+    string stable = AliyunpanCliRuntime.ImportConfig(await File.ReadAllTextAsync(importFile, ct));
+    Console.WriteLine($"登录状态已导入：{stable}");
+    return 0;
+}
+
+// Private login pack: export the CLI config (device-local paths stripped) and upload it into the
+// account-only /WatermarkRemover/private folder. Never goes into a GitHub release.
+if (options.ExportLogin)
+{
+    var loginValues = BuildCliCredentials();
+    await using var loginSession = await new AliyunDriveProvider()
+        .ConnectAsync(new NetdiskCredentials(loginValues));
+    NetdiskDrive loginDrive = loginSession.Drives.FirstOrDefault(d => d.Name == "资源库")
+        ?? throw new InvalidOperationException("账号没有资源库。");
+    await loginSession.SwitchDriveAsync(loginDrive.Id);
+
+    string raw = AliyunpanCliRuntime.TryReadRawConfig()
+        ?? throw new InvalidOperationException("未找到阿里云盘登录配置，请先登录。");
+    string pack = LoginPack.Create(raw);
+    string localDir = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "WatermarkRemover");
+    Directory.CreateDirectory(localDir);
+    string localPath = Path.Combine(localDir, LoginPack.FileName);
+    await File.WriteAllTextAsync(localPath, pack, ct);
+
+    string privateFolder = await loginSession.EnsureFolderAsync(
+        $"{CloudUpdateFormat.RootFolder}/private", ct);
+    await loginSession.UploadBytesAsync(
+        privateFolder, LoginPack.FileName, System.Text.Encoding.UTF8.GetBytes(pack), ct);
+
+    Console.WriteLine($"登录状态已导出：{localPath}");
+    Console.WriteLine($"云端私有文件：/{CloudUpdateFormat.RootFolder}/private/{LoginPack.FileName}");
+    Console.WriteLine("把该文件放到另一台电脑的程序目录或 %APPDATA%\\WatermarkRemover 后启动即可自动登录。");
+    return 0;
 }
 
 // One-chunk upload probe: exercises the exact blob upload path on a real file without touching
@@ -386,9 +433,11 @@ static PublishOptions? ParseArgs(string[] arguments)
     string? source = null;
     string? compare = null;
     string? probe = null;
+    string? importLogin = null;
     string note = string.Empty;
     int keep = CloudUpdateFormat.DefaultKeep;
     bool dryRun = false;
+    bool exportLogin = false;
 
     for (int i = 0; i < arguments.Length; i++)
     {
@@ -415,11 +464,17 @@ static PublishOptions? ParseArgs(string[] arguments)
             case "--dry-run":
                 dryRun = true;
                 break;
+            case "--export-login":
+                exportLogin = true;
+                break;
+            case "--import-login":
+                importLogin = ++i < arguments.Length ? arguments[i] : null;
+                break;
         }
     }
 
-    bool probeMode = !string.IsNullOrWhiteSpace(probe);
-    if (!probeMode &&
+    bool toolMode = exportLogin || !string.IsNullOrWhiteSpace(probe) || !string.IsNullOrWhiteSpace(importLogin);
+    if (!toolMode &&
         (string.IsNullOrWhiteSpace(version) || string.IsNullOrWhiteSpace(source) || !Directory.Exists(source)))
     {
         return null;
@@ -430,7 +485,9 @@ static PublishOptions? ParseArgs(string[] arguments)
         source is null ? string.Empty : Path.GetFullPath(source),
         note.Trim(), keep, dryRun,
         compare is null ? null : Path.GetFullPath(compare),
-        probe is null ? null : Path.GetFullPath(probe));
+        probe is null ? null : Path.GetFullPath(probe),
+        exportLogin,
+        importLogin is null ? null : Path.GetFullPath(importLogin));
 }
 
 internal sealed record PublishOptions(
@@ -440,4 +497,6 @@ internal sealed record PublishOptions(
     int Keep,
     bool DryRun,
     string? CompareSource,
-    string? ProbeFile);
+    string? ProbeFile,
+    bool ExportLogin,
+    string? ImportLogin);

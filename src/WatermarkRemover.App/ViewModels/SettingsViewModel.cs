@@ -13,6 +13,7 @@ using WatermarkRemover.Core.Features.Ocr;
 using WatermarkRemover.Core.Logging;
 using WatermarkRemover.Core.Recognition;
 using WatermarkRemover.Core.Settings;
+using WatermarkRemover.Netdisk;
 
 namespace WatermarkRemover.App.ViewModels;
 
@@ -90,6 +91,10 @@ public sealed class SettingsViewModel : ObservableObject
         RefreshUpdateStorage();
         RefreshReportsCommand = new RelayCommand(_ => RefreshReports());
         OpenReportsFolderCommand = new RelayCommand(_ => OpenReportsFolder());
+
+        ExportLoginPackCommand = new RelayCommand(() => _ = ExportLoginPackAsync());
+        ImportLoginPackCommand = new RelayCommand(() => ImportLoginPackRequested?.Invoke(this, EventArgs.Empty));
+        LoginPackStatusText = DescribeLoginPack();
     }
 
     /// <summary>The working copy the window binds to; untouched on cancel.</summary>
@@ -111,6 +116,95 @@ public sealed class SettingsViewModel : ObservableObject
     }
 
     public void NotifyCloudChanged() => OnPropertyChanged(nameof(CloudAccountText));
+
+    // ── 登录状态迁移（私有登录包）──
+
+    private string _loginPackStatusText = string.Empty;
+
+    /// <summary>One-line state of the portable aliyunpan login on this machine.</summary>
+    public string LoginPackStatusText
+    {
+        get => _loginPackStatusText;
+        private set => SetProperty(ref _loginPackStatusText, value);
+    }
+
+    /// <summary>Writes the pack locally and uploads it to /WatermarkRemover/private/.</summary>
+    public RelayCommand ExportLoginPackCommand { get; }
+
+    /// <summary>Raises <see cref="ImportLoginPackRequested"/>; the view owns the file picker.</summary>
+    public RelayCommand ImportLoginPackCommand { get; }
+
+    /// <summary>Raised when the user asks to import a login pack; the view picks the file.</summary>
+    public event EventHandler? ImportLoginPackRequested;
+
+    private async Task ExportLoginPackAsync()
+    {
+        try
+        {
+            var service = new CloudUpdateService(_target, new DpapiSecretProtector());
+            if (!service.IsConfigured)
+            {
+                _dialogs.Warn("请先在下方完成阿里云盘扫码登录，再导出登录状态。", "登录状态");
+                return;
+            }
+
+            LoginPackStatusText = "正在导出登录状态到云盘…";
+            CloudLoginPackResult result = await service.ExportLoginPackAsync().ConfigureAwait(true);
+            LoginPackStatusText =
+                $"已导出：本机 {result.LocalPath}；云端 {result.CloudPath}。另一台下载后放到程序目录即可自动导入。";
+
+            // Tokens may have rotated during the export — refresh the account summary.
+            NotifyCloudChanged();
+            _dialogs.Info(
+                "登录状态已导出。\n\n" +
+                $"本机文件：{result.LocalPath}\n" +
+                $"云端私有文件：{result.CloudPath}\n\n" +
+                "另一台电脑把这个 login-pack.json 放到程序目录（或 %APPDATA%\\WatermarkRemover）后启动，就会自动登录；" +
+                "也可以在「网盘设置」里用「导入登录状态文件」手动导入。",
+                "登录状态");
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("导出阿里云盘登录状态失败", ex);
+            LoginPackStatusText = $"导出失败：{ex.Message}";
+            _dialogs.Warn($"导出登录状态失败：{ex.Message}", "登录状态");
+        }
+    }
+
+    /// <summary>Called by the view after the file picker returns a pack path.</summary>
+    public void ImportLoginPackFrom(string path)
+    {
+        try
+        {
+            CloudUpdateService.ImportLoginPack(path);
+            LoginPackStatusText = "登录状态已导入，本机已具备阿里云盘登录。";
+            NotifyCloudChanged();
+            _dialogs.Info(
+                "登录状态导入成功。\n\n可以关闭设置后重新检查云更新；" +
+                "若程序里已打包 aliyunpan 工具，令牌到期会自动续期。",
+                "登录状态");
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("导入阿里云盘登录状态失败", ex);
+            LoginPackStatusText = $"导入失败：{ex.Message}";
+            _dialogs.Warn($"导入登录状态失败：{ex.Message}", "登录状态");
+        }
+    }
+
+    private static string DescribeLoginPack()
+    {
+        try
+        {
+            return File.Exists(AliyunpanCliRuntime.StableConfigPath)
+                ? $"本机登录状态：已就绪（{AliyunpanCliRuntime.StableConfigPath}）"
+                : "本机登录状态：未登录。先完成阿里云盘扫码登录，再导出。";
+        }
+        catch (Exception)
+        {
+            return "本机登录状态：未知";
+        }
+    }
 
     /// <summary>Netdisk account section; accounts persist on their own timeline (instant),
     /// independent of the settings working copy / Commit.</summary>

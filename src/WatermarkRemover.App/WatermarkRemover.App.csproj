@@ -36,7 +36,7 @@
     <AssemblyName>WatermarkRemover</AssemblyName>
     <RootNamespace>WatermarkRemover.App</RootNamespace>
     <ApplicationIcon Condition="Exists('app.ico')">app.ico</ApplicationIcon>
-    <Version>1.16.38</Version>
+    <Version>1.16.39</Version>
     <AssemblyVersion>$(Version)</AssemblyVersion>
     <FileVersion>$(Version)</FileVersion>
     <Product>Watermark Remover</Product>
@@ -52,6 +52,9 @@
     <!-- Privileged index host for 快速搜索. Published by PublishFileIndexer below; the app copies
          it to ProgramData once, so the logon task never points into the versioned app folder. -->
     <SidecarAsset Include="WatermarkRemover.Indexer.exe" />
+    <!-- Bundled 阿里云盘 CLI: renews the imported login pack's token without requiring a manual
+         install on every PC. Its config lives in %APPDATA%, never beside this exe. -->
+    <SidecarAsset Include="tools\aliyunpan\aliyunpan.exe" />
     <SidecarAsset Include="Models\ch_PP-OCRv5_det_mobile.onnx" />
     <SidecarAsset Include="Models\ch_PP-LCNet_x0_25_textline_ori_cls_mobile.onnx" />
     <SidecarAsset Include="Models\ch_PP-OCRv5_rec_mobile.onnx" />
@@ -76,6 +79,8 @@
     <None Include="Native\wcocr.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true">
       <Link>wcocr.dll</Link>
     </None>
+    <!-- Bundled CLI stays a plain file in tools\aliyunpan so it can be replaced/updated alone. -->
+    <None Include="tools\aliyunpan\aliyunpan.exe" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
   </ItemGroup>
 
   <!-- PP-OCRv5 mobile Chinese model set (det + cls + rec + dict, ~21.5 MB, RapidAI/PaddleOCR,

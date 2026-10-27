@@ -60,6 +60,9 @@ public sealed record CloudStageResult(
     long DownloadedBytes,
     long ChangedBytes);
 
+/// <summary>Where a portable login pack was written locally and in the private cloud folder.</summary>
+public sealed record CloudLoginPackResult(string LocalPath, string CloudPath);
+
 public sealed class CloudUpdateHistoryEntry
 {
     public string At { get; set; } = string.Empty;
@@ -124,6 +127,11 @@ public sealed class CloudUpdateService
     {
         _settings = settings;
         _protector = protector;
+        // A login pack dropped beside the app or into the stable data folder is imported before
+        // the account is resolved, so a fresh machine starts already logged in.
+        AliyunpanCliRuntime.EnsureStableConfig();
+        TryAutoImportLoginPack();
+
         IEnumerable<NetdiskAccountState> accounts = NetdiskAccountPersistence.Decode(
             settings.NetdiskAccounts, protector, (message, ex) => AppLog.Warn(message));
         _account = accounts.FirstOrDefault(a => a.ProviderId == ProviderId) ?? TryCreateCliAccount();
@@ -138,29 +146,131 @@ public sealed class CloudUpdateService
     {
         try
         {
+            // The stable config is readable even when the CLI binary is not installed, which is
+            // what makes an imported login pack immediately usable.
+            if (AliyunpanCliRuntime.TryReadStableConfig(out string? deviceId, out var stable) &&
+                !string.IsNullOrEmpty(stable.AccessToken))
+            {
+                return BuildCliAccount(deviceId, stable);
+            }
+
             string? executable = AliyunpanCliRuntime.LocateExecutable();
             if (executable is null) return null;
             if (!AliyunpanCliRuntime.TryReadConfig(
-                    AliyunpanCliRuntime.ConfigPathFor(executable), out string? deviceId, out var token) ||
+                    AliyunpanCliRuntime.ConfigPathFor(executable), out deviceId, out var token) ||
                 string.IsNullOrEmpty(token.AccessToken))
             {
                 return null;
             }
 
-            var values = new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                [AliyunpanCliRuntime.CliLoginKey] = "true",
-                [AliyunpanCliRuntime.CliDeviceIdKey] = deviceId ?? string.Empty,
-                [AliyunTokenService.AccessTokenKey] = token.AccessToken,
-                [AliyunTokenService.ExpiresAtKey] = token.ExpiredAt.ToString("O"),
-            };
-            return new NetdiskAccountState(ProviderId, "本机 aliyunpan", values);
+            return BuildCliAccount(deviceId, token);
         }
         catch (Exception ex)
         {
             AppLog.Warn($"读取本机 aliyunpan 登录信息失败：{ex.Message}");
             return null;
         }
+    }
+
+    private static NetdiskAccountState BuildCliAccount(
+        string? deviceId, (string AccessToken, DateTimeOffset ExpiredAt) token)
+    {
+        var values = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            [AliyunpanCliRuntime.CliLoginKey] = "true",
+            [AliyunpanCliRuntime.CliDeviceIdKey] = deviceId ?? string.Empty,
+            [AliyunTokenService.AccessTokenKey] = token.AccessToken,
+            [AliyunTokenService.ExpiresAtKey] = token.ExpiredAt.ToString("O"),
+        };
+        return new NetdiskAccountState(ProviderId, "本机 aliyunpan", values);
+    }
+
+    /// <summary>
+    /// Exports the current CLI login as a portable pack: a local copy in the stable data folder
+    /// and a private copy under /WatermarkRemover/private/ on the account's 资源库.
+    /// </summary>
+    public async Task<CloudLoginPackResult> ExportLoginPackAsync(CancellationToken cancellationToken = default)
+    {
+        if (_account is null)
+        {
+            throw new InvalidOperationException("尚未登录阿里云盘，无法导出登录状态。");
+        }
+
+        AliyunpanCliRuntime.EnsureStableConfig();
+        string raw = AliyunpanCliRuntime.TryReadRawConfig()
+            ?? throw new InvalidOperationException("未找到本机 aliyunpan 登录配置，请先完成扫码登录。");
+        string pack = LoginPack.Create(raw);
+
+        Directory.CreateDirectory(AppFolders.Root);
+        string localPath = Path.Combine(AppFolders.Root, LoginPack.FileName);
+        File.WriteAllText(localPath, pack, new UTF8Encoding(false));
+
+        await using AliyunDriveSessionBundle bundle = await OpenAsync(createFolders: true, cancellationToken)
+            .ConfigureAwait(false);
+        if (bundle.RootFolderId is null)
+        {
+            throw new InvalidOperationException("云端更新目录不存在，无法上传登录状态。");
+        }
+
+        string privateFolder = await bundle.Session
+            .EnsureFolderAsync($"{CloudUpdateFormat.RootFolder}/private", cancellationToken)
+            .ConfigureAwait(false);
+        await bundle.Session.UploadBytesAsync(
+                privateFolder, LoginPack.FileName, Encoding.UTF8.GetBytes(pack), cancellationToken)
+            .ConfigureAwait(false);
+
+        string cloudPath = $"/{CloudUpdateFormat.RootFolder}/private/{LoginPack.FileName}";
+        AppLog.Info($"登录状态已导出：{localPath}，云端 {cloudPath}");
+        return new CloudLoginPackResult(localPath, cloudPath);
+    }
+
+    /// <summary>Imports a pack into the stable CLI config used by the app.</summary>
+    public static string ImportLoginPack(string packPath)
+    {
+        string json = File.ReadAllText(packPath);
+        string stable = AliyunpanCliRuntime.ImportConfig(json);
+        AppLog.Info($"已导入阿里云盘登录状态：{packPath}");
+        return stable;
+    }
+
+    /// <summary>
+    /// Startup import: a login-pack.json beside the executable or in the stable data folder is
+    /// applied when no CLI login exists yet (a fresh machine).
+    /// </summary>
+    public static bool TryAutoImportLoginPack()
+    {
+        if (File.Exists(AliyunpanCliRuntime.StableConfigPath)) return false;
+
+        foreach (string candidate in LoginPackCandidates())
+        {
+            if (!File.Exists(candidate)) continue;
+            try
+            {
+                ImportLoginPack(candidate);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                AppLog.Warn($"自动导入登录状态失败（{candidate}）：{ex.Message}");
+            }
+        }
+
+        return false;
+    }
+
+    private static IEnumerable<string> LoginPackCandidates()
+    {
+        var paths = new List<string>
+        {
+            Path.Combine(AppFolders.Root, LoginPack.FileName),
+            Path.Combine(AppContext.BaseDirectory, LoginPack.FileName),
+        };
+        if (Environment.ProcessPath is { } processPath && Path.GetDirectoryName(processPath) is { } exeDir)
+        {
+            paths.Add(Path.Combine(exeDir, LoginPack.FileName));
+        }
+
+        return paths.Distinct(StringComparer.OrdinalIgnoreCase);
     }
 
     public bool IsConfigured => _account is not null;

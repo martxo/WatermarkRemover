@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Text;
 using System.Text.Json;
 using WatermarkRemover.Core.Netdisk;
 
@@ -23,6 +24,14 @@ public static class AliyunpanCliRuntime
     public const string CliDeviceIdKey = "cli_device_id";
 
     private const string ConfigFileName = "aliyunpan_config.json";
+
+    /// <summary>Stable per-user config folder; survives Velopack/cloud updates replacing the app dir.</summary>
+    public static string StableConfigDirectory => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+        "WatermarkRemover", "aliyunpan");
+
+    /// <summary>The CLI config the app itself reads, renews through and can import a pack into.</summary>
+    public static string StableConfigPath => Path.Combine(StableConfigDirectory, ConfigFileName);
 
     /// <summary>
     /// Locates aliyunpan.exe: explicit env override, then the app folder, then the user tools
@@ -58,9 +67,87 @@ public static class AliyunpanCliRuntime
         return null;
     }
 
-    /// <summary>Path of the CLI's config file that sits next to its executable.</summary>
-    public static string ConfigPathFor(string executablePath) =>
-        Path.Combine(Path.GetDirectoryName(executablePath) ?? ".", ConfigFileName);
+    /// <summary>
+    /// Config path used by the app: a stable folder under %APPDATA% (an <c>ALIYUNPAN_CONFIG_DIR</c>
+    /// override wins). On first use the legacy config next to the executable is copied over, so an
+    /// existing CLI login keeps working after the app moves its data out of the install folder.
+    /// </summary>
+    public static string ConfigPathFor(string executablePath)
+    {
+        string? overrideDir = Environment.GetEnvironmentVariable("ALIYUNPAN_CONFIG_DIR");
+        if (!string.IsNullOrWhiteSpace(overrideDir))
+        {
+            return Path.Combine(overrideDir, ConfigFileName);
+        }
+
+        string stable = StableConfigPath;
+        if (!File.Exists(stable))
+        {
+            string legacy = Path.Combine(Path.GetDirectoryName(executablePath) ?? ".", ConfigFileName);
+            if (File.Exists(legacy))
+            {
+                try
+                {
+                    Directory.CreateDirectory(StableConfigDirectory);
+                    File.Copy(legacy, stable);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    // Best effort: the caller falls back to "not logged in".
+                }
+            }
+        }
+
+        return stable;
+    }
+
+    /// <summary>Creates the stable config from a legacy install on first use.</summary>
+    public static void EnsureStableConfig()
+    {
+        try
+        {
+            string? executable = LocateExecutable();
+            if (executable is not null) _ = ConfigPathFor(executable);
+        }
+        catch (Exception)
+        {
+            // Config migration must never stop startup.
+        }
+    }
+
+    /// <summary>Reads the stable config without requiring the CLI binary to be present.</summary>
+    public static bool TryReadStableConfig(
+        out string? deviceId, out (string AccessToken, DateTimeOffset ExpiredAt) token)
+        => TryReadConfig(StableConfigPath, out deviceId, out token);
+
+    /// <summary>
+    /// Writes a portable login pack into the stable config the app (and bundled CLI) use. The
+    /// pack is validated first; an invalid file never replaces a working login.
+    /// </summary>
+    public static string ImportConfig(string packJson)
+    {
+        if (!LoginPack.LooksValid(packJson))
+        {
+            throw new InvalidDataException("登录状态文件无效（缺少阿里云盘令牌）。");
+        }
+
+        Directory.CreateDirectory(StableConfigDirectory);
+        File.WriteAllText(StableConfigPath, packJson, new UTF8Encoding(false));
+        return StableConfigPath;
+    }
+
+    /// <summary>Raw stable config JSON (null when not logged in).</summary>
+    public static string? TryReadRawConfig()
+    {
+        try
+        {
+            return File.Exists(StableConfigPath) ? File.ReadAllText(StableConfigPath) : null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
 
     /// <summary>
     /// Reads the device id the CLI uses as its identity. Returns null when the CLI or its config
@@ -175,18 +262,21 @@ public static class AliyunpanCliRuntime
 
     private static void RunCliCommand(string executable, string arguments, CancellationToken cancellationToken)
     {
-        using var process = new Process
+        var startInfo = new ProcessStartInfo
         {
-            StartInfo = new ProcessStartInfo
-            {
-                FileName = executable,
-                Arguments = arguments,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-            },
+            FileName = executable,
+            Arguments = arguments,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
         };
+        // The bundled CLI must read the stable %APPDATA% config, not one next to the exe (which
+        // the updater replaces on every release).
+        startInfo.Environment["ALIYUNPAN_CONFIG_DIR"] =
+            Path.GetDirectoryName(ConfigPathFor(executable)) ?? StableConfigDirectory;
+
+        using var process = new Process { StartInfo = startInfo };
         if (!process.Start())
         {
             throw new NetdiskAuthException("aliyunpan 命令行工具启动失败。", "CliStartFailed");

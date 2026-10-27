@@ -6,6 +6,7 @@ using Velopack;
 using WatermarkRemover.App.Logging;
 using WatermarkRemover.App.Updates;
 using WatermarkRemover.Core.Settings;
+using WatermarkRemover.Netdisk;
 
 namespace WatermarkRemover.App;
 
@@ -33,6 +34,11 @@ public partial class App : Application
             AppLog.Error($"安装清单为 v{manifest}，正在运行的程序却是 v{UpdateService.CurrentVersion}：" +
                          "更新只替换了一部分文件，请重新安装最新版。");
         }
+        // A stable %APPDATA% CLI config survives every update. On a fresh machine, a dropped-in
+        // login-pack.json is imported here, so the cloud channel works without another scan.
+        AliyunpanCliRuntime.EnsureStableConfig();
+        CloudUpdateService.TryAutoImportLoginPack();
+
         // The detached 云更新 script writes its verdict after this process exited; fold it into
         // the install history on the first start of the new (or restored) version.
         CloudUpdateService.ReconcileLastApply();

@@ -26,10 +26,16 @@ public partial class SettingsPage : UserControl
     /// <summary>Keeps the log-export event wired to whichever working copy is bound.</summary>
     private void OnDataContextChanged(object sender, DependencyPropertyChangedEventArgs e)
     {
-        if (e.OldValue is SettingsViewModel old) old.ExportRequested -= OnExportRequested;
+        if (e.OldValue is SettingsViewModel old)
+        {
+            old.ExportRequested -= OnExportRequested;
+            old.ImportLoginPackRequested -= OnImportLoginPackRequested;
+        }
+
         if (e.NewValue is SettingsViewModel fresh)
         {
             fresh.ExportRequested += OnExportRequested;
+            fresh.ImportLoginPackRequested += OnImportLoginPackRequested;
             SyncScanColorRadios(fresh);
         }
     }
@@ -153,6 +159,23 @@ public partial class SettingsPage : UserControl
         dialog = new CloudUpdateWindow(cloud) { Owner = window };
         dialog.ShowDialog();
         vm.NotifyCloudChanged();
+    }
+
+    /// <summary>File picker for the private login pack; the view model does the import.</summary>
+    private void OnImportLoginPackRequested(object? sender, EventArgs e)
+    {
+        if (ViewModel is not { } vm) return;
+
+        var dialog = new OpenFileDialog
+        {
+            Title = "选择登录状态文件",
+            Filter = "登录状态包|login-pack.json;*.json|所有文件|*.*",
+            CheckFileExists = true,
+        };
+        if (dialog.ShowDialog(Window.GetWindow(this)) == true)
+        {
+            vm.ImportLoginPackFrom(dialog.FileName);
+        }
     }
 
     private async void OnCheckUpdate(object sender, RoutedEventArgs e)

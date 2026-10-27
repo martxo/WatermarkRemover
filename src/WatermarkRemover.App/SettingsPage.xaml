@@ -524,6 +524,29 @@
                                            Style="{StaticResource RowCaption}"/>
                             </StackPanel>
                         </Border>
+
+                        <!-- 登录状态迁移：私有登录包，另一台无需再扫码 -->
+                        <TextBlock Text="登录状态迁移（私有）" Style="{StaticResource SectionTitle}"/>
+                        <Border Style="{StaticResource InsetCard}">
+                            <StackPanel>
+                                <TextBlock Text="{Binding LoginPackStatusText}"
+                                           Style="{StaticResource RowCaption}"/>
+                                <TextBlock Text="导出后会在本机生成 login-pack.json，并以私有文件上传到阿里云盘 资源库/WatermarkRemover/private/。另一台把这个文件放到程序目录或 %APPDATA%\WatermarkRemover 后启动即可自动登录；也可用下方按钮手动导入。登录包含账号令牌，请勿发到公开群/仓库。"
+                                           Style="{StaticResource RowCaption}"
+                                           Margin="0,4,0,0"/>
+                                <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                    <Button Content="导出登录状态到云盘"
+                                            Style="{StaticResource SmallButton}"
+                                            Padding="14,7"
+                                            Command="{Binding ExportLoginPackCommand}"/>
+                                    <Button Content="导入登录状态文件…"
+                                            Style="{StaticResource SmallButton}"
+                                            Padding="14,7"
+                                            Margin="8,0,0,0"
+                                            Command="{Binding ImportLoginPackCommand}"/>
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
                     </StackPanel>
 
                     <!-- ============ OCR 识别 ============ -->
