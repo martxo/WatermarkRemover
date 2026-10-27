@@ -20,12 +20,54 @@ using WatermarkRemover.Netdisk;
 // couple of megabytes instead of the 236 MB full Velopack package.
 
 var options = ParseArgs(args);
+var ct = CancellationToken.None;
 if (options is null)
 {
     Console.Error.WriteLine(
         "用法: WatermarkRemover.CloudPublisher --version <版本> --source <发布目录> [--note 说明] [--keep 5] [--dry-run]\n" +
-        "      --compare <上一版目录>  只计算增量大小，不连接云盘");
+        "      --compare <上一版目录>  只计算增量大小，不连接云盘\n" +
+        "      --probe <文件>          上传该文件的第 1 个分块，验证云端上传链路");
     return 2;
+}
+
+// One-chunk upload probe: exercises the exact blob upload path on a real file without touching
+// any version manifest. Useful when a release upload fails at the object-store PUT.
+if (options.ProbeFile is { } probeFile)
+{
+    if (!File.Exists(probeFile))
+    {
+        Console.Error.WriteLine($"探针文件不存在：{probeFile}");
+        return 2;
+    }
+
+    var probeValues = BuildCliCredentials();
+    await using var probeSession = await new AliyunDriveProvider()
+        .ConnectAsync(new NetdiskCredentials(probeValues));
+    NetdiskDrive probeDrive = probeSession.Drives.FirstOrDefault(d => d.Name == "资源库")
+        ?? throw new InvalidOperationException("账号没有资源库。");
+    await probeSession.SwitchDriveAsync(probeDrive.Id);
+    string probeChunks = await probeSession.EnsureFolderAsync(
+        $"{CloudUpdateFormat.RootFolder}/{CloudUpdateFormat.ChunksFolder}");
+
+    byte[] probeBytes = await File.ReadAllBytesAsync(probeFile);
+    var probeChunk = ContentChunker.Split(probeBytes)[0];
+    string probeTemp = Path.Combine(Path.GetTempPath(), probeChunk.Sha256);
+    await SliceToFileAsync(probeFile, probeChunk.Offset, probeChunk.Length, probeTemp, ct);
+    try
+    {
+        await probeSession.UploadAsAsync(probeChunks, probeTemp, probeChunk.Sha256, overwrite: false);
+        Console.WriteLine($"探针上传成功：{probeFile} 的第 1 块（{probeChunk.Length} B，{probeChunk.Sha256[..12]}…）");
+        return 0;
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine($"探针上传失败：{ex}");
+        return 1;
+    }
+    finally
+    {
+        File.Delete(probeTemp);
+    }
 }
 
 // Local-only estimate: how much of this release would actually be uploaded compared to another
@@ -55,7 +97,6 @@ const string DriveName = "资源库";
 string rootPath = CloudUpdateFormat.RootFolder;
 string chunksPath = $"{rootPath}/{CloudUpdateFormat.ChunksFolder}";
 string historyPath = $"{rootPath}/{CloudUpdateFormat.HistoryFolder}";
-var ct = CancellationToken.None;
 
 Console.WriteLine($"[1/6] 读取本机 aliyunpan 登录信息…");
 string cli = AliyunpanCliRuntime.LocateExecutable()
@@ -274,6 +315,25 @@ static int CountChanged(CloudManifest? previous, CloudManifest current)
         !string.Equals(sha, f.Sha256, StringComparison.OrdinalIgnoreCase));
 }
 
+static Dictionary<string, string> BuildCliCredentials()
+{
+    string cliPath = AliyunpanCliRuntime.LocateExecutable()
+        ?? throw new InvalidOperationException("未找到 aliyunpan 命令行工具，请先安装并登录。");
+    if (!AliyunpanCliRuntime.TryReadConfig(AliyunpanCliRuntime.ConfigPathFor(cliPath), out string? deviceId, out var token) ||
+        string.IsNullOrEmpty(token.AccessToken))
+    {
+        throw new InvalidOperationException("读取 aliyunpan 配置失败，请先在命令行执行 aliyunpan login。");
+    }
+
+    return new Dictionary<string, string>(StringComparer.Ordinal)
+    {
+        [AliyunpanCliRuntime.CliLoginKey] = "true",
+        [AliyunpanCliRuntime.CliDeviceIdKey] = deviceId ?? string.Empty,
+        [AliyunTokenService.AccessTokenKey] = token.AccessToken,
+        [AliyunTokenService.ExpiresAtKey] = token.ExpiredAt.ToString("O", CultureInfo.InvariantCulture),
+    };
+}
+
 static async Task SliceToFileAsync(string path, int offset, int length, string target, CancellationToken ct)
 {
     await using var source = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
@@ -315,6 +375,7 @@ static PublishOptions? ParseArgs(string[] arguments)
     string? version = null;
     string? source = null;
     string? compare = null;
+    string? probe = null;
     string note = string.Empty;
     int keep = CloudUpdateFormat.DefaultKeep;
     bool dryRun = false;
@@ -335,6 +396,9 @@ static PublishOptions? ParseArgs(string[] arguments)
             case "--compare":
                 compare = ++i < arguments.Length ? arguments[i] : null;
                 break;
+            case "--probe":
+                probe = ++i < arguments.Length ? arguments[i] : null;
+                break;
             case "--keep":
                 if (++i < arguments.Length && int.TryParse(arguments[i], out int k)) keep = Math.Max(1, k);
                 break;
@@ -344,14 +408,26 @@ static PublishOptions? ParseArgs(string[] arguments)
         }
     }
 
-    if (string.IsNullOrWhiteSpace(version) || string.IsNullOrWhiteSpace(source) || !Directory.Exists(source))
+    bool probeMode = !string.IsNullOrWhiteSpace(probe);
+    if (!probeMode &&
+        (string.IsNullOrWhiteSpace(version) || string.IsNullOrWhiteSpace(source) || !Directory.Exists(source)))
     {
         return null;
     }
 
-    return new PublishOptions(version.Trim().TrimStart('v', 'V'), Path.GetFullPath(source),
-        note.Trim(), keep, dryRun, compare is null ? null : Path.GetFullPath(compare));
+    return new PublishOptions(
+        version?.Trim().TrimStart('v', 'V') ?? string.Empty,
+        source is null ? string.Empty : Path.GetFullPath(source),
+        note.Trim(), keep, dryRun,
+        compare is null ? null : Path.GetFullPath(compare),
+        probe is null ? null : Path.GetFullPath(probe));
 }
 
 internal sealed record PublishOptions(
-    string Version, string Source, string Note, int Keep, bool DryRun, string? CompareSource);
+    string Version,
+    string Source,
+    string Note,
+    int Keep,
+    bool DryRun,
+    string? CompareSource,
+    string? ProbeFile);

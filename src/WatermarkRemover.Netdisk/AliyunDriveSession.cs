@@ -441,13 +441,25 @@ public sealed class AliyunDriveSession : INetdiskSession
         int networkRetries = 0;
         while (true)
         {
+            // The pre-signed object-store URL signs Content-Type, so sending one (even the usual
+            // application/octet-stream) breaks the signature: SignatureDoesNotMatch. The PUT must
+            // carry the raw bytes and nothing else.
             using var content = new ByteArrayContent(buffer, 0, filled);
-            content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
 
             HttpResponseMessage response;
             try
             {
-                response = await _http.PutAsync(url, content, cancellationToken).ConfigureAwait(false);
+                // The signed object-store URL is happiest over HTTP/1.1; the default HTTP/2
+                // negotiation produced "response ended prematurely" on these PUTs. A UA also
+                // keeps CDN edges from treating the request as an anonymous bot.
+                using var request = new HttpRequestMessage(HttpMethod.Put, url)
+                {
+                    Content = content,
+                    Version = System.Net.HttpVersion.Version11,
+                    VersionPolicy = HttpVersionPolicy.RequestVersionOrLower,
+                };
+                request.Headers.UserAgent.ParseAdd("WatermarkRemover/1.0");
+                response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is HttpRequestException or IOException && networkRetries < 3)
             {
@@ -474,7 +486,10 @@ public sealed class AliyunDriveSession : INetdiskSession
                 }
 
                 var text = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-                throw AlipanJson.MapError((int)response.StatusCode, text, $"分片 {part.PartNumber} 上传失败。");
+                string detail = string.IsNullOrWhiteSpace(text) ? "无响应内容"
+                    : text.Length <= 300 ? text : text[..300];
+                throw AlipanJson.MapError((int)response.StatusCode, text,
+                    $"分片 {part.PartNumber} 上传失败（HTTP {(int)response.StatusCode}：{detail}）。");
             }
         }
     }
