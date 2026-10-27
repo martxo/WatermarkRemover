@@ -399,7 +399,15 @@ public sealed class CloudUpdateService
             }
 
             string temp = cachePath + ".part";
-            await bundle.Session.DownloadAsync(fileId, temp, null, cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await bundle.Session.DownloadAsync(fileId, temp, null, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                try { File.Delete(temp); } catch { /* best effort */ }
+                throw new InvalidDataException($"下载分块 {chunk.Sha256[..12]}… 失败：{ex.Message}", ex);
+            }
             if (new FileInfo(temp).Length != chunk.Size || !string.Equals(HashFile(temp), chunk.Sha256, StringComparison.Ordinal))
             {
                 File.Delete(temp);

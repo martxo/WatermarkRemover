@@ -57,6 +57,16 @@ if (options.ProbeFile is { } probeFile)
     {
         await probeSession.UploadAsAsync(probeChunks, probeTemp, probeChunk.Sha256, overwrite: false);
         Console.WriteLine($"探针上传成功：{probeFile} 的第 1 块（{probeChunk.Length} B，{probeChunk.Sha256[..12]}…）");
+
+        byte[]? downloaded = await probeSession.DownloadBytesAsync(probeChunks, probeChunk.Sha256);
+        if (downloaded is null || downloaded.Length != probeChunk.Length ||
+            !string.Equals(Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(downloaded)).ToLowerInvariant(),
+                probeChunk.Sha256, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException("探针下载校验失败。");
+        }
+
+        Console.WriteLine($"探针下载成功并校验一致：{downloaded.Length} B");
         return 0;
     }
     catch (Exception ex)

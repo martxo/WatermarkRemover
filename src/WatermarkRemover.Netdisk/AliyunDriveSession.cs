@@ -308,13 +308,14 @@ public sealed class AliyunDriveSession : INetdiskSession
         var url = AlipanJson.TryGetString(link, "url")
             ?? throw new NetdiskException("getDownloadUrl 响应缺少 url。", "MalformedDownloadUrlResponse");
 
-        using var response = await _http
-            .GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
-            .ConfigureAwait(false);
+        using var response = await SendDownloadRequestAsync(url, cancellationToken).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {
             var text = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-            throw AlipanJson.MapError((int)response.StatusCode, text, "下载文件失败。");
+            string detail = string.IsNullOrWhiteSpace(text) ? "无响应内容"
+                : text.Length <= 300 ? text : text[..300];
+            throw AlipanJson.MapError((int)response.StatusCode, text,
+                $"下载文件失败（HTTP {(int)response.StatusCode}：{detail}）。");
         }
 
         var totalBytes = response.Content.Headers.ContentLength;
@@ -404,6 +405,36 @@ public sealed class AliyunDriveSession : INetdiskSession
             try
             {
                 return await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is HttpRequestException or IOException && retry < 2)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(1.5 * (retry + 1)), cancellationToken).ConfigureAwait(false);
+            }
+        }
+    }
+
+    /// <summary>
+    /// GET the pre-signed download URL over HTTP/1.1 with a small retry. The URL signs the method
+    /// and path only, so a UA is safe; HTTP/2 negotiation was the source of premature resets.
+    /// </summary>
+    private async Task<HttpResponseMessage> SendDownloadRequestAsync(
+        string url,
+        CancellationToken cancellationToken)
+    {
+        for (var retry = 0; ; retry++)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, url)
+            {
+                Version = System.Net.HttpVersion.Version11,
+                VersionPolicy = HttpVersionPolicy.RequestVersionOrLower,
+            };
+            request.Headers.UserAgent.ParseAdd("WatermarkRemover/1.0");
+
+            try
+            {
+                return await _http
+                    .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+                    .ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is HttpRequestException or IOException && retry < 2)
             {
