@@ -108,11 +108,14 @@ public static class PdfPageDragReorder
             Math.Abs(position.Y - _pressPoint.Y) < SystemParameters.MinimumVerticalDragDistance)
             return;
 
+        // Capture both before clearing the press state: DoDragDrop needs a non-null source, and
+        // clearing first left it null ("Value cannot be null. (Parameter 'dragSource')").
+        ItemsControl dragSource = _pressOwner;
         PdfPreviewThumbnailViewModel tile = _pressedTile;
         ResetPress();
 
         var data = new DataObject(DragFormat, tile);
-        DragDrop.DoDragDrop(_pressOwner, data, DragDropEffects.Move);
+        DragDrop.DoDragDrop(dragSource, data, DragDropEffects.Move);
     }
 
     private static void OnDragHeartbeat(object sender, DragEventArgs e)

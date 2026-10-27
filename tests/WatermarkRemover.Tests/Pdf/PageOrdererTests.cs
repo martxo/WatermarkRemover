@@ -69,6 +69,18 @@ public class PageOrdererTests : IDisposable
     }
 
     [Fact]
+    public void Moving_a_page_to_the_last_slot_appends_it()
+    {
+        // After the removal the document holds one page fewer, so the last slot is exactly the
+        // append position: the reorder must accept it instead of rejecting the original index.
+        string pdf = WritePdf("last.pdf", 100, 110, 120);
+
+        Assert.True(PdfPageOrderer.MovePage(pdf, 0, 2));
+
+        Assert.Equal(new[] { 110.0, 120.0, 100.0 }, PagesOf(pdf).Select(p => p.Width));
+    }
+
+    [Fact]
     public void An_out_of_range_target_fails_before_anything_is_written()
     {
         string pdf = WritePdf("invalid.pdf", 100, 110, 120);
