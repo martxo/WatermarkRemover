@@ -4,9 +4,10 @@ using WatermarkRemover.Core.Features.Ocr;
 
 namespace WatermarkRemover.App.Imaging;
 
-/// <summary>The two decisions the 身份证 template needs before composing: which photo is the
-/// front (it goes on top) and what to call the file.</summary>
-public sealed record IdCardPlan(IReadOnlyList<byte[]> OrderedImages, string? Name);
+/// <summary>The decisions the 身份证 template needs before composing: which photo is the front
+/// (it goes on top), what to call the file, and whether the pair really is an ID card (the
+/// automatic link flow only composes without asking when this is true).</summary>
+public sealed record IdCardPlan(IReadOnlyList<byte[]> OrderedImages, string? Name, bool LooksLikeIdCard);
 
 /// <summary>
 /// Reads a pair of ID-card photos with the shared OCR engine: the front carries 姓名 and
@@ -64,7 +65,13 @@ public static class IdCardInspector
         string? name = faces.FirstOrDefault(f => f.IsFront && f.Name is not null)?.Name
             ?? faces.Select(f => f.Name).FirstOrDefault(n => n is not null);
 
-        return new IdCardPlan(ordered, name);
+        // A pair only auto-composes when the text itself proves it is an ID card: a 公民身份号码,
+        // or a back (签发机关/有效期限) paired with a front. Two licence photos that merely have
+        // a card-like shape therefore stay in the gallery instead of silently becoming an ID sheet.
+        bool looksLikeIdCard = faces.Any(f => f.HasCitizenId) ||
+                               (faces.Any(f => f.IsBack) && faces.Any(f => f.IsFront));
+
+        return new IdCardPlan(ordered, name, looksLikeIdCard);
     }
 
     /// <summary>Decodes, flattens onto white and caps the long side — the same shape the PDF
@@ -125,7 +132,8 @@ public static class IdCardInspector
 
             bool backMarker = norms.Any(n => n.Contains("签发机关", StringComparison.Ordinal) ||
                                              n.Contains("有效期限", StringComparison.Ordinal));
-            bool frontMarker = norms.Any(n => n.Contains("公民身份号码", StringComparison.Ordinal)) ||
+            HasCitizenId = norms.Any(n => n.Contains("公民身份号码", StringComparison.Ordinal));
+            bool frontMarker = HasCitizenId ||
                                (Name is not null && norms.Any(n =>
                                    n.Contains("性别", StringComparison.Ordinal) ||
                                    n.Contains("民族", StringComparison.Ordinal) ||
@@ -139,6 +147,8 @@ public static class IdCardInspector
         public bool IsBack { get; }
 
         public bool IsFront { get; }
+
+        public bool HasCitizenId { get; }
 
         public string? Name { get; }
 

@@ -352,6 +352,15 @@ public sealed class TransferPanelViewModel : ObservableObject, IDisposable
         OnPropertyChanged(nameof(HasPendingPages));
         RaiseComposeState();
         RefreshPreview();
+
+        // ID cards are a fixed, fully determined output: compose without waiting for a click.
+        // The OCR confirmation inside keeps a card-shaped licence pair from being forced into
+        // the ID sheet — those stay in the gallery for the user to pack manually.
+        if (SelectedLayout.Kind == ComposeLayoutKind.IdCardA4 && _idCardOcr is not null)
+        {
+            StatusText = "检测到身份证，正在自动识别姓名与正反面…";
+            _ = ComposePendingAsync(ComposeLayoutCatalog.IdCardA4, SelectedCropMode, autoConfirmed: true);
+        }
     }
 
     private void ClearPending()
@@ -413,7 +422,10 @@ public sealed class TransferPanelViewModel : ObservableObject, IDisposable
 
     /// <summary>Composes the checked images (a page per pack capacity) into one PDF and hands it
     /// to the owner, which files it as a normal record with content naming.</summary>
-    private async Task ComposePendingAsync(ComposeLayout layout, CropModeChoice crop)
+    private async Task ComposePendingAsync(
+        ComposeLayout layout,
+        CropModeChoice crop,
+        bool autoConfirmed = false)
     {
         List<ComposeSourceViewModel> chosen = PendingPages.Where(p => p.IsSelected).ToList();
         if (chosen.Count == 0)
@@ -429,16 +441,16 @@ public sealed class TransferPanelViewModel : ObservableObject, IDisposable
         {
             byte[][] selected = chosen.Select(p => p.Bytes).ToArray();
             string? personName = null;
+            IdCardPlan? plan = null;
             if (layout.Kind == ComposeLayoutKind.IdCardA4 && _idCardOcr is not null)
             {
                 StatusText = "正在识别身份证姓名与正反面…";
                 try
                 {
-                    IdCardPlan plan = await IdCardInspector
+                    plan = await IdCardInspector
                         .PrepareAsync(selected, _idCardOcr)
                         .ConfigureAwait(true);
                     selected = plan.OrderedImages.ToArray();
-                    personName = plan.Name;
                 }
                 catch (Exception ex)
                 {
@@ -446,6 +458,14 @@ public sealed class TransferPanelViewModel : ObservableObject, IDisposable
                     AppLog.Warn($"身份证识别失败，保留原顺序与标题：{ex.Message}");
                 }
             }
+
+            // The clickless path must not silently bake a non-ID pair into the ID template.
+            if (autoConfirmed && plan is not { LooksLikeIdCard: true })
+            {
+                StatusText = "未能确认是身份证，已保留图片：请选择排版后手动合并。";
+                return;
+            }
+            personName = plan?.Name;
 
             string title = personName is not null
                 ? personName + "身份证"

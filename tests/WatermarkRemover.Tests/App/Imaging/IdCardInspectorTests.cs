@@ -54,6 +54,23 @@ public class IdCardInspectorTests
         Assert.Same(front, plan.OrderedImages[0]);
         Assert.Same(back, plan.OrderedImages[1]);
         Assert.Equal("李文亨", plan.Name);
+        Assert.True(plan.LooksLikeIdCard);
+    }
+
+    [Fact]
+    public async Task Two_licence_photos_are_not_confirmed_as_an_id_card()
+    {
+        byte[] first = Image(200, 120);
+        byte[] second = Image(200, 120);
+        var engine = new QueueOcr(
+            new[] { "营业执照", "名称 某某公司", "统一社会信用代码 91450900MA..." },
+            new[] { "营业执照", "法定代表人 李伟", "经营范围 一般项目…" });
+
+        IdCardPlan plan = await IdCardInspector.PrepareAsync(new[] { first, second }, engine);
+
+        Assert.False(plan.LooksLikeIdCard);
+        Assert.Null(plan.Name);
+        Assert.Same(first, plan.OrderedImages[0]);
     }
 
     [Fact]
@@ -98,6 +115,7 @@ public class IdCardInspectorTests
         Assert.Same(first, plan.OrderedImages[0]);
         Assert.Same(second, plan.OrderedImages[1]);
         Assert.Null(plan.Name);
+        Assert.False(plan.LooksLikeIdCard);
     }
 
     [Fact]
