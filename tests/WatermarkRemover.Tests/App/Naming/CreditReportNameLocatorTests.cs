@@ -24,10 +24,82 @@ public class CreditReportNameLocatorTests
     [InlineData("被 查询者姓名", true)]          // OCR-inserted spaces
     [InlineData("被查询者证件类型", false)]
     [InlineData("查询机构", false)]
+    [InlineData("姓名", false)]                  // 本人版 label — never matched by the specific check
     [InlineData("", false)]
     [InlineData(null, false)]
     public void Anchor_label_matching_tolerates_ocr_noise(string? text, bool expected) =>
         Assert.Equal(expected, CreditReportNameLocator.IsAnchorLabel(text));
+
+    [Fact]
+    public void A_bare_name_label_only_anchors_on_a_personal_report()
+    {
+        var nameLine = new RecognizedLine("姓名:李言波", new RectD(0.07, 0.30, 0.1, 0.02));
+
+        // 本人版 personal report: the bare 姓名 label is the anchor.
+        var personal = new[]
+        {
+            new RecognizedLine("个人信用报告", new RectD(0.20, 0.20, 0.20, 0.03)),
+            nameLine,
+        };
+        Assert.Equal("姓名:李言波", CreditReportNameLocator.FindAnchor(personal)!.Text);
+
+        // An ID card's own 姓名 row must not borrow the credit-report suffix.
+        var idCard = new[]
+        {
+            new RecognizedLine("居民身份证", new RectD(0.10, 0.10, 0.20, 0.03)),
+            nameLine,
+        };
+        Assert.Null(CreditReportNameLocator.FindAnchor(idCard));
+
+        // The enterprise edition keeps its placeholder stem: even with a 征信中心 marker,
+        // its plain 姓名 cell must not become the name.
+        var enterprise = new[]
+        {
+            new RecognizedLine("企业信用报告", new RectD(0.20, 0.20, 0.20, 0.03)),
+            new RecognizedLine("征信中心", new RectD(0.10, 0.10, 0.10, 0.02)),
+            nameLine,
+        };
+        Assert.Null(CreditReportNameLocator.FindAnchor(enterprise));
+    }
+
+    [Fact]
+    public async Task The_self_service_edition_reads_the_value_on_the_label_line()
+    {
+        // Field scan 2026-10-27 11:21: 本人版 header OCR'd as「姓名:李言波」— no cell below it,
+        // so the geometric crop could never produce a name and the file kept its timestamp name.
+        var lines = new[]
+        {
+            new RecognizedLine("个人信用报告", new RectD(0.20, 0.20, 0.20, 0.03)),
+            new RecognizedLine("告编号:2026102216255204990171", new RectD(0.10, 0.22, 0.30, 0.02)),
+            new RecognizedLine("姓名:李言波", new RectD(0.07, 0.27, 0.12, 0.02)),
+        };
+        var engine = new CellOnlyOcr();
+
+        string? name = await CreditReportNameLocator.TryReadFromLinesAsync(WhitePage(), lines, engine);
+
+        Assert.Equal("李言波", name);
+        Assert.Equal(0, engine.Calls); // value came from the label line — no cell crop OCR
+    }
+
+    [Fact]
+    public async Task The_band_probe_reads_the_self_service_name_without_a_cell_crop()
+    {
+        var engine = new FakeBoundedEngine
+        {
+            BoundedResult = new[]
+            {
+                new RecognizedLine("个人信用报告", new RectD(0.20, 0.20, 0.20, 0.03)),
+                new RecognizedLine("姓名:李言波", new RectD(0.07, 0.27, 0.12, 0.02)),
+            },
+            CellResult = new[] { "不该被用到" },
+        };
+
+        string? name = await CreditReportNameLocator.TryLocateNameAsync(WhitePng(400, 600), engine);
+
+        Assert.Equal("李言波", name);
+        Assert.Equal(1, engine.WithBoundsCalls);
+        Assert.Equal(0, engine.RecognizeCalls);
+    }
 
     [Fact]
     public void The_topmost_leftmost_anchor_wins_on_a_multi_up_sheet()

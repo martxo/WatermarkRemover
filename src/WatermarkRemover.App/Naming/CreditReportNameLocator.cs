@@ -7,18 +7,22 @@ using WatermarkRemover.Core.Geometry;
 namespace WatermarkRemover.App.Naming;
 
 /// <summary>
-/// Fixed-region name locator for the personal credit report (detailed edition). The report's
-/// layout is fixed by the PBOC: on a correctly oriented page the「被查询者姓名」header table
-/// always sits in the top band, and the subject's name is the cell directly BELOW the label.
+/// Fixed-region name locator for the personal credit report. Two editions share this report but
+/// label the subject differently: the detailed (bank) edition prints「被查询者姓名」in the header
+/// table with the name BELOW it, while the self-service (本人版) edition prints plain「姓名」with
+/// the name on the SAME line. Both sit in the top band on a correctly oriented page. The plain
+/// label only counts when the page proves it is a PERSONAL credit report — otherwise an ID card's
+///「姓名 李言波」would be named with the credit-report suffix.
+///
 /// Instead of OCR-ing the whole page and guessing a name out of shredded text order (duplex
 /// and watermark-pressed 2-up/4-up sheets scramble lines), this locator crops just the top
-/// band, finds the label box geometrically, crops the value cell below it and recognises only
-/// that tiny crop — fast, and immune to reading-order chaos. Anything that does not match the
-/// fixed layout (another document, a rotated page) yields null and the caller falls back to
-/// the generic text pipeline. Because the ADF presents a landscape page sideways on a portrait
-/// canvas (and duplex back sides upside down), the top band is probed per plausible orientation
-/// until the label appears — the fixed-region idea works on whatever orientation the scanner
-/// actually produced, without a separate orient pass.
+/// band, finds the label box geometrically, then reads the same-line value or the cell below
+/// it — fast, and immune to reading-order chaos. Anything that does not match the fixed layout
+/// (another document, a rotated page) yields null and the caller falls back to the generic text
+/// pipeline. Because the ADF presents a landscape page sideways on a portrait canvas (and duplex
+/// back sides upside down), the top band is probed per plausible orientation until the label
+/// appears — the fixed-region idea works on whatever orientation the scanner actually produced,
+/// without a separate orient pass.
 /// </summary>
 public static class CreditReportNameLocator
 {
@@ -45,6 +49,36 @@ public static class CreditReportNameLocator
 
     /// <summary>Label words that mark a non-name cell (a neighbouring column leaking in).</summary>
     private static readonly string[] CellStopWords = { "证件", "号码", "查询", "机构", "原因", "姓名", "身份证" };
+
+    /// <summary>The self-service (本人版) edition's label: the value follows it on the SAME line.</summary>
+    private const string PlainNameLabel = "姓名";
+
+    /// <summary>Markers that prove the page is a PERSONAL credit report — the only case where a
+    /// bare「姓名」may anchor a name. Without this an ID card / household register would be
+    /// classified as a credit report and named with its suffix.</summary>
+    private static readonly Regex PersonalReportEvidence =
+        new(@"个人信用报告|征信中心|报告编号|信贷记录", RegexOptions.Compiled);
+
+    /// <summary>Enterprise-edition markers: that report names its subject differently and must
+    /// keep the placeholder stem, so a plain「姓名」cell there must not win.</summary>
+    private static readonly Regex EnterpriseReportEvidence =
+        new(@"企业信用报告|企业名称|中征码|自主查询版", RegexOptions.Compiled);
+
+    /// <summary>True when the lines prove this is a personal credit report (and not the
+    /// enterprise edition) — the guard for accepting the bare「姓名」label.</summary>
+    private static bool AllowsPlainNameLabel(IReadOnlyList<RecognizedLine> lines)
+    {
+        bool personal = false;
+        bool enterprise = false;
+        foreach (RecognizedLine line in lines)
+        {
+            string text = line.Text ?? string.Empty;
+            if (text.Length == 0) continue;
+            if (EnterpriseReportEvidence.IsMatch(text)) enterprise = true;
+            if (PersonalReportEvidence.IsMatch(text)) personal = true;
+        }
+        return personal && !enterprise;
+    }
 
     /// <summary>
     /// Attempts to read the credit report subject's name from the rendered page image.
@@ -110,10 +144,17 @@ public static class CreditReportNameLocator
 
         // 2. The label box; topmost-leftmost wins (the first report page on a multi-up sheet).
         RecognizedLine? anchor = FindAnchor(lines);
-        if (anchor?.Bounds is not { } label)
+        if (anchor is null || anchor.Bounds is not { } label)
         {
-            trace?.Invoke($"征信定位：{degrees}° 顶部条带未找到「被查询者姓名」标签", null);
+            trace?.Invoke($"征信定位：{degrees}° 顶部条带未找到姓名标签", null);
             return null;
+        }
+
+        // 本人版 prints 姓名:李言波 on one line — read that value instead of the cell below.
+        if (InlineName(anchor) is { } inline)
+        {
+            trace?.Invoke($"征信定位：{degrees}° 姓名行内值 → {inline}", null);
+            return inline;
         }
 
         // 3. Crop the value cell below the label, zoom it and recognise just that crop.
@@ -152,6 +193,13 @@ public static class CreditReportNameLocator
         RecognizedLine? anchor = FindAnchor(lines);
         if (anchor?.Bounds is not { } label) return null;
 
+        // 本人版's value sits on the label's own line; no crop or second OCR is needed.
+        if (InlineName(anchor) is { } inline)
+        {
+            trace?.Invoke($"征信定位（整页坐标）：姓名行内值 → {inline}", null);
+            return inline;
+        }
+
         try
         {
             using var page = SKBitmap.Decode(pageImage);
@@ -183,23 +231,26 @@ public static class CreditReportNameLocator
         }
     }
 
-    /// <summary>True when the line is the report's name label, tolerating OCR noise (inserted
-    /// spaces, colons, a merged next cell: 被查询者姓名证件类型).</summary>
-    public static bool IsAnchorLabel(string? text)
-    {
-        if (string.IsNullOrWhiteSpace(text)) return false;
-        string norm = new(text.Where(c => !char.IsWhiteSpace(c) && c is not '：' and not ':').ToArray());
-        return norm.StartsWith("被查询者姓名", StringComparison.Ordinal);
-    }
+    /// <summary>True when the line is the detailed edition's name label, tolerating OCR noise
+    /// (inserted spaces, colons, a merged next cell: 被查询者姓名证件类型).</summary>
+    public static bool IsAnchorLabel(string? text) =>
+        Normalize(text)?.StartsWith("被查询者姓名", StringComparison.Ordinal) == true;
+
+    /// <summary>The self-service edition's bare「姓名」label. Only accepted when the page is
+    /// proven to be a personal credit report (see <see cref="FindAnchor(IReadOnlyList{RecognizedLine})"/>),
+    /// so an ID card's own 姓名 row can never borrow the credit-report suffix.</summary>
+    private static bool IsPlainNameLabel(string? text) =>
+        Normalize(text)?.StartsWith(PlainNameLabel, StringComparison.Ordinal) == true;
 
     /// <summary>The topmost-leftmost anchor line — the first report page on a multi-up sheet.</summary>
     public static RecognizedLine? FindAnchor(IReadOnlyList<RecognizedLine> lines)
     {
+        bool allowPlain = AllowsPlainNameLabel(lines);
         RecognizedLine? best = null;
         foreach (RecognizedLine line in lines)
         {
             if (line.Bounds is not { } bounds || bounds.Width <= 0 || bounds.Height <= 0) continue;
-            if (!IsAnchorLabel(line.Text)) continue;
+            if (!IsAnchorLabel(line.Text) && !(allowPlain && IsPlainNameLabel(line.Text))) continue;
             if (best?.Bounds is not { } current ||
                 bounds.Y < current.Y ||
                 (bounds.Y == current.Y && bounds.X < current.X))
@@ -207,6 +258,26 @@ public static class CreditReportNameLocator
         }
         return best;
     }
+
+    /// <summary>The value printed on the anchor's own line (本人版「姓名:李言波」). Null when the
+    /// line carries only labels (a header row) or OCR debris — the caller then reads the cell
+    /// below the label instead.</summary>
+    private static string? InlineName(RecognizedLine anchor)
+    {
+        string? norm = Normalize(anchor.Text);
+        if (norm is null) return null;
+
+        string label = IsAnchorLabel(anchor.Text) ? "被查询者姓名" : PlainNameLabel;
+        if (!norm.StartsWith(label, StringComparison.Ordinal)) return null;
+        string rest = norm[label.Length..];
+        return rest.Length == 0 ? null : CleanCellValue(new[] { rest });
+    }
+
+    /// <summary>Whitespace- and colon-free form of an OCR line; null for empty input.</summary>
+    private static string? Normalize(string? text) =>
+        string.IsNullOrWhiteSpace(text)
+            ? null
+            : new string(text.Where(c => !char.IsWhiteSpace(c) && c is not '：' and not ':').ToArray());
 
     /// <summary>The name cell: directly below the label, label-width centred. Derived from a
     /// real report's measurements (label X=0.072 Y=0.273 W=0.043 H=0.013 → name X=0.085
