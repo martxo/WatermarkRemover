@@ -448,6 +448,7 @@
         </DataTemplate>
 
         <DataTemplate x:Key="Page.Transfer">
+            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
             <Grid DataContext="{Binding DataContext, RelativeSource={RelativeSource AncestorType=Window}}">
         <!-- Transfer panel (手机传文件): QR code + start/stop. Replaces the drop zone on the
              transfer page (which hides itself via its style trigger). -->
@@ -624,7 +625,95 @@
                 </Border>
             </Grid>
         </Border>
+
+        <!-- Link compose gallery: a CamScanner share's pages wait here instead of being turned
+             into a finished PDF immediately. The user checks the pages that belong together,
+             picks a pack (并排/上下/四宫格) and crop mode, previews the actual cut, then merges
+             into one file. Generic layouts — no document type is hardcoded. -->
+        <Border Margin="0,0,0,16" Style="{StaticResource CardBorder}"
+                Visibility="{Binding Transfer.HasPendingPages, Converter={StaticResource BoolToVis}}">
+            <StackPanel Margin="20,16">
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="链接图片" FontSize="14" FontWeight="SemiBold"
+                               VerticalAlignment="Center"/>
+                    <Border Background="#EAF0FF" CornerRadius="4" Padding="6,1" Margin="10,0,0,0"
+                            VerticalAlignment="Center">
+                        <TextBlock Text="{Binding Transfer.SelectedPageCount, StringFormat='已选 {0} 张'}"
+                                   FontSize="11" Foreground="#2F5FE0"/>
+                    </Border>
+                    <TextBlock Text="勾选要合并的图片；身份证等正反面选「并排」或「上下」即可拼成一张"
+                               FontSize="11" Margin="12,0,0,0" VerticalAlignment="Center"
+                               Foreground="{StaticResource TextSecondaryBrush}"/>
+                </StackPanel>
+
+                <ScrollViewer HorizontalScrollBarVisibility="Auto"
+                              VerticalScrollBarVisibility="Disabled"
+                              Margin="0,12,0,0">
+                    <ItemsControl ItemsSource="{Binding Transfer.PendingPages}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <StackPanel Orientation="Horizontal"/>
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border Width="104" Margin="0,0,10,0"
+                                        Background="White" CornerRadius="6"
+                                        BorderBrush="{StaticResource ShellCardStrokeBrush}"
+                                        BorderThickness="1">
+                                    <StackPanel>
+                                        <Grid Height="118">
+                                            <Image Source="{Binding Thumbnail}" Stretch="Uniform" Margin="6"/>
+                                            <CheckBox IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                                                      HorizontalAlignment="Left" VerticalAlignment="Top"
+                                                      Margin="6" ToolTip="勾选参与本次合并"/>
+                                        </Grid>
+                                        <TextBlock Text="{Binding Label}" HorizontalAlignment="Center"
+                                                   FontSize="11" Margin="0,0,0,6"
+                                                   Foreground="{StaticResource TextSecondaryBrush}"/>
+                                    </StackPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+
+                <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                    <TextBlock Text="排版" FontSize="12" VerticalAlignment="Center"/>
+                    <ComboBox ItemsSource="{Binding Transfer.ComposeLayouts}"
+                              DisplayMemberPath="Name"
+                              SelectedItem="{Binding Transfer.SelectedLayout, Mode=TwoWay}"
+                              Width="150" Margin="8,0,0,0"
+                              ToolTip="{Binding Transfer.SelectedLayout.Hint}"/>
+                    <TextBlock Text="裁剪" FontSize="12" VerticalAlignment="Center" Margin="16,0,0,0"/>
+                    <ComboBox ItemsSource="{Binding Transfer.CropModes}"
+                              DisplayMemberPath="Name"
+                              SelectedItem="{Binding Transfer.SelectedCropMode, Mode=TwoWay}"
+                              Width="108" Margin="8,0,0,0"
+                              ToolTip="{Binding Transfer.SelectedCropMode.Hint}"/>
+                    <Button Content="合并生成 PDF" Style="{StaticResource PrimaryButton}"
+                            Command="{Binding Transfer.ComposeCommand}" Margin="16,0,0,0"/>
+                    <Button Content="原样合并" Style="{StaticResource SmallButton}"
+                            Command="{Binding Transfer.ComposeOriginalCommand}" Margin="8,0,0,0"
+                            ToolTip="每张一页、不裁剪，快速把全部图片转成一个 PDF"/>
+                    <Button Content="取消" Style="{StaticResource SmallButton}"
+                            Command="{Binding Transfer.ClearPendingCommand}" Margin="8,0,0,0"/>
+                </StackPanel>
+
+                <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                    <TextBlock Text="预览" FontSize="11" VerticalAlignment="Top" Margin="0,4,8,0"
+                               Foreground="{StaticResource TextSecondaryBrush}"/>
+                    <Border Background="White" CornerRadius="4" Padding="6" MaxWidth="620"
+                            BorderBrush="{StaticResource ShellCardStrokeBrush}" BorderThickness="1"
+                            HorizontalAlignment="Left">
+                        <Image Source="{Binding Transfer.ComposePreview}" Height="110"
+                               Stretch="Uniform"/>
+                    </Border>
+                </StackPanel>
+            </StackPanel>
+        </Border>
             </Grid>
+            </ScrollViewer>
         </DataTemplate>
 
         <presentation:FeaturePageTemplateSelector x:Key="FeaturePageSelector"

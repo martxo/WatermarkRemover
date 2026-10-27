@@ -3,8 +3,10 @@ using System.IO;
 using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using WatermarkRemover.App.Imaging;
 using WatermarkRemover.App.Logging;
 using WatermarkRemover.App.Services;
+using WatermarkRemover.Core.Features.Ocr;
 using WatermarkRemover.Core.Features.Transfer;
 using WatermarkRemover.Core.Settings;
 using WatermarkRemover.Scan.Pdf;
@@ -22,6 +24,7 @@ public sealed class TransferPanelViewModel : ObservableObject, IDisposable
     private readonly AppSettings _settings;
     private readonly IShellOpenService _shell;
     private readonly Action<string> _trace;
+    private readonly IOcrEngine? _idCardOcr;
     private LanTransferServer? _server;
 
     private bool _isRunning;
@@ -32,12 +35,22 @@ public sealed class TransferPanelViewModel : ObservableObject, IDisposable
     private int _receivedCount;
     private long _receivedBytes;
     private string? _targetDirectory;
+    private string _pendingTitle = string.Empty;
+    private ComposeLayout _selectedLayout = ComposeLayoutCatalog.Single;
+    private CropModeChoice _selectedCropMode = CropModeCatalog.All[0];
+    private ImageSource? _composePreview;
+    private bool _isComposing;
 
-    public TransferPanelViewModel(AppSettings settings, IShellOpenService shell, Action<string>? trace = null)
+    public TransferPanelViewModel(
+        AppSettings settings,
+        IShellOpenService shell,
+        Action<string>? trace = null,
+        IOcrEngine? idCardOcr = null)
     {
         _settings = settings;
         _shell = shell;
         _trace = trace ?? (_ => { });
+        _idCardOcr = idCardOcr;
 
         ToggleCommand = new RelayCommand(() =>
         {
@@ -47,18 +60,89 @@ public sealed class TransferPanelViewModel : ObservableObject, IDisposable
         OpenFolderCommand = new RelayCommand(
             () => _shell.TryOpenDirectory(_saveDirectoryText, out _),
             () => IsRunning);
+
+        ComposeCommand = new RelayCommand(
+            () => _ = ComposePendingAsync(SelectedLayout, SelectedCropMode),
+            () => SelectedPageCount > 0 && !IsComposing);
+        ComposeOriginalCommand = new RelayCommand(
+            () => _ = ComposePendingAsync(ComposeLayoutCatalog.Single, CropModeCatalog.All[2]),
+            () => HasPendingPages && !IsComposing);
+        ClearPendingCommand = new RelayCommand(() =>
+        {
+            ClearPending();
+            StatusText = "已取消本次链接图片。";
+        }, () => HasPendingPages && !IsComposing);
     }
 
     /// <summary>Relayed from the server; fires on a socket thread per landed file.</summary>
     public event Action<string, long>? FileReceived;
 
-    /// <summary>A PDF assembled from a CamScanner share link is ready at this path; the owner
-    /// (MainViewModel) routes it into the watermark-removal pipeline. Raised on a worker thread.</summary>
-    public event Action<string>? ShareDocumentReceived;
+    /// <summary>A file composed from a share link is ready at this path. The flag tells the owner
+    /// whether to run content naming: the 身份证 template already produces the final printable
+    /// sheet and should not spend seconds re-OCRing it. Raised on a worker thread.</summary>
+    public event Action<string, bool>? ShareDocumentReceived;
 
     public RelayCommand ToggleCommand { get; }
 
     public RelayCommand OpenFolderCommand { get; }
+
+    public RelayCommand ComposeCommand { get; }
+
+    /// <summary>「原样合并」: one page per image, no crop — the old mechanical behaviour, still
+    /// one click away when the user does not want any packing.</summary>
+    public RelayCommand ComposeOriginalCommand { get; }
+
+    public RelayCommand ClearPendingCommand { get; }
+
+    /// <summary>Pages pulled from the last recognised CamScanner share, newest link replaces the
+    /// previous selection. The gallery is where the user decides what becomes one file.</summary>
+    public ObservableCollection<ComposeSourceViewModel> PendingPages { get; } = new();
+
+    public IReadOnlyList<ComposeLayout> ComposeLayouts => ComposeLayoutCatalog.All;
+
+    public IReadOnlyList<CropModeChoice> CropModes => CropModeCatalog.All;
+
+    public ComposeLayout SelectedLayout
+    {
+        get => _selectedLayout;
+        set
+        {
+            if (value is null || !SetProperty(ref _selectedLayout, value)) return;
+            RefreshPreview();
+        }
+    }
+
+    public CropModeChoice SelectedCropMode
+    {
+        get => _selectedCropMode;
+        set
+        {
+            if (value is null || !SetProperty(ref _selectedCropMode, value)) return;
+            RefreshPreview();
+        }
+    }
+
+    /// <summary>First composed page as a small JPEG preview; regenerated whenever the selection,
+    /// pack or crop mode changes, so the user sees the cut before committing.</summary>
+    public ImageSource? ComposePreview
+    {
+        get => _composePreview;
+        private set => SetProperty(ref _composePreview, value);
+    }
+
+    public bool HasPendingPages => PendingPages.Count > 0;
+
+    public int SelectedPageCount => PendingPages.Count(p => p.IsSelected);
+
+    public bool IsComposing
+    {
+        get => _isComposing;
+        private set
+        {
+            if (!SetProperty(ref _isComposing, value)) return;
+            RaiseComposeState();
+        }
+    }
 
     /// <summary>Chat-style log of texts posted from the phone, newest first; each row keeps its
     /// sender, server-side time and kind, and copies its full text back on demand.</summary>
@@ -224,20 +308,217 @@ public sealed class TransferPanelViewModel : ObservableObject, IDisposable
                 StatusText = $"正在下载「{info.Title}」第 {i + 1}/{info.PageFileNames.Count} 页…";
             }
 
-            byte[] pdf = JpegPdfAssembler.Build(info.Title, pages);
+            // The old chain assembled every preview verbatim into a finished PDF — the
+            // "mechanical" behaviour that made two ID sides two unrelated pages. Pages now land
+            // in a gallery where the user pairs, cuts and packs them into one file.
+            var dispatcher = Application.Current?.Dispatcher;
+            if (dispatcher is null)
+            {
+                AppLog.Warn("手机传文件：没有 UI 线程，链接图片未进入拼版面板");
+                return;
+            }
 
-            string directory = _targetDirectory ?? Path.GetTempPath();
-            string target = OutputNameGenerator.FindAvailablePath(directory, CamScannerShareClient.SuggestFileName(info));
-            await File.WriteAllBytesAsync(target, pdf).ConfigureAwait(false);
-
-            StatusText = $"链接转 PDF 完成（{info.PageFileNames.Count} 页），已保存到接收目录";
-            AppLog.Info($"手机传文件：分享链接转 PDF {target}");
-            ShareDocumentReceived?.Invoke(target);
+            await dispatcher.InvokeAsync(() => LoadPendingPages(info.Title, pages));
+            StatusText = $"链接已下载 {pages.Count} 张图片，勾选后点击「合并生成 PDF」";
+            AppLog.Info($"手机传文件：分享链接图片就绪 {pages.Count} 张（{info.Title}）");
         }
         catch (Exception ex)
         {
-            AppLog.Error("手机传文件：分享链接转 PDF 失败", ex);
-            StatusText = $"链接转 PDF 失败：{ex.Message}";
+            AppLog.Error("手机传文件：分享链接下载失败", ex);
+            StatusText = $"链接下载失败：{ex.Message}";
+        }
+    }
+
+    /// <summary>Shows a freshly downloaded link in the gallery: all pages selected, a sensible
+    /// pack pre-chosen, preview rendered. Runs on the UI thread (dispatcher-marshalled).</summary>
+    private void LoadPendingPages(string title, IReadOnlyList<byte[]> pages)
+    {
+        foreach (ComposeSourceViewModel old in PendingPages)
+            old.SelectionChanged -= OnSourceSelectionChanged;
+        PendingPages.Clear();
+        _pendingTitle = string.IsNullOrWhiteSpace(title) ? "分享文档" : title;
+
+        for (int i = 0; i < pages.Count; i++)
+        {
+            var item = new ComposeSourceViewModel(i + 1, pages[i], $"第 {i + 1} 张");
+            item.SelectionChanged += OnSourceSelectionChanged;
+            PendingPages.Add(item);
+        }
+
+        SelectedLayout = ComposeLayoutCatalog.Suggest(
+            PendingPages.Select(p => (p.Width, p.Height)).ToList(),
+            _pendingTitle.Contains("身份证", StringComparison.Ordinal) ||
+            _pendingTitle.Contains("身份証", StringComparison.Ordinal));
+        OnPropertyChanged(nameof(HasPendingPages));
+        RaiseComposeState();
+        RefreshPreview();
+    }
+
+    private void ClearPending()
+    {
+        foreach (ComposeSourceViewModel item in PendingPages)
+            item.SelectionChanged -= OnSourceSelectionChanged;
+        PendingPages.Clear();
+        _pendingTitle = string.Empty;
+        ComposePreview = null;
+        OnPropertyChanged(nameof(HasPendingPages));
+        RaiseComposeState();
+    }
+
+    private void OnSourceSelectionChanged(object? sender, EventArgs e)
+    {
+        RaiseComposeState();
+        RefreshPreview();
+    }
+
+    private void RaiseComposeState()
+    {
+        OnPropertyChanged(nameof(SelectedPageCount));
+        ComposeCommand.RaiseCanExecuteChanged();
+        ComposeOriginalCommand.RaiseCanExecuteChanged();
+        ClearPendingCommand.RaiseCanExecuteChanged();
+    }
+
+    /// <summary>Renders the first page of the current selection/pack/crop as a small JPEG so the
+    /// user sees the actual cut before committing. Small enough to stay synchronous on the UI
+    /// thread; failures just hide the preview.</summary>
+    private void RefreshPreview()
+    {
+        byte[][] selected = SelectedBytes();
+        if (selected.Length == 0)
+        {
+            ComposePreview = null;
+            return;
+        }
+
+        try
+        {
+            byte[] page = ImagePageComposer.ComposePage(
+                selected.Take(SelectedLayout.Capacity).ToArray(),
+                SelectedLayout, new CropSettings(SelectedCropMode.Mode), 760);
+            ComposePreview = ToImage(page);
+        }
+        catch (Exception ex)
+        {
+            AppLog.Trace("手机传文件：拼版预览失败", ex);
+            ComposePreview = null;
+        }
+    }
+
+    /// <summary>The checked images, in gallery order.</summary>
+    private byte[][] SelectedBytes() => PendingPages
+        .Where(p => p.IsSelected)
+        .Select(p => p.Bytes)
+        .ToArray();
+
+    /// <summary>Composes the checked images (a page per pack capacity) into one PDF and hands it
+    /// to the owner, which files it as a normal record with content naming.</summary>
+    private async Task ComposePendingAsync(ComposeLayout layout, CropModeChoice crop)
+    {
+        List<ComposeSourceViewModel> chosen = PendingPages.Where(p => p.IsSelected).ToList();
+        if (chosen.Count == 0)
+        {
+            StatusText = "请先勾选要合并的图片";
+            return;
+        }
+        if (IsComposing) return;
+
+        IsComposing = true;
+        StatusText = $"正在拼版（{chosen.Count} 张 · {layout.Name}）…";
+        try
+        {
+            byte[][] selected = chosen.Select(p => p.Bytes).ToArray();
+            string? personName = null;
+            if (layout.Kind == ComposeLayoutKind.IdCardA4 && _idCardOcr is not null)
+            {
+                StatusText = "正在识别身份证姓名与正反面…";
+                try
+                {
+                    IdCardPlan plan = await IdCardInspector
+                        .PrepareAsync(selected, _idCardOcr)
+                        .ConfigureAwait(true);
+                    selected = plan.OrderedImages.ToArray();
+                    personName = plan.Name;
+                }
+                catch (Exception ex)
+                {
+                    // Ordering/naming is a convenience; an OCR failure must still produce the file.
+                    AppLog.Warn($"身份证识别失败，保留原顺序与标题：{ex.Message}");
+                }
+            }
+
+            string title = personName is not null
+                ? personName + "身份证"
+                : string.IsNullOrWhiteSpace(_pendingTitle)
+                    ? layout.Kind == ComposeLayoutKind.IdCardA4 ? "身份证" : "分享文档"
+                    : _pendingTitle;
+            var cropSettings = new CropSettings(crop.Mode);
+            StatusText = $"正在拼版（{chosen.Count} 张 · {layout.Name}）…";
+
+            IReadOnlyList<byte[]> pages = await Task.Run(
+                () => ImagePageComposer.ComposePages(selected, layout, cropSettings)).ConfigureAwait(true);
+            byte[] pdf = JpegPdfAssembler.Build(title, pages);
+
+            string directory = _targetDirectory
+                ?? OutputDirectoryResolver.Resolve(_settings.TransferOutputDirectory, AppFolders.Root);
+            string suggestedName = CamScannerShareClient.SuggestFileName(
+                new CamScannerShareClient.ShareDocumentInfo(title, Array.Empty<string>()));
+            string target = OutputNameGenerator.FindAvailablePath(directory, suggestedName);
+            await File.WriteAllBytesAsync(target, pdf).ConfigureAwait(true);
+
+            // Only the checked pages leave the gallery: a mixed link (执照 + 身份证 + 户口本)
+            // is processed in several passes, each pass producing its own file.
+            RemoveSources(chosen);
+            string remainder = PendingPages.Count == 0
+                ? string.Empty
+                : $"，还剩 {PendingPages.Count} 张未处理";
+            StatusText = personName is not null
+                ? $"已生成 {personName}身份证（{pages.Count} 页）：{Path.GetFileName(target)}{remainder}"
+                : $"已把 {chosen.Count} 张图片合并为 {pages.Count} 页 PDF：{Path.GetFileName(target)}{remainder}";
+            AppLog.Info($"手机传文件：链接图片拼版 {chosen.Count} 张 → {pages.Count} 页 {target}");
+            ShareDocumentReceived?.Invoke(target, layout.Kind != ComposeLayoutKind.IdCardA4);
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("手机传文件：链接图片拼版失败", ex);
+            StatusText = $"拼版失败：{ex.Message}";
+        }
+        finally
+        {
+            IsComposing = false;
+        }
+    }
+
+    /// <summary>Drops the pages that just went into a file, keeping the rest of the link in the
+    /// gallery for the next pass.</summary>
+    private void RemoveSources(IReadOnlyList<ComposeSourceViewModel> sources)
+    {
+        foreach (ComposeSourceViewModel item in sources)
+        {
+            item.SelectionChanged -= OnSourceSelectionChanged;
+            PendingPages.Remove(item);
+        }
+        if (PendingPages.Count == 0) _pendingTitle = string.Empty;
+        OnPropertyChanged(nameof(HasPendingPages));
+        RaiseComposeState();
+        RefreshPreview();
+    }
+
+    private static ImageSource? ToImage(byte[] bytes)
+    {
+        try
+        {
+            var image = new BitmapImage();
+            image.BeginInit();
+            image.StreamSource = new MemoryStream(bytes, writable: false);
+            image.CacheOption = BitmapCacheOption.OnLoad;
+            image.EndInit();
+            image.Freeze();
+            return image;
+        }
+        catch
+        {
+            return null;
         }
     }
 

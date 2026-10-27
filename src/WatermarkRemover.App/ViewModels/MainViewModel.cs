@@ -152,7 +152,8 @@ public sealed class MainViewModel : ObservableObject
         // --- 手机传文件 ---
         // The LAN receiver lives as long as the app; landed files become finished job rows in
         // the 手机传文件 section (rename / chips / delete / open-folder all work unchanged).
-        Transfer = new TransferPanelViewModel(Settings, _shell, message => AppLog.Trace(message, null));
+        Transfer = new TransferPanelViewModel(
+            Settings, _shell, message => AppLog.Trace(message, null), SharedOcrEngine);
         Transfer.FileReceived += OnTransferFileReceived;
         Transfer.ShareDocumentReceived += OnTransferShareDocumentReceived;
 
@@ -1436,12 +1437,25 @@ public sealed class MainViewModel : ObservableObject
         Board.MoveToTop(job);
     }
 
-    /// <summary>Worker thread → UI thread: the PDF assembled from a CamScanner share link joins
-    /// the list as a finished record after the same content-based naming scans get.</summary>
-    private void OnTransferShareDocumentReceived(string path)
+    /// <summary>Worker thread → UI thread: a file composed from a CamScanner share joins the
+    /// list as a finished record. General packs go through content naming like scans do; the
+    /// 身份证 template is already the final printable sheet and skips OCR naming.</summary>
+    private void OnTransferShareDocumentReceived(string path, bool runContentNaming)
     {
         var dispatcher = Application.Current?.Dispatcher;
         if (dispatcher is null) return;
+
+        if (!runContentNaming)
+        {
+            dispatcher.Invoke(() =>
+            {
+                long bytes = 0;
+                try { bytes = new FileInfo(path).Length; } catch { /* best effort — size display only */ }
+                AddTransferJob(path, bytes);
+            });
+            return;
+        }
+
         _ = dispatcher.InvokeAsync(() => AddReceivedFileAsync(path, null));
     }
 
