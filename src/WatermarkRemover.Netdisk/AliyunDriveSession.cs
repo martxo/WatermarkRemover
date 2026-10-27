@@ -353,7 +353,7 @@ public sealed class AliyunDriveSession : INetdiskSession
         for (var attempt = 0; ; attempt++)
         {
             _credentials = await _tokens.EnsureFreshAsync(_credentials, cancellationToken).ConfigureAwait(false);
-            string accessToken = _credentials.Get(AliyunTokenService.AccessTokenKey);
+            string accessToken = _credentials.Get(AliyunTokenService.AccessTokenKey) ?? string.Empty;
 
             using var response = await SendRequestWithRetryAsync(method, path, body, accessToken, cancellationToken)
                 .ConfigureAwait(false);
