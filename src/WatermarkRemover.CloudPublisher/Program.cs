@@ -143,13 +143,29 @@ try
     int done = 0;
     await Parallel.ForEachAsync(
         newChunks,
-        new ParallelOptions { MaxDegreeOfParallelism = 3, CancellationToken = ct },
+        new ParallelOptions { MaxDegreeOfParallelism = 2, CancellationToken = ct },
         async (sha, token) =>
         {
             (string path, int offset, int length) = chunkSources[sha];
             string temp = Path.Combine(tempDir, sha);
             await SliceToFileAsync(path, offset, length, temp, token);
-            await session.UploadAsAsync(chunksId, temp, sha, overwrite: false, null, token);
+
+            // The session retries the HTTP calls; this outer retry covers a whole part sequence
+            // failing (e.g. the upload URL task expired) without aborting the release.
+            for (int attempt = 0; ; attempt++)
+            {
+                try
+                {
+                    await session.UploadAsAsync(chunksId, temp, sha, overwrite: false, null, token);
+                    break;
+                }
+                catch (Exception ex) when (ex is HttpRequestException or IOException && attempt < 2)
+                {
+                    Console.WriteLine($"      分块 {sha[..8]} 上传失败，重试：{ex.Message}");
+                    await Task.Delay(TimeSpan.FromSeconds(2 * (attempt + 1)), token);
+                }
+            }
+
             File.Delete(temp);
 
             int finished = Interlocked.Increment(ref done);

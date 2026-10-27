@@ -118,7 +118,11 @@ public sealed class CloudUpdateViewModel : ObservableObject
         get => _busy;
         private set
         {
-            if (SetProperty(ref _busy, value)) OnPropertyChanged(nameof(IsIdle));
+            if (!SetProperty(ref _busy, value)) return;
+            OnPropertyChanged(nameof(IsIdle));
+            CheckCommand.RaiseCanExecuteChanged();
+            ApplyCommand.RaiseCanExecuteChanged();
+            OpenLoginCommand.RaiseCanExecuteChanged();
         }
     }
 
@@ -216,6 +220,8 @@ public sealed class CloudUpdateViewModel : ObservableObject
         OnPropertyChanged(nameof(ApplyButtonText));
         OnPropertyChanged(nameof(NeedsLogin));
         OnPropertyChanged(nameof(AccountText));
+        ApplyCommand.RaiseCanExecuteChanged();
+        OpenLoginCommand.RaiseCanExecuteChanged();
 
         Versions.Clear();
         if (result.Versions is not null)

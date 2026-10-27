@@ -353,17 +353,10 @@ public sealed class AliyunDriveSession : INetdiskSession
         for (var attempt = 0; ; attempt++)
         {
             _credentials = await _tokens.EnsureFreshAsync(_credentials, cancellationToken).ConfigureAwait(false);
+            string accessToken = _credentials.Get(AliyunTokenService.AccessTokenKey);
 
-            using var request = new HttpRequestMessage(method, AlipanApi.BaseUrl + path);
-            if (body is not null)
-            {
-                request.Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");
-            }
-
-            request.Headers.Authorization =
-                new AuthenticationHeaderValue("Bearer", _credentials.Get(AliyunTokenService.AccessTokenKey));
-
-            using var response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
+            using var response = await SendRequestWithRetryAsync(method, path, body, accessToken, cancellationToken)
+                .ConfigureAwait(false);
             var text = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
             if (response.IsSuccessStatusCode)
             {
@@ -383,6 +376,39 @@ public sealed class AliyunDriveSession : INetdiskSession
             }
 
             throw error;
+        }
+    }
+
+    /// <summary>
+    /// One API call with a small network retry. Publishing a release uploads hundreds of chunks;
+    /// a dropped TLS connection must not abort the whole release. Token rejection is handled by
+    /// the caller, not here.
+    /// </summary>
+    private async Task<HttpResponseMessage> SendRequestWithRetryAsync(
+        HttpMethod method,
+        string path,
+        object? body,
+        string accessToken,
+        CancellationToken cancellationToken)
+    {
+        for (var retry = 0; ; retry++)
+        {
+            using var request = new HttpRequestMessage(method, AlipanApi.BaseUrl + path);
+            if (body is not null)
+            {
+                request.Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json");
+            }
+
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+
+            try
+            {
+                return await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is HttpRequestException or IOException && retry < 2)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(1.5 * (retry + 1)), cancellationToken).ConfigureAwait(false);
+            }
         }
     }
 
@@ -411,25 +437,45 @@ public sealed class AliyunDriveSession : INetdiskSession
         }
 
         var url = initialUrl;
-        for (var attempt = 0; ; attempt++)
+        bool renewed = false;
+        int networkRetries = 0;
+        while (true)
         {
             using var content = new ByteArrayContent(buffer, 0, filled);
             content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
-            using var response = await _http.PutAsync(url, content, cancellationToken).ConfigureAwait(false);
-            if (response.IsSuccessStatusCode)
-            {
-                return;
-            }
 
-            // upload_url expires after ~15 minutes; renew once and replay before failing the part.
-            if (attempt == 0)
+            HttpResponseMessage response;
+            try
             {
-                url = await RenewUploadUrlAsync(fileId, uploadId, part.PartNumber, cancellationToken).ConfigureAwait(false);
+                response = await _http.PutAsync(url, content, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is HttpRequestException or IOException && networkRetries < 3)
+            {
+                // A dropped connection aborts one part, not the whole upload; retry the same bytes.
+                networkRetries++;
+                await Task.Delay(TimeSpan.FromSeconds(1.5 * networkRetries), cancellationToken).ConfigureAwait(false);
                 continue;
             }
 
-            var text = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-            throw AlipanJson.MapError((int)response.StatusCode, text, $"分片 {part.PartNumber} 上传失败。");
+            using (response)
+            {
+                if (response.IsSuccessStatusCode)
+                {
+                    return;
+                }
+
+                // upload_url expires after ~15 minutes; renew once and replay before failing the part.
+                if (!renewed)
+                {
+                    renewed = true;
+                    url = await RenewUploadUrlAsync(fileId, uploadId, part.PartNumber, cancellationToken)
+                        .ConfigureAwait(false);
+                    continue;
+                }
+
+                var text = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+                throw AlipanJson.MapError((int)response.StatusCode, text, $"分片 {part.PartNumber} 上传失败。");
+            }
         }
     }
 
