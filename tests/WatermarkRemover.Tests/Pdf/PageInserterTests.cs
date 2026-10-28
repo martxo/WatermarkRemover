@@ -94,6 +94,28 @@ public class PageInserterTests : IDisposable
     }
 
     [Fact]
+    public void A_locked_target_keeps_the_edited_copy_beside_it()
+    {
+        string target = WritePdf("target.pdf", 100, 110);
+        string source = WritePdf("source.pdf", 210);
+
+        // A viewer holding the file for reading (the WPS case) blocks the rename, not the read.
+        using (var hold = new FileStream(target, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            PdfInsertResult result = PdfPageInserter.AppendDetailed(target, source);
+
+            Assert.True(result.SavedAsCopy);
+            Assert.False(string.Equals(target, result.PdfPath, StringComparison.OrdinalIgnoreCase));
+            Assert.True(File.Exists(result.PdfPath));
+            Assert.Equal(new double[] { 100, 110 }, WidthsOf(target));
+            Assert.Equal(new double[] { 100, 110, 210 }, WidthsOf(result.PdfPath));
+        }
+
+        Assert.False(File.Exists(target + ".edit.tmp"), "temporary file must not survive");
+        Assert.False(File.Exists(target + ".edit.src.tmp"), "source copy must not survive");
+    }
+
+    [Fact]
     public void The_target_pages_keep_their_box_through_the_save()
     {
         // The MediaBox swap guard must hold on the insert path too: an inserted document's

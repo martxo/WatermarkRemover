@@ -143,7 +143,7 @@ public class PreviewStripTests
     }
 
     [Fact]
-    public async Task Scan_rows_unfold_without_a_click_and_hide_the_preview_button()
+    public async Task Scan_rows_keep_a_preview_button_and_can_be_folded_again()
     {
         var (vm, job, pdf) = NewRow(new FakeDialogs());
         try
@@ -154,7 +154,13 @@ public class PreviewStripTests
 
             Assert.NotNull(job.Strip);
             Assert.True(job.StripOpen);
-            Assert.Equal(Visibility.Collapsed, job.PreviewButtonVisibility);
+            Assert.Equal(Visibility.Visible, job.PreviewButtonVisibility);
+            Assert.Equal("收起", job.PreviewToggleText);
+
+            vm.PreviewCommand.Execute(job);
+
+            Assert.False(job.StripOpen);
+            Assert.Equal("预览", job.PreviewToggleText);
         }
         finally
         {

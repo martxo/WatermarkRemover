@@ -1031,13 +1031,22 @@ public sealed class PdfPreviewViewModel : ObservableObject
                 return;
             }
 
-            int added = await Task.Run(() =>
+            PdfInsertResult insert = await Task.Run(() =>
             {
                 EnsurePdfReadable();
-                return PdfPageInserter.InsertAfter(_pdfPath, insertAfterIndex, scannedPath!);
+                return PdfPageInserter.InsertAfterDetailed(_pdfPath, insertAfterIndex, scannedPath!);
             }).ConfigureAwait(true);
+            int added = insert.AddedPages;
+            if (insert.SavedAsCopy)
+            {
+                RelocateTo(insert.PdfPath);
+                StatusText = $"原文件正被其他程序占用，已插入并另存为 {Path.GetFileName(insert.PdfPath)}";
+            }
+
             inserted = added > 0;
-            op.Step("插入写盘", $"{slot}新增 {added} 页");
+            op.Step("插入写盘",
+                $"{slot}新增 {added} 页" +
+                (insert.SavedAsCopy ? $"（另存为 {Path.GetFileName(insert.PdfPath)}）" : string.Empty));
 
             if (IsCancelled)
             {
@@ -1501,6 +1510,23 @@ public sealed class PdfPreviewViewModel : ObservableObject
         {
             return false;
         }
+    }
+
+    /// <summary>
+    /// Points the strip at the fallback copy written when the original was locked (WPS open).
+    /// The job row follows through <c>onRelocated</c>, so later edits/inserts target the copy.
+    /// </summary>
+    internal void RelocateTo(string newPath)
+    {
+        if (string.Equals(newPath, _pdfPath, StringComparison.OrdinalIgnoreCase)) return;
+
+        _pdfPath = newPath;
+        Title = Path.GetFileName(newPath);
+        OnPropertyChanged(nameof(Title));
+        _knownLength = -1;
+        _knownCreationUtc = default;
+        _fingerprint = null;
+        _onRelocated?.Invoke(newPath);
     }
 
     /// <summary>Records the file stamp a future rename will be matched against; called after
