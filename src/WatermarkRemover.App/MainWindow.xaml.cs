@@ -101,6 +101,9 @@ public partial class MainWindow : Window
     /// </summary>
     private async void OnWindowLoaded(object sender, RoutedEventArgs e)
     {
+        // Explorer/double-click launches are usually allowed to take the foreground; calling
+        // Activate also covers a launch that started behind an already-open browser window.
+        Activate();
         try
         {
             await UpdateCoordinator.RunCheckAsync(this, _viewModel.Settings, silent: true);
