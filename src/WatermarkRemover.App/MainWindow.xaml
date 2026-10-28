@@ -448,21 +448,23 @@
         </DataTemplate>
 
         <DataTemplate x:Key="Page.Transfer">
-            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                          MaxHeight="400">
             <Grid DataContext="{Binding DataContext, RelativeSource={RelativeSource AncestorType=Window}}">
-        <!-- Transfer panel (手机传文件): QR code + start/stop. Replaces the drop zone on the
-             transfer page (which hides itself via its style trigger). -->
-        <Border Margin="0,0,0,16" Style="{StaticResource CardBorder}">
+        <!-- Transfer panel (手机传文件): QR code + start/stop. Height is pinned to the same
+             top/bottom proportion as the 去水印/OCR page (compact top card, records below get the
+             rest); the gallery scrolls inside the capped outer ScrollViewer. -->
+        <Border Margin="0,0,0,16" Height="270" Style="{StaticResource CardBorder}">
             <Grid Margin="20,16">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="*"/>
                 </Grid.ColumnDefinitions>
 
-                <!-- Left column: QR card, action buttons and status underneath; the how-to text
-                     lives in a hover tip so the right column stays entirely for the message log. -->
-                <StackPanel Grid.Column="0" VerticalAlignment="Top" Width="150">
-                    <Border Width="150" Height="150" CornerRadius="10" Background="White"
+                <!-- Left column: QR card + action buttons. Status/how-to moved to the right
+                     header so the left remains narrow and the card stays compact. -->
+                <StackPanel Grid.Column="0" VerticalAlignment="Top" Width="130">
+                    <Border Width="120" Height="120" CornerRadius="10" Background="White"
                             BorderBrush="{StaticResource ShellCardStrokeBrush}"
                             BorderThickness="1">
                         <Grid>
@@ -492,50 +494,6 @@
                             Style="{StaticResource SmallButton}"
                             Command="{Binding Transfer.OpenFolderCommand}"
                             Margin="0,8,0,0"/>
-                    <TextBlock Text="{Binding Transfer.StatusText}"
-                               FontSize="11"
-                               Foreground="{StaticResource TextSecondaryBrush}"
-                               TextWrapping="Wrap"
-                               Margin="0,10,0,0"/>
-                    <TextBlock HorizontalAlignment="Left" Margin="0,8,0,0"
-                               FontSize="11"
-                               Foreground="{StaticResource TextSecondaryBrush}"
-                               Cursor="Hand"
-                               ToolTipService.InitialShowDelay="150"
-                               ToolTipService.Placement="Right">
-                        <TextBlock.Style>
-                            <Style TargetType="TextBlock">
-                                <Setter Property="Text" Value="ⓘ 使用说明"/>
-                                <Style.Triggers>
-                                    <DataTrigger Binding="{Binding Transfer.IsRunning}" Value="True">
-                                        <Setter Property="Text" Value="ⓘ 使用说明 / 地址"/>
-                                    </DataTrigger>
-                                </Style.Triggers>
-                            </Style>
-                        </TextBlock.Style>
-                        <TextBlock.ToolTip>
-                            <ToolTip>
-                                <StackPanel MaxWidth="320">
-                                    <TextBlock Text="手机与电脑连接同一 Wi-Fi，用相机或微信扫一扫二维码，在浏览器里选择文件或发送文本即可传到电脑。文件仅在局域网内直传，不经过任何服务器。"
-                                               TextWrapping="Wrap"/>
-                                    <TextBlock Text="{Binding Transfer.UrlText}"
-                                               TextWrapping="Wrap"
-                                               Margin="0,8,0,0">
-                                        <TextBlock.Style>
-                                            <Style TargetType="TextBlock">
-                                                <Setter Property="Visibility" Value="Collapsed"/>
-                                                <Style.Triggers>
-                                                    <DataTrigger Binding="{Binding Transfer.IsRunning}" Value="True">
-                                                        <Setter Property="Visibility" Value="Visible"/>
-                                                    </DataTrigger>
-                                                </Style.Triggers>
-                                            </Style>
-                                        </TextBlock.Style>
-                                    </TextBlock>
-                                </StackPanel>
-                            </ToolTip>
-                        </TextBlock.ToolTip>
-                    </TextBlock>
                 </StackPanel>
 
                 <!-- Right column: the message log, full height of the panel. The panel's height
@@ -548,6 +506,64 @@
                         CornerRadius="6"
                         VerticalAlignment="Stretch">
                     <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+
+                        <!-- Header: status + how-to tip, so the QR column stays narrow. -->
+                        <Grid Grid.Row="0" Margin="10,8,10,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="{Binding Transfer.StatusText}"
+                                       FontSize="11"
+                                       Foreground="{StaticResource TextSecondaryBrush}"
+                                       TextWrapping="Wrap"
+                                       VerticalAlignment="Center"/>
+                            <TextBlock Grid.Column="1" Margin="12,0,0,0"
+                                       FontSize="11"
+                                       Foreground="{StaticResource TextSecondaryBrush}"
+                                       Cursor="Hand"
+                                       ToolTipService.InitialShowDelay="150"
+                                       ToolTipService.Placement="Bottom">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Text" Value="ⓘ 使用说明"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding Transfer.IsRunning}" Value="True">
+                                                <Setter Property="Text" Value="ⓘ 使用说明 / 地址"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                                <TextBlock.ToolTip>
+                                    <ToolTip>
+                                        <StackPanel MaxWidth="320">
+                                            <TextBlock Text="手机与电脑连接同一 Wi-Fi，用相机或微信扫一扫二维码，在浏览器里选择文件或发送文本即可传到电脑。文件仅在局域网内直传，不经过任何服务器。"
+                                                       TextWrapping="Wrap"/>
+                                            <TextBlock Text="{Binding Transfer.UrlText}"
+                                                       TextWrapping="Wrap"
+                                                       Margin="0,8,0,0">
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock">
+                                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding Transfer.IsRunning}" Value="True">
+                                                                <Setter Property="Visibility" Value="Visible"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
+                                        </StackPanel>
+                                    </ToolTip>
+                                </TextBlock.ToolTip>
+                            </TextBlock>
+                        </Grid>
+
+                        <Grid Grid.Row="1" Margin="0,4,0,0">
                         <!-- Empty state: a quiet hint while no text has arrived yet. -->
                         <TextBlock Text="发送记录&#x0A;手机发送的文本将显示在这里，点击条目右侧「复制」可重新复制全文"
                                    HorizontalAlignment="Center" VerticalAlignment="Center"
@@ -621,6 +637,7 @@
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
                         </ScrollViewer>
+                        </Grid>
                     </Grid>
                 </Border>
             </Grid>
