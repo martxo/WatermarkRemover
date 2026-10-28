@@ -12,12 +12,25 @@ namespace WatermarkRemover.App;
 
 public partial class App : Application
 {
+    private SingleInstanceGuard? _instanceGuard;
+
     protected override void OnStartup(StartupEventArgs e)
     {
         // Must run before anything else: Velopack's install/update hooks intercept --veloapp-*
         // arguments and fast-exit the process, which only works before any file IO or window is
         // created. Harmless no-op for green-directory (non-installed) runs.
         VelopackApp.Build().Run();
+
+        // A second double-click must not open another copy: signal the running instance to come
+        // forward and leave. This also stops concurrent aliyunpan renewals fighting over config.
+        _instanceGuard = new SingleInstanceGuard();
+        if (!_instanceGuard.IsFirst)
+        {
+            StartupUri = null;
+            _instanceGuard.Dispose();
+            Shutdown(0);
+            return;
+        }
 
         base.OnStartup(e);
 
@@ -65,6 +78,8 @@ public partial class App : Application
     {
         AppLog.Info("应用退出");
         AppLog.Shutdown();
+        _instanceGuard?.Dispose();
+        _instanceGuard = null;
         base.OnExit(e);
     }
 
