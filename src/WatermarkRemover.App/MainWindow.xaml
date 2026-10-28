@@ -641,7 +641,7 @@
                         <TextBlock Text="{Binding Transfer.SelectedPageCount, StringFormat='已选 {0} 张'}"
                                    FontSize="11" Foreground="#2F5FE0"/>
                     </Border>
-                    <TextBlock Text="勾选要合并的图片；身份证等正反面选「并排」或「上下」即可拼成一张"
+                    <TextBlock Text="勾选要合并的图片；可拖动排序，点缩略图右上角 ↺/↻ 旋转；身份证等正反面选「并排」或「上下」即可拼成一张"
                                FontSize="11" Margin="12,0,0,0" VerticalAlignment="Center"
                                Foreground="{StaticResource TextSecondaryBrush}"/>
                 </StackPanel>
@@ -649,7 +649,9 @@
                 <ScrollViewer HorizontalScrollBarVisibility="Auto"
                               VerticalScrollBarVisibility="Disabled"
                               Margin="0,12,0,0">
-                    <ItemsControl ItemsSource="{Binding Transfer.PendingPages}">
+                    <ItemsControl ItemsSource="{Binding Transfer.PendingPages}"
+                                  behaviors:ComposePageDragReorder.IsEnabled="True"
+                                  behaviors:ComposePageDragReorder.MoveCommand="{Binding Transfer.MovePendingPageCommand}">
                         <ItemsControl.ItemsPanel>
                             <ItemsPanelTemplate>
                                 <StackPanel Orientation="Horizontal"/>
@@ -667,6 +669,23 @@
                                             <CheckBox IsChecked="{Binding IsSelected, Mode=TwoWay}"
                                                       HorizontalAlignment="Left" VerticalAlignment="Top"
                                                       Margin="6" ToolTip="勾选参与本次合并"/>
+                                            <StackPanel Orientation="Horizontal"
+                                                        HorizontalAlignment="Right" VerticalAlignment="Top"
+                                                        Margin="4">
+                                                <Button Content="↺" Command="{Binding RotateLeftCommand}"
+                                                        ToolTip="左转 90°"
+                                                        Width="22" Height="22" Padding="0" FontSize="12"
+                                                        Background="#DCFFFFFF"
+                                                        BorderBrush="{StaticResource ShellCardStrokeBrush}"
+                                                        BorderThickness="1" Cursor="Hand"/>
+                                                <Button Content="↻" Command="{Binding RotateRightCommand}"
+                                                        ToolTip="右转 90°"
+                                                        Width="22" Height="22" Padding="0" FontSize="12"
+                                                        Margin="3,0,0,0"
+                                                        Background="#DCFFFFFF"
+                                                        BorderBrush="{StaticResource ShellCardStrokeBrush}"
+                                                        BorderThickness="1" Cursor="Hand"/>
+                                            </StackPanel>
                                         </Grid>
                                         <TextBlock Text="{Binding Label}" HorizontalAlignment="Center"
                                                    FontSize="11" Margin="0,0,0,6"
