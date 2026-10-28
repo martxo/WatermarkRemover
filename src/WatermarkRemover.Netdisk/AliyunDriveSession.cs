@@ -320,35 +320,46 @@ public sealed class AliyunDriveSession : INetdiskSession
         IProgress<NetdiskTransferProgress>? progress = null,
         CancellationToken cancellationToken = default)
     {
-        var link = await SendAsync(
-            HttpMethod.Post,
-            AlipanApi.DownloadUrlPath,
-            new Dictionary<string, object?> { ["drive_id"] = _driveId, ["file_id"] = fileId, ["expire_sec"] = 900 },
-            cancellationToken).ConfigureAwait(false);
-        var url = AlipanJson.TryGetString(link, "url")
-            ?? throw new NetdiskException("getDownloadUrl 响应缺少 url。", "MalformedDownloadUrlResponse");
-
-        using var response = await SendDownloadRequestAsync(url, cancellationToken).ConfigureAwait(false);
-        if (!response.IsSuccessStatusCode)
+        // A CDN that sends headers and then stalls would otherwise hang the caller forever:
+        // bound the whole download and surface a timeout the cloud fallback can act on.
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(90));
+        try
         {
-            var text = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-            string detail = string.IsNullOrWhiteSpace(text) ? "无响应内容"
-                : text.Length <= 300 ? text : text[..300];
-            throw AlipanJson.MapError((int)response.StatusCode, text,
-                $"下载文件失败（HTTP {(int)response.StatusCode}：{detail}）。");
+            var link = await SendAsync(
+                HttpMethod.Post,
+                AlipanApi.DownloadUrlPath,
+                new Dictionary<string, object?> { ["drive_id"] = _driveId, ["file_id"] = fileId, ["expire_sec"] = 900 },
+                timeout.Token).ConfigureAwait(false);
+            var url = AlipanJson.TryGetString(link, "url")
+                ?? throw new NetdiskException("getDownloadUrl 响应缺少 url。", "MalformedDownloadUrlResponse");
+
+            using var response = await SendDownloadRequestAsync(url, timeout.Token).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+            {
+                var text = await response.Content.ReadAsStringAsync(timeout.Token).ConfigureAwait(false);
+                string detail = string.IsNullOrWhiteSpace(text) ? "无响应内容"
+                    : text.Length <= 300 ? text : text[..300];
+                throw AlipanJson.MapError((int)response.StatusCode, text,
+                    $"下载文件失败（HTTP {(int)response.StatusCode}：{detail}）。");
+            }
+
+            var totalBytes = response.Content.Headers.ContentLength;
+            await using var output = File.Create(localPath);
+            await using var input = await response.Content.ReadAsStreamAsync(timeout.Token).ConfigureAwait(false);
+            var buffer = new byte[81920];
+            long transferred = 0;
+            int read;
+            while ((read = await input.ReadAsync(buffer.AsMemory(), timeout.Token).ConfigureAwait(false)) > 0)
+            {
+                await output.WriteAsync(buffer.AsMemory(0, read), timeout.Token).ConfigureAwait(false);
+                transferred += read;
+                progress?.Report(new NetdiskTransferProgress(transferred, totalBytes));
+            }
         }
-
-        var totalBytes = response.Content.Headers.ContentLength;
-        await using var output = File.Create(localPath);
-        await using var input = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-        var buffer = new byte[81920];
-        long transferred = 0;
-        int read;
-        while ((read = await input.ReadAsync(buffer.AsMemory(), cancellationToken).ConfigureAwait(false)) > 0)
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
-            transferred += read;
-            progress?.Report(new NetdiskTransferProgress(transferred, totalBytes));
+            throw new TimeoutException("下载文件超时（90 秒），网络可能不稳定。");
         }
     }
 
