@@ -69,11 +69,17 @@ public sealed class PreviewStripCoordinator
         Open(job);
     }
 
-    /// <summary>Builds and unfolds the row's strip immediately. Scans call this the moment the
-    /// PDF lands (zero-click preview); other sections reach it through the preview button.
+    /// <summary>
+    /// Builds the row's strip. Scans pass <paramref name="autoOpen"/>=false: the post-load work
+    /// still runs, but the row stays folded until the user presses 预览. Other sections open it
+    /// through the preview button (autoOpen defaults to true).
     /// <paramref name="seedThumbnails"/> are the pages already shown live during the scan: the
-    /// strip starts with them so it never flashes an empty grid and then a second set of tiles.</summary>
-    public void Open(FileJobViewModel job, IReadOnlyList<ImageSource>? seedThumbnails = null)
+    /// strip starts with them so it never flashes an empty grid and then a second set of tiles.
+    /// </summary>
+    public void Open(
+        FileJobViewModel job,
+        IReadOnlyList<ImageSource>? seedThumbnails = null,
+        bool autoOpen = true)
     {
         string? path = job.OutputPath;
         if (string.IsNullOrWhiteSpace(path) || !File.Exists(path) ||
@@ -98,13 +104,37 @@ public sealed class PreviewStripCoordinator
             scanProvider: scanRow ? _scanIntoStrip : null, // scan rows can insert scans into gaps
             seedThumbnails: seedThumbnails);
         strip.EnlargeRequested += (_, _) => EnlargeRequested(strip);
-        job.AttachStrip(strip);
+        job.AttachStrip(strip, autoOpen);
         // Accordion: the row being opened is the only one whose decoded tiles stay resident.
         // Older strips fold and release their bitmaps, so a scan-heavy session holds one
         // document's pixels instead of every document's.
         ReleaseOtherStrips(job);
         AppLog.Info($"打开预览：{path}");
-        _ = strip.LoadAsync();
+        _ = LoadAndMaybeFoldAsync(strip, job, autoOpen);
+    }
+
+    /// <summary>
+    /// Runs the strip's post-load work (auto-orient / blank cleanup) even when it stays folded:
+    /// scans keep their corrected output, but a folded row releases every decoded tile once the
+    /// load finishes instead of holding the document's pixels in the history list.
+    /// </summary>
+    private static async Task LoadAndMaybeFoldAsync(
+        PdfPreviewViewModel strip, FileJobViewModel job, bool autoOpen)
+    {
+        try
+        {
+            await strip.LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            AppLog.Warn($"预览加载失败：{ex.Message}");
+            return;
+        }
+
+        if (!autoOpen && !job.StripOpen)
+        {
+            strip.ReleaseThumbnailImages();
+        }
     }
 
     /// <summary>Folds and releases every strip except <paramref name="keep"/>.</summary>

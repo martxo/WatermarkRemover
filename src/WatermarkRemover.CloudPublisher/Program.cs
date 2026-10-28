@@ -29,7 +29,10 @@ if (options is null)
         "      --probe <文件>          上传该文件的第 1 个分块，验证云端上传链路\n" +
         "      --export-login          导出私有登录包并上传到 /WatermarkRemover/private/\n" +
         "      --import-login <文件>   把私有登录包导入本机稳定配置\n" +
-        "      --probe-move            验证云盘移动接口（创建/上传/移动/删除临时文件）");
+        "      --probe-move            验证云盘移动接口（创建/上传/移动/删除临时文件）\n" +
+        "      --latest-file <文件>    使用本地 latest.json（下载接口不可用时）\n" +
+        "      --versions-file <文件>  使用本地 versions.json\n" +
+        "      --no-gc                 跳过历史清单下载与无引用分块清理");
     return 2;
 }
 
@@ -226,15 +229,29 @@ string rootId = await session.EnsureFolderAsync(rootPath, ct);
 string chunksId = await session.EnsureFolderAsync(chunksPath, ct);
 string historyId = await session.EnsureFolderAsync(historyPath, ct);
 
-CloudManifest? latest = await DownloadManifestAsync(session, rootId, CloudUpdateFormat.LatestFile);
-CloudVersionIndex index = await DownloadIndexAsync(session, rootId) ?? new CloudVersionIndex();
+CloudManifest? latest = options.LatestFile is { } latestPath
+    ? ReadManifestFile(latestPath)
+    : await DownloadManifestAsync(session, rootId, CloudUpdateFormat.LatestFile);
+CloudVersionIndex index = options.VersionsFile is { } versionsPath
+    ? ReadIndexFile(versionsPath) ?? new CloudVersionIndex()
+    : await DownloadIndexAsync(session, rootId) ?? new CloudVersionIndex();
 
 // Re-publishing the same version diffs against the version below it, so the recorded change
 // summary describes what actually differs from the previous installable version.
-CloudManifest? previous = latest is not null &&
-                          !string.Equals(latest.Version, options.Version, StringComparison.OrdinalIgnoreCase)
-    ? latest
-    : await DownloadManifestAsync(session, historyId, index.Versions.Skip(1).FirstOrDefault()?.Version);
+CloudManifest? previous;
+if (latest is not null &&
+    !string.Equals(latest.Version, options.Version, StringComparison.OrdinalIgnoreCase))
+{
+    previous = latest;
+}
+else
+{
+    // Offline manifests (--latest-file/--versions-file) + --no-gc keep a flaky download hop
+    // out of the publish path; the change summary simply counts every file on a re-publish.
+    previous = options.NoGc
+        ? null
+        : await DownloadManifestAsync(session, historyId, index.Versions.Skip(1).FirstOrDefault()?.Version);
+}
 
 Console.WriteLine("[3/6] 计算清单与分块…");
 var chunkSources = new Dictionary<string, (string Path, int Offset, int Length)>(StringComparer.Ordinal);
@@ -344,7 +361,7 @@ foreach (CloudVersionSummary old in dropped)
     Console.WriteLine($"      已删除历史 {old.Version}");
 }
 
-if (index.Versions.Count > 1)
+if (index.Versions.Count > 1 && !options.NoGc)
 {
     var retainedChunks = new HashSet<string>(manifest.AllChunkHashes(), StringComparer.Ordinal);
     bool complete = true;
@@ -390,6 +407,12 @@ return 0;
 
 static CloudManifest? ManifestFromBytes(byte[]? bytes) =>
     bytes is null ? null : CloudUpdateFormat.TryParse<CloudManifest>(Encoding.UTF8.GetString(bytes));
+
+static CloudManifest? ReadManifestFile(string path) =>
+    ManifestFromBytes(File.ReadAllBytes(path));
+
+static CloudVersionIndex? ReadIndexFile(string path) =>
+    CloudUpdateFormat.TryParse<CloudVersionIndex>(File.ReadAllText(path));
 
 static async Task<CloudManifest?> DownloadManifestAsync(
     INetdiskSession session, string folderId, string? name)
@@ -477,11 +500,14 @@ static PublishOptions? ParseArgs(string[] arguments)
     string? compare = null;
     string? probe = null;
     string? importLogin = null;
+    string? latestFile = null;
+    string? versionsFile = null;
     string note = string.Empty;
     int keep = CloudUpdateFormat.DefaultKeep;
     bool dryRun = false;
     bool exportLogin = false;
     bool probeMove = false;
+    bool noGc = false;
 
     for (int i = 0; i < arguments.Length; i++)
     {
@@ -517,6 +543,15 @@ static PublishOptions? ParseArgs(string[] arguments)
             case "--probe-move":
                 probeMove = true;
                 break;
+            case "--latest-file":
+                latestFile = ++i < arguments.Length ? arguments[i] : null;
+                break;
+            case "--versions-file":
+                versionsFile = ++i < arguments.Length ? arguments[i] : null;
+                break;
+            case "--no-gc":
+                noGc = true;
+                break;
         }
     }
 
@@ -536,7 +571,10 @@ static PublishOptions? ParseArgs(string[] arguments)
         probe is null ? null : Path.GetFullPath(probe),
         exportLogin,
         importLogin is null ? null : Path.GetFullPath(importLogin),
-        probeMove);
+        probeMove,
+        latestFile is null ? null : Path.GetFullPath(latestFile),
+        versionsFile is null ? null : Path.GetFullPath(versionsFile),
+        noGc);
 }
 
 internal sealed record PublishOptions(
@@ -549,4 +587,7 @@ internal sealed record PublishOptions(
     string? ProbeFile,
     bool ExportLogin,
     string? ImportLogin,
-    bool ProbeMove);
+    bool ProbeMove,
+    string? LatestFile,
+    string? VersionsFile,
+    bool NoGc);

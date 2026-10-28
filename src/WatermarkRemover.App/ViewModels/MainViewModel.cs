@@ -793,9 +793,6 @@ public sealed class MainViewModel : ObservableObject
         {
             job.AllowContinueScan();
         }
-        // Hand the pages already on screen to the strip so it opens with real thumbnails instead
-        // of an empty grid: the live row then disappears without the strip visibly rebuilding.
-        var livePages = job.LiveThumbnails.ToArray();
         Board.MoveToTop(job);
         op.Step("接收落盘", $"{Path.GetFileName(path)}，{outcome.PageCount} 页");
 
@@ -807,10 +804,13 @@ public sealed class MainViewModel : ObservableObject
             _dialogs.Warn(warning, "扫描保存");
         }
 
-        // Zero-click preview: the strip unfolds the moment the scan lands.
-        _preview.Open(job, livePages);
+        // Scan records stay folded after completion: a long history no longer unfolds every
+        // document automatically. The strip still loads in the background (auto-orient / blank
+        // cleanup run), then releases its tiles; the row's 预览 button expands it on demand.
+        var livePages = job.LiveThumbnails.ToArray();
+        _preview.Open(job, livePages, autoOpen: false);
         job.ClearLiveThumbnails();
-        op.Step("打开预览", Path.GetFileName(path));
+        op.Step("记录已折叠", $"{Path.GetFileName(path)}，可点「预览」展开");
 
         // Naming may already have finished from page 1 while the scan continued; the rename
         // still waits for the PDF (and the strip's writes) before moving the file.
@@ -1271,9 +1271,19 @@ public sealed class MainViewModel : ObservableObject
             }
 
             int added;
+            bool savedAsCopy = false;
             try
             {
-                added = await Task.Run(() => PdfPageInserter.Append(target, scanned)).ConfigureAwait(true);
+                PdfInsertResult insert = await Task.Run(
+                    () => PdfPageInserter.AppendDetailed(target, scanned)).ConfigureAwait(true);
+                added = insert.AddedPages;
+                if (insert.SavedAsCopy)
+                {
+                    target = insert.PdfPath;
+                    savedAsCopy = true;
+                    // An open strip still points at the original; re-point it before refreshing.
+                    job.Strip?.RelocateTo(target);
+                }
             }
             catch (Exception ex)
             {
@@ -1298,6 +1308,11 @@ public sealed class MainViewModel : ObservableObject
                 : outcome.Interruption is { Length: > 0 }
                     ? $"扫描中断，已保存 {total} 页"
                     : $"扫描 {total} 页";
+            if (savedAsCopy)
+            {
+                summary += $"；原文件被其他程序占用，已另存为 {Path.GetFileName(target)}";
+            }
+
             job.Apply(FeatureResult.Success(target, target, summary, total));
             Board.MoveToTop(job);
             ScheduleJournalSave();
