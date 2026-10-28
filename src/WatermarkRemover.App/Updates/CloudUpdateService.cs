@@ -282,8 +282,9 @@ public sealed class CloudUpdateService
                     $"云端「{CloudUpdateFormat.RootFolder}」目录还不存在（尚未发布过云更新）。", current, null, null, null, null, null);
             }
 
-            byte[]? latestBytes = await bundle.Session
-                .DownloadBytesAsync(bundle.RootFolderId, CloudUpdateFormat.LatestFile, cancellationToken)
+            byte[]? latestBytes = await TryDownloadCloudBytesAsync(
+                bundle, bundle.RootFolderId, CloudUpdateFormat.LatestFile,
+                $"/{CloudUpdateFormat.RootFolder}/{CloudUpdateFormat.LatestFile}", cancellationToken)
                 .ConfigureAwait(false);
             CloudManifest? manifest = Parse<CloudManifest>(latestBytes);
             if (manifest is null)
@@ -293,7 +294,9 @@ public sealed class CloudUpdateService
             }
 
             CloudVersionIndex? versions = Parse<CloudVersionIndex>(
-                await bundle.Session.DownloadBytesAsync(bundle.RootFolderId, CloudUpdateFormat.VersionsFile, cancellationToken)
+                await TryDownloadCloudBytesAsync(
+                    bundle, bundle.RootFolderId, CloudUpdateFormat.VersionsFile,
+                    $"/{CloudUpdateFormat.RootFolder}/{CloudUpdateFormat.VersionsFile}", cancellationToken)
                     .ConfigureAwait(false));
 
             Version? latest = UpdateVersion.ParseReleaseTag(manifest.Version);
@@ -353,9 +356,10 @@ public sealed class CloudUpdateService
                 return new CloudCheckResult(CloudCheckStatus.Failed, "云端更新目录不存在。", current, null, null, null, null, null);
             }
 
-            CloudManifest? target = Parse<CloudManifest>(await bundle.Session
-                .DownloadBytesAsync(bundle.HistoryFolderId, $"{targetVersion}.json", cancellationToken)
-                .ConfigureAwait(false));
+            CloudManifest? target = Parse<CloudManifest>(await TryDownloadCloudBytesAsync(
+                bundle, bundle.HistoryFolderId, $"{targetVersion}.json",
+                $"/{CloudUpdateFormat.RootFolder}/{CloudUpdateFormat.HistoryFolder}/{targetVersion}.json",
+                cancellationToken).ConfigureAwait(false));
             Version? targetParsed = UpdateVersion.ParseReleaseTag(target?.Version);
             if (target is null || targetParsed is null)
             {
@@ -363,14 +367,16 @@ public sealed class CloudUpdateService
                     $"云端没有 v{targetVersion} 的历史清单。", current, null, null, null, null, null);
             }
 
-            CloudManifest? currentManifest = Parse<CloudManifest>(await bundle.Session
-                .DownloadBytesAsync(bundle.RootFolderId, CloudUpdateFormat.LatestFile, cancellationToken)
+            CloudManifest? currentManifest = Parse<CloudManifest>(await TryDownloadCloudBytesAsync(
+                bundle, bundle.RootFolderId, CloudUpdateFormat.LatestFile,
+                $"/{CloudUpdateFormat.RootFolder}/{CloudUpdateFormat.LatestFile}", cancellationToken)
                 .ConfigureAwait(false));
             if (currentManifest is null || !string.Equals(currentManifest.Version, current.ToString(), StringComparison.OrdinalIgnoreCase))
             {
-                currentManifest = Parse<CloudManifest>(await bundle.Session
-                    .DownloadBytesAsync(bundle.HistoryFolderId, $"{current}.json", cancellationToken)
-                    .ConfigureAwait(false));
+                currentManifest = Parse<CloudManifest>(await TryDownloadCloudBytesAsync(
+                    bundle, bundle.HistoryFolderId, $"{current}.json",
+                    $"/{CloudUpdateFormat.RootFolder}/{CloudUpdateFormat.HistoryFolder}/{current}.json",
+                    cancellationToken).ConfigureAwait(false));
             }
 
             if (currentManifest is not null)
@@ -391,8 +397,9 @@ public sealed class CloudUpdateService
             LocalFileIndex local = await Task.Run(() => BuildLocalIndex(appDir, localPaths), cancellationToken)
                 .ConfigureAwait(false);
             CloudUpdatePlan plan = CloudUpdatePlanner.CreatePlan(current.ToString(), target, local);
-            CloudVersionIndex? versions = Parse<CloudVersionIndex>(await bundle.Session
-                .DownloadBytesAsync(bundle.RootFolderId, CloudUpdateFormat.VersionsFile, cancellationToken)
+            CloudVersionIndex? versions = Parse<CloudVersionIndex>(await TryDownloadCloudBytesAsync(
+                bundle, bundle.RootFolderId, CloudUpdateFormat.VersionsFile,
+                $"/{CloudUpdateFormat.RootFolder}/{CloudUpdateFormat.VersionsFile}", cancellationToken)
                 .ConfigureAwait(false));
 
             return new CloudCheckResult(CloudCheckStatus.UpdateAvailable,
@@ -436,28 +443,31 @@ public sealed class CloudUpdateService
             throw new InvalidOperationException("云端更新目录不存在。");
         }
 
-        if (plan.RequiredChunks.Count > 0 && string.IsNullOrEmpty(bundle.ChunksFolderId))
-        {
-            throw new InvalidOperationException("云端缺少分块目录，请重新发布云更新。");
-        }
-
         Directory.CreateDirectory(ChunkCacheDirectory);
         string staging = Path.Combine(StagingRoot, $"{check.Manifest.Version}-{Guid.NewGuid():N}");
         Directory.CreateDirectory(staging);
 
-        // Remote chunk ids are only listed when something actually has to be fetched.
+        // Remote chunk ids are only listed when something actually has to be fetched. A listing
+        // failure is not fatal: every chunk can still be fetched by path through the CLI.
         Dictionary<string, string> remote = new(StringComparer.Ordinal);
-        if (plan.RequiredChunks.Count > 0)
+        if (plan.RequiredChunks.Count > 0 && !string.IsNullOrEmpty(bundle.ChunksFolderId))
         {
             progress?.Report(new CloudUpdateProgress(CloudUpdateStage.Downloading, 0, 0, plan.DownloadBytes,
                 $"正在读取云端分块列表（缺少 {plan.RequiredChunks.Count} 个）…"));
-            foreach (NetdiskFile item in await bundle.Session.ListAllAsync(bundle.ChunksFolderId, cancellationToken)
-                         .ConfigureAwait(false))
+            try
             {
-                if (!item.IsFolder && item.Name.Length == 64)
+                foreach (NetdiskFile item in await bundle.Session.ListAllAsync(bundle.ChunksFolderId, cancellationToken)
+                             .ConfigureAwait(false))
                 {
-                    remote[item.Name.ToLowerInvariant()] = item.Id;
+                    if (!item.IsFolder && item.Name.Length == 64)
+                    {
+                        remote[item.Name.ToLowerInvariant()] = item.Id;
+                    }
                 }
+            }
+            catch (Exception ex) when (!IsCallerCancellation(ex, cancellationToken))
+            {
+                AppLog.Warn($"云更新：读取分块列表失败，改用 CLI 逐个下载：{ex.Message}");
             }
         }
 
@@ -474,20 +484,37 @@ public sealed class CloudUpdateService
                 continue;
             }
 
-            if (!remote.TryGetValue(chunk.Sha256, out string? fileId))
+            string temp = cachePath + ".part";
+            bool fetched = false;
+            if (remote.TryGetValue(chunk.Sha256, out string? fileId))
             {
-                throw new InvalidDataException($"云端缺少分块 {chunk.Sha256[..12]}…，无法完成更新。");
+                try
+                {
+                    using var chunkTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                    chunkTimeout.CancelAfter(TimeSpan.FromSeconds(45));
+                    await bundle.Session.DownloadAsync(fileId, temp, null, chunkTimeout.Token).ConfigureAwait(false);
+                    fetched = true;
+                }
+                catch (Exception ex) when (!IsCallerCancellation(ex, cancellationToken))
+                {
+                    AppLog.Warn($"云更新：接口下载分块 {chunk.Sha256[..12]}… 失败，改用 CLI：{ex.Message}");
+                    try { File.Delete(temp); } catch { /* best effort */ }
+                }
             }
 
-            string temp = cachePath + ".part";
-            try
+            if (!fetched)
             {
-                await bundle.Session.DownloadAsync(fileId, temp, null, cancellationToken).ConfigureAwait(false);
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                try { File.Delete(temp); } catch { /* best effort */ }
-                throw new InvalidDataException($"下载分块 {chunk.Sha256[..12]}… 失败：{ex.Message}", ex);
+                try
+                {
+                    await DownloadChunkViaCliAsync(
+                        $"/{CloudUpdateFormat.RootFolder}/{CloudUpdateFormat.ChunksFolder}/{chunk.Sha256}",
+                        temp, cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (!IsCallerCancellation(ex, cancellationToken))
+                {
+                    try { File.Delete(temp); } catch { /* best effort */ }
+                    throw new InvalidDataException($"下载分块 {chunk.Sha256[..12]}… 失败：{ex.Message}", ex);
+                }
             }
             if (new FileInfo(temp).Length != chunk.Size || !string.Equals(HashFile(temp), chunk.Sha256, StringComparison.Ordinal))
             {
@@ -958,6 +985,138 @@ public sealed class CloudUpdateService
         public string Sha256 { get; set; } = string.Empty;
         public int Offset { get; set; }
         public int Length { get; set; }
+    }
+
+    // ── cloud downloads: API first, bundled aliyunpan CLI as fallback ─────────
+
+    private static bool IsCallerCancellation(Exception ex, CancellationToken cancellationToken) =>
+        ex is OperationCanceledException && cancellationToken.IsCancellationRequested;
+
+    /// <summary>
+    /// Downloads one cloud file through the API; when the signed CDN URL is unreachable or
+    /// stalls, the bundled CLI (same stable login) fetches it instead. The CLI path is slower
+    /// but it is what keeps a release installable when the openapi download hop is blocked.
+    /// </summary>
+    private async Task<byte[]?> TryDownloadCloudBytesAsync(
+        AliyunDriveSessionBundle bundle,
+        string? folderId,
+        string name,
+        string remotePath,
+        CancellationToken cancellationToken)
+    {
+        if (!string.IsNullOrEmpty(folderId))
+        {
+            // Manifests are tiny: a CDN hop that has not delivered in 25s is considered broken
+            // and the CLI takes over instead of stalling startup for minutes.
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(TimeSpan.FromSeconds(25));
+            try
+            {
+                return await bundle.Session.DownloadBytesAsync(folderId, name, timeout.Token)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex) when (!IsCallerCancellation(ex, cancellationToken))
+            {
+                AppLog.Warn($"云更新：接口下载 {name} 失败，改用 CLI：{ex.Message}");
+            }
+        }
+
+        return await DownloadBytesViaCliAsync(remotePath, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task<byte[]?> DownloadBytesViaCliAsync(
+        string remotePath, CancellationToken cancellationToken)
+    {
+        string directory = Path.Combine(StateDirectory, "cli-download", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            await RunCliDownloadAsync(remotePath, directory, cancellationToken).ConfigureAwait(false);
+            string? downloaded = Directory
+                .EnumerateFiles(directory, Path.GetFileName(remotePath), SearchOption.AllDirectories)
+                .FirstOrDefault();
+            return downloaded is null
+                ? null
+                : await File.ReadAllBytesAsync(downloaded, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            TryDeleteDirectory(directory);
+        }
+    }
+
+    private static async Task DownloadChunkViaCliAsync(
+        string remotePath, string targetPath, CancellationToken cancellationToken)
+    {
+        string directory = Path.Combine(StateDirectory, "cli-download", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            await RunCliDownloadAsync(remotePath, directory, cancellationToken).ConfigureAwait(false);
+            string? downloaded = Directory
+                .EnumerateFiles(directory, Path.GetFileName(remotePath), SearchOption.AllDirectories)
+                .FirstOrDefault();
+            if (downloaded is null)
+            {
+                throw new FileNotFoundException($"aliyunpan 没有下载出 {Path.GetFileName(remotePath)}。");
+            }
+
+            File.Move(downloaded, targetPath, overwrite: true);
+        }
+        finally
+        {
+            TryDeleteDirectory(directory);
+        }
+    }
+
+    private static async Task RunCliDownloadAsync(
+        string remotePath, string targetDirectory, CancellationToken cancellationToken)
+    {
+        string executable = AliyunpanCliRuntime.LocateExecutable()
+            ?? throw new InvalidOperationException("未找到 aliyunpan 工具，无法备用下载云更新。");
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = executable,
+            Arguments = $"download -ow \"{remotePath}\" \"{targetDirectory}\"",
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        startInfo.Environment["ALIYUNPAN_CONFIG_DIR"] =
+            Path.GetDirectoryName(AliyunpanCliRuntime.ConfigPathFor(executable))
+            ?? AliyunpanCliRuntime.StableConfigDirectory;
+
+        using var process = new Process { StartInfo = startInfo };
+        if (!process.Start())
+        {
+            throw new InvalidOperationException("aliyunpan 启动失败。");
+        }
+
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(180));
+        string output = await process.StandardOutput.ReadToEndAsync(timeout.Token).ConfigureAwait(false);
+        string error = await process.StandardError.ReadToEndAsync(timeout.Token).ConfigureAwait(false);
+        try
+        {
+            await process.WaitForExitAsync(timeout.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            try { process.Kill(entireProcessTree: true); } catch { /* already gone */ }
+            throw new TimeoutException("aliyunpan 下载超时（180 秒）。");
+        }
+
+        if (process.ExitCode != 0)
+        {
+            throw new IOException($"aliyunpan 下载失败：{error.Trim()} {output.Trim()}".Trim());
+        }
+    }
+
+    private static void TryDeleteDirectory(string directory)
+    {
+        try { Directory.Delete(directory, recursive: true); }
+        catch { /* best effort */ }
     }
 
     // ── connection helpers ───────────────────────────────────────────────────
