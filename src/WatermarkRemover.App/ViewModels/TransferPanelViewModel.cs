@@ -72,6 +72,8 @@ public sealed class TransferPanelViewModel : ObservableObject, IDisposable
             ClearPending();
             StatusText = "已取消本次链接图片。";
         }, () => HasPendingPages && !IsComposing);
+        MovePendingPageCommand = new RelayCommand<ComposePageMove>(
+            move => MovePendingPage(move.From, move.To));
     }
 
     /// <summary>Relayed from the server; fires on a socket thread per landed file.</summary>
@@ -93,6 +95,9 @@ public sealed class TransferPanelViewModel : ObservableObject, IDisposable
     public RelayCommand ComposeOriginalCommand { get; }
 
     public RelayCommand ClearPendingCommand { get; }
+
+    /// <summary>Drag-reorder callback from the gallery behaviour.</summary>
+    public RelayCommand<ComposePageMove> MovePendingPageCommand { get; }
 
     /// <summary>Pages pulled from the last recognised CamScanner share, newest link replaces the
     /// previous selection. The gallery is where the user decides what becomes one file.</summary>
@@ -334,7 +339,10 @@ public sealed class TransferPanelViewModel : ObservableObject, IDisposable
     private void LoadPendingPages(string title, IReadOnlyList<byte[]> pages)
     {
         foreach (ComposeSourceViewModel old in PendingPages)
+        {
             old.SelectionChanged -= OnSourceSelectionChanged;
+            old.Rotated -= OnSourceRotated;
+        }
         PendingPages.Clear();
         _pendingTitle = string.IsNullOrWhiteSpace(title) ? "分享文档" : title;
 
@@ -342,6 +350,7 @@ public sealed class TransferPanelViewModel : ObservableObject, IDisposable
         {
             var item = new ComposeSourceViewModel(i + 1, pages[i], $"第 {i + 1} 张");
             item.SelectionChanged += OnSourceSelectionChanged;
+            item.Rotated += OnSourceRotated;
             PendingPages.Add(item);
         }
 
@@ -366,7 +375,11 @@ public sealed class TransferPanelViewModel : ObservableObject, IDisposable
     private void ClearPending()
     {
         foreach (ComposeSourceViewModel item in PendingPages)
+        {
             item.SelectionChanged -= OnSourceSelectionChanged;
+            item.Rotated -= OnSourceRotated;
+        }
+
         PendingPages.Clear();
         _pendingTitle = string.Empty;
         ComposePreview = null;
@@ -378,6 +391,31 @@ public sealed class TransferPanelViewModel : ObservableObject, IDisposable
     {
         RaiseComposeState();
         RefreshPreview();
+    }
+
+    private void OnSourceRotated(object? sender, EventArgs e) => RefreshPreview();
+
+    /// <summary>Moves one gallery row after a drag; labels and the preview follow the new order.</summary>
+    private void MovePendingPage(int from, int to)
+    {
+        if (from == to || from < 0 || to < 0 ||
+            from >= PendingPages.Count || to >= PendingPages.Count)
+        {
+            return;
+        }
+
+        PendingPages.Move(from, to);
+        RenumberPendingPages();
+        RefreshPreview();
+        StatusText = "已调整图片顺序，勾选与预览已同步更新。";
+    }
+
+    private void RenumberPendingPages()
+    {
+        for (var i = 0; i < PendingPages.Count; i++)
+        {
+            PendingPages[i].SetLabel($"第 {i + 1} 张");
+        }
     }
 
     private void RaiseComposeState()
@@ -516,9 +554,11 @@ public sealed class TransferPanelViewModel : ObservableObject, IDisposable
         foreach (ComposeSourceViewModel item in sources)
         {
             item.SelectionChanged -= OnSourceSelectionChanged;
+            item.Rotated -= OnSourceRotated;
             PendingPages.Remove(item);
         }
         if (PendingPages.Count == 0) _pendingTitle = string.Empty;
+        RenumberPendingPages();
         OnPropertyChanged(nameof(HasPendingPages));
         RaiseComposeState();
         RefreshPreview();
