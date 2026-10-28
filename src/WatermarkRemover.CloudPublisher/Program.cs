@@ -28,7 +28,8 @@ if (options is null)
         "      --compare <上一版目录>  只计算增量大小，不连接云盘\n" +
         "      --probe <文件>          上传该文件的第 1 个分块，验证云端上传链路\n" +
         "      --export-login          导出私有登录包并上传到 /WatermarkRemover/private/\n" +
-        "      --import-login <文件>   把私有登录包导入本机稳定配置");
+        "      --import-login <文件>   把私有登录包导入本机稳定配置\n" +
+        "      --probe-move            验证云盘移动接口（创建/上传/移动/删除临时文件）");
     return 2;
 }
 
@@ -75,6 +76,48 @@ if (options.ExportLogin)
     Console.WriteLine($"云端私有文件：/{CloudUpdateFormat.RootFolder}/private/{LoginPack.FileName}");
     Console.WriteLine("把该文件放到另一台电脑的程序目录或 %APPDATA%\\WatermarkRemover 后启动即可自动登录。");
     return 0;
+}
+
+// Move probe: creates a temporary file and folders, moves the file, verifies and deletes it.
+if (options.ProbeMove)
+{
+    var moveValues = BuildCliCredentials();
+    await using var moveSession = await new AliyunDriveProvider()
+        .ConnectAsync(new NetdiskCredentials(moveValues));
+    NetdiskDrive moveDrive = moveSession.Drives.FirstOrDefault(d => d.Name == "资源库")
+        ?? throw new InvalidOperationException("账号没有资源库。");
+    await moveSession.SwitchDriveAsync(moveDrive.Id);
+
+    string baseFolder = await moveSession.EnsureFolderAsync(
+        $"{CloudUpdateFormat.RootFolder}/private/probe-move");
+    string srcFolder = await moveSession.EnsureFolderAsync(
+        $"{CloudUpdateFormat.RootFolder}/private/probe-move/src");
+    string dstFolder = await moveSession.EnsureFolderAsync(
+        $"{CloudUpdateFormat.RootFolder}/private/probe-move/dst");
+
+    string temp = Path.Combine(Path.GetTempPath(), $"wr-move-{Guid.NewGuid():N}.txt");
+    await File.WriteAllTextAsync(temp, "move probe " + DateTimeOffset.UtcNow.ToString("O"), ct);
+    try
+    {
+        await moveSession.UploadAsAsync(srcFolder, temp, "probe-move.txt", overwrite: true, null, ct);
+        NetdiskFile file = await moveSession.FindChildAsync(srcFolder, "probe-move.txt")
+            ?? throw new InvalidOperationException("移动探针：上传后找不到文件。");
+        await moveSession.MoveAsync(new[] { file.Id }, dstFolder, ct);
+        NetdiskFile? moved = await moveSession.FindChildAsync(dstFolder, "probe-move.txt");
+        if (moved is null)
+        {
+            throw new InvalidOperationException("移动探针：目标目录没有找到文件。");
+        }
+
+        await moveSession.DeleteAsync(new[] { moved.Id }, ct);
+        await moveSession.DeleteAsync(new[] { srcFolder, dstFolder, baseFolder }, ct);
+        Console.WriteLine("移动探针成功：文件已从 src 移到 dst，并已清理。");
+        return 0;
+    }
+    finally
+    {
+        try { File.Delete(temp); } catch { /* best effort */ }
+    }
 }
 
 // One-chunk upload probe: exercises the exact blob upload path on a real file without touching
@@ -438,6 +481,7 @@ static PublishOptions? ParseArgs(string[] arguments)
     int keep = CloudUpdateFormat.DefaultKeep;
     bool dryRun = false;
     bool exportLogin = false;
+    bool probeMove = false;
 
     for (int i = 0; i < arguments.Length; i++)
     {
@@ -470,10 +514,14 @@ static PublishOptions? ParseArgs(string[] arguments)
             case "--import-login":
                 importLogin = ++i < arguments.Length ? arguments[i] : null;
                 break;
+            case "--probe-move":
+                probeMove = true;
+                break;
         }
     }
 
-    bool toolMode = exportLogin || !string.IsNullOrWhiteSpace(probe) || !string.IsNullOrWhiteSpace(importLogin);
+    bool toolMode = exportLogin || probeMove ||
+                    !string.IsNullOrWhiteSpace(probe) || !string.IsNullOrWhiteSpace(importLogin);
     if (!toolMode &&
         (string.IsNullOrWhiteSpace(version) || string.IsNullOrWhiteSpace(source) || !Directory.Exists(source)))
     {
@@ -487,7 +535,8 @@ static PublishOptions? ParseArgs(string[] arguments)
         compare is null ? null : Path.GetFullPath(compare),
         probe is null ? null : Path.GetFullPath(probe),
         exportLogin,
-        importLogin is null ? null : Path.GetFullPath(importLogin));
+        importLogin is null ? null : Path.GetFullPath(importLogin),
+        probeMove);
 }
 
 internal sealed record PublishOptions(
@@ -499,4 +548,5 @@ internal sealed record PublishOptions(
     string? CompareSource,
     string? ProbeFile,
     bool ExportLogin,
-    string? ImportLogin);
+    string? ImportLogin,
+    bool ProbeMove);
