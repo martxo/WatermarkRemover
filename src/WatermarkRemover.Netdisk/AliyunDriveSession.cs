@@ -202,6 +202,26 @@ public sealed class AliyunDriveSession : INetdiskSession
         }
     }
 
+    public async Task MoveAsync(
+        IReadOnlyList<string> fileIds,
+        string targetFolderId,
+        CancellationToken cancellationToken = default)
+    {
+        foreach (string fileId in fileIds)
+        {
+            await SendAsync(
+                HttpMethod.Post,
+                AlipanApi.MovePath,
+                new Dictionary<string, object?>
+                {
+                    ["drive_id"] = _driveId,
+                    ["file_id"] = fileId,
+                    ["to_parent_file_id"] = NormalizeParent(targetFolderId),
+                },
+                cancellationToken).ConfigureAwait(false);
+        }
+    }
+
     public Task<NetdiskFile> UploadAsync(
         string parentFolderId,
         string localPath,

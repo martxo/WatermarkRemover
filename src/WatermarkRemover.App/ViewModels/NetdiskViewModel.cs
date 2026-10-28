@@ -58,7 +58,9 @@ public sealed class NetdiskViewModel : ObservableObject
     private readonly Action<NetdiskAccountState> _upsertAccount;
     private readonly IDialogService _dialogs;
     private readonly Action<string, Exception?> _trace;
+    private readonly Func<string, string?>? _requestMoveTarget;
     private readonly List<(string Id, string Name)> _path = new() { (string.Empty, "根目录") };
+    private IReadOnlyList<NetdiskItemViewModel> _selectedItems = Array.Empty<NetdiskItemViewModel>();
 
     private INetdiskProvider? _selectedProvider;
     private string? _selectedAccountName;
@@ -80,13 +82,15 @@ public sealed class NetdiskViewModel : ObservableObject
         ObservableCollection<NetdiskAccountState> accounts,
         Action<NetdiskAccountState> upsertAccount,
         IDialogService dialogs,
-        Action<string, Exception?> trace)
+        Action<string, Exception?> trace,
+        Func<string, string?>? requestMoveTarget = null)
     {
         _catalog = catalog;
         _accounts = accounts;
         _upsertAccount = upsertAccount;
         _dialogs = dialogs;
         _trace = trace;
+        _requestMoveTarget = requestMoveTarget;
 
         // The auth panel can save/delete accounts while this window is open; keep the list live.
         _accounts.CollectionChanged += (_, _) => RefreshAccountNames();
@@ -95,9 +99,13 @@ public sealed class NetdiskViewModel : ObservableObject
         RefreshCommand = new RelayCommand(() => _ = RunAsync(() => ListAsync(CurrentFolderId)), () => !IsBusy && _session is not null);
         SearchCommand = new RelayCommand(() => _ = RunAsync(SearchAsync), () => !IsBusy && _session is not null);
         UploadCommand = new RelayCommand(() => _ = RunAsync(UploadAsync), () => !IsBusy && _session is not null);
-        DownloadCommand = new RelayCommand(() => _ = RunAsync(DownloadAsync), () => !IsBusy && _session is not null && SelectedItem is { File.IsFolder: false });
+        DownloadCommand = new RelayCommand(() => _ = RunAsync(DownloadAsync),
+            () => !IsBusy && _session is not null && EffectiveSelection.Any(i => !i.File.IsFolder));
         NewFolderCommand = new RelayCommand(() => _ = RunAsync(NewFolderAsync), () => !IsBusy && _session is not null && !string.IsNullOrWhiteSpace(NewFolderName));
-        DeleteCommand = new RelayCommand(() => _ = RunAsync(DeleteAsync), () => !IsBusy && _session is not null && SelectedItem is not null);
+        DeleteCommand = new RelayCommand(() => _ = RunAsync(DeleteAsync),
+            () => !IsBusy && _session is not null && EffectiveSelection.Count > 0);
+        MoveCommand = new RelayCommand(() => _ = RunAsync(MoveAsync),
+            () => !IsBusy && _session is not null && EffectiveSelection.Count > 0);
         OpenFolderCommand = new RelayCommand<NetdiskItemViewModel>(item => _ = RunAsync(() => OpenFolderAsync(item)), item => item is { File.IsFolder: true });
         NavigateToCommand = new RelayCommand<NetdiskBreadcrumbItem>(item => _ = RunAsync(() => NavigateToAsync(item)));
 
@@ -148,6 +156,37 @@ public sealed class NetdiskViewModel : ObservableObject
 
     public NetdiskItemViewModel? SelectedItem { get => _selectedItem; set => SetProperty(ref _selectedItem, value); }
 
+    /// <summary>Rows currently selected in the grid (multi-select).</summary>
+    public IReadOnlyList<NetdiskItemViewModel> SelectedItems => _selectedItems;
+
+    /// <summary>Status-line suffix such as "已选 3 项".</summary>
+    public string SelectionText => _selectedItems.Count == 0 ? string.Empty : $"已选 {_selectedItems.Count} 项";
+
+    /// <summary>Syncs the grid's extended selection into the view model.</summary>
+    public void SetSelection(IEnumerable<NetdiskItemViewModel> items)
+    {
+        _selectedItems = items.Distinct().ToList();
+        OnPropertyChanged(nameof(SelectedItems));
+        OnPropertyChanged(nameof(SelectionText));
+        DownloadCommand.RaiseCanExecuteChanged();
+        DeleteCommand.RaiseCanExecuteChanged();
+        MoveCommand.RaiseCanExecuteChanged();
+    }
+
+    /// <summary>
+    /// Falls back to the single SelectedItem when the grid has not reported a selection (tests,
+    /// keyboard use), so one-item operations keep working exactly as before.
+    /// </summary>
+    private IReadOnlyList<NetdiskItemViewModel> EffectiveSelection =>
+        _selectedItems.Count > 0
+            ? _selectedItems
+            : SelectedItem is { } one
+                ? new[] { one }
+                : Array.Empty<NetdiskItemViewModel>();
+
+    /// <summary>Current folder as "/a/b"; the move dialog starts from here.</summary>
+    public string CurrentPathText => "/" + string.Join("/", _path.Skip(1).Select(p => p.Name));
+
     public string NewFolderName { get => _newFolderName; set => SetProperty(ref _newFolderName, value); }
 
     /// <summary>Keyword for the drive search box; empty means "reload current folder".</summary>
@@ -174,6 +213,8 @@ public sealed class NetdiskViewModel : ObservableObject
     public RelayCommand NewFolderCommand { get; }
 
     public RelayCommand DeleteCommand { get; }
+
+    public RelayCommand MoveCommand { get; }
 
     public RelayCommand<NetdiskItemViewModel> OpenFolderCommand { get; }
 
@@ -379,6 +420,8 @@ public sealed class NetdiskViewModel : ObservableObject
                 : null;
             Items.Add(new NetdiskItemViewModel(file, location));
         }
+
+        SetSelection(Array.Empty<NetdiskItemViewModel>());
     }
 
     private async Task OpenFolderAsync(NetdiskItemViewModel? item)
@@ -410,6 +453,8 @@ public sealed class NetdiskViewModel : ObservableObject
         {
             Breadcrumbs.Add(new NetdiskBreadcrumbItem(_path[i].Name, i));
         }
+
+        OnPropertyChanged(nameof(CurrentPathText));
     }
 
     private async Task UploadAsync()
@@ -445,29 +490,61 @@ public sealed class NetdiskViewModel : ObservableObject
     private async Task DownloadAsync()
     {
         var session = _session ?? throw new InvalidOperationException("尚未连接网盘。");
-        var item = SelectedItem;
-        if (item is not { File.IsFolder: false })
+        var files = EffectiveSelection.Where(i => !i.File.IsFolder).ToList();
+        if (files.Count == 0)
         {
+            StatusText = "请选择要下载的文件（文件夹请进入后再下载）。";
             return;
         }
 
-        var dialog = new SaveFileDialog { FileName = item.File.Name, Title = "下载到…" };
-        if (dialog.ShowDialog() != true)
+        string? singlePath = null;
+        string? destinationDir = null;
+        if (files.Count == 1)
         {
-            return;
+            var dialog = new SaveFileDialog { FileName = files[0].File.Name, Title = "下载到…" };
+            if (dialog.ShowDialog() != true) return;
+            singlePath = dialog.FileName;
+        }
+        else
+        {
+            var dialog = new OpenFolderDialog { Title = "选择下载目录" };
+            if (dialog.ShowDialog() != true) return;
+            destinationDir = dialog.FolderName;
         }
 
-        StatusText = $"正在下载 {item.File.Name}…";
-        var progress = new Progress<NetdiskTransferProgress>(p =>
+        for (var i = 0; i < files.Count; i++)
         {
-            if (p.TotalBytes > 0)
+            var item = files[i];
+            string target = singlePath ?? UniquePath(destinationDir!, item.File.Name);
+            StatusText = $"正在下载 {item.File.Name}（{i + 1}/{files.Count}）…";
+            var progress = new Progress<NetdiskTransferProgress>(p =>
             {
-                ProgressPercent = (int)(p.BytesTransferred * 100 / p.TotalBytes.Value);
-            }
-        });
-        await session.DownloadAsync(item.File.Id, dialog.FileName, progress);
-        AppendFileLog("下载", dialog.FileName);
-        StatusText = $"已下载到 {dialog.FileName}";
+                if (p.TotalBytes > 0)
+                {
+                    ProgressPercent = (int)(p.BytesTransferred * 100 / p.TotalBytes.Value);
+                }
+            });
+            await session.DownloadAsync(item.File.Id, target, progress);
+            AppendFileLog("下载", target);
+        }
+
+        StatusText = files.Count == 1
+            ? $"已下载到 {singlePath}"
+            : $"已下载 {files.Count} 个文件到 {destinationDir}";
+    }
+
+    private static string UniquePath(string directory, string name)
+    {
+        string path = Path.Combine(directory, name);
+        if (!File.Exists(path)) return path;
+
+        string baseName = Path.GetFileNameWithoutExtension(name);
+        string extension = Path.GetExtension(name);
+        for (var i = 1; ; i++)
+        {
+            path = Path.Combine(directory, $"{baseName} ({i}){extension}");
+            if (!File.Exists(path)) return path;
+        }
     }
 
     private async Task NewFolderAsync()
@@ -483,20 +560,60 @@ public sealed class NetdiskViewModel : ObservableObject
     private async Task DeleteAsync()
     {
         var session = _session ?? throw new InvalidOperationException("尚未连接网盘。");
-        var item = SelectedItem;
-        if (item is null)
+        var items = EffectiveSelection;
+        if (items.Count == 0)
+        {
+            StatusText = "请先选择要删除的文件或文件夹。";
+            return;
+        }
+
+        string message = items.Count == 1
+            ? $"确定把「{items[0].File.Name}」移入回收站吗？"
+            : $"确定把选中的 {items.Count} 项移入回收站吗？";
+        if (!_dialogs.Confirm(message, "删除确认"))
         {
             return;
         }
 
-        if (!_dialogs.Confirm($"确定把「{item.File.Name}」移入回收站吗？", "删除确认"))
-        {
-            return;
-        }
-
-        await session.DeleteAsync(new[] { item.File.Id });
-        StatusText = $"已把「{item.File.Name}」移入回收站。";
+        await session.DeleteAsync(items.Select(i => i.File.Id).ToList());
+        StatusText = $"已把 {items.Count} 项移入回收站。";
         await ListAsync(CurrentFolderId);
+        SetSelection(Array.Empty<NetdiskItemViewModel>());
+    }
+
+    /// <summary>Moves the selected rows into a typed remote folder (created when missing).</summary>
+    private async Task MoveAsync()
+    {
+        var session = _session ?? throw new InvalidOperationException("尚未连接网盘。");
+        var items = EffectiveSelection;
+        if (items.Count == 0)
+        {
+            StatusText = "请先选择要移动的文件或文件夹。";
+            return;
+        }
+
+        if (_requestMoveTarget is null)
+        {
+            StatusText = "当前窗口不支持移动。";
+            return;
+        }
+
+        string? target = _requestMoveTarget(CurrentPathText);
+        if (string.IsNullOrWhiteSpace(target)) return;
+        target = target.Trim();
+
+        StatusText = $"正在移动 {items.Count} 项到 {target}…";
+        string targetId = await session.EnsureFolderAsync(target);
+        if (string.Equals(targetId, CurrentFolderId, StringComparison.Ordinal))
+        {
+            StatusText = "目标目录就是当前目录，无需移动。";
+            return;
+        }
+
+        await session.MoveAsync(items.Select(i => i.File.Id).ToList(), targetId);
+        StatusText = $"已移动 {items.Count} 项到 {target}。";
+        await ListAsync(CurrentFolderId);
+        SetSelection(Array.Empty<NetdiskItemViewModel>());
     }
 
     private async Task RefreshQuotaAsync()

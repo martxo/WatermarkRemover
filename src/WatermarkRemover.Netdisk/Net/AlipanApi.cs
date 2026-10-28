@@ -31,6 +31,8 @@ internal static class AlipanApi
 
     internal const string CompletePath = "/adrive/v1.0/openFile/complete";
 
+    internal const string MovePath = "/adrive/v1.0/openFile/move";
+
     internal const string DownloadUrlPath = "/adrive/v1.0/openFile/getDownloadUrl";
 
     internal const string TrashPath = "/adrive/v1.0/openFile/recyclebin/trash";

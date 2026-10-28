@@ -92,6 +92,18 @@ public sealed class AppSettings
     /// at rest — see <see cref="NetdiskAccountPersistence"/>.</summary>
     public List<PersistedNetdiskAccount> NetdiskAccounts { get; set; } = new();
 
+    /// <summary>
+    /// Storage space quick uploads target (资源库/备份盘/相册). Empty = the account's default
+    /// drive. Defaults to 资源库 so "upload" no longer lands in 备份盘's root.
+    /// </summary>
+    public string NetdiskUploadDrive { get; set; } = "资源库";
+
+    /// <summary>
+    /// Remote folder for quick uploads, e.g. <c>/来自分享</c>. Empty = the drive root. Missing
+    /// folders are created on the first upload.
+    /// </summary>
+    public string NetdiskUploadDirectory { get; set; } = string.Empty;
+
     /// <summary>Deep copy: safe to hand to background work while the original keeps being edited.</summary>
     public AppSettings Clone() => new()
     {
@@ -112,5 +124,7 @@ public sealed class AppSettings
         ScanOutputDirectory = ScanOutputDirectory,
         TransferOutputDirectory = TransferOutputDirectory,
         NetdiskAccounts = NetdiskAccounts.ToList(),
+        NetdiskUploadDrive = NetdiskUploadDrive,
+        NetdiskUploadDirectory = NetdiskUploadDirectory,
     };
 }
