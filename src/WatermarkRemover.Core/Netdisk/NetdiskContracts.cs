@@ -91,6 +91,13 @@ public interface INetdiskSession : IAsyncDisposable
 
     Task DeleteAsync(IReadOnlyList<string> fileIds, CancellationToken cancellationToken = default);
 
+    /// <summary>Moves files/folders into <paramref name="targetFolderId"/> (same drive).</summary>
+    Task MoveAsync(
+        IReadOnlyList<string> fileIds,
+        string targetFolderId,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("该网盘不支持移动。");
+
     Task<NetdiskFile> UploadAsync(
         string parentFolderId,
         string localPath,

@@ -609,6 +609,8 @@ public sealed class SettingsViewModel : ObservableObject
         _target.ContinuousScan = Settings.ContinuousScan;
         _target.ScanOutputDirectory = Settings.ScanOutputDirectory?.Trim() ?? string.Empty;
         _target.TransferOutputDirectory = Settings.TransferOutputDirectory?.Trim() ?? string.Empty;
+        _target.NetdiskUploadDrive = Settings.NetdiskUploadDrive?.Trim() ?? string.Empty;
+        _target.NetdiskUploadDirectory = Settings.NetdiskUploadDirectory?.Trim() ?? string.Empty;
     }
 
     private void AddSuffix(object? parameter)

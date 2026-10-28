@@ -98,11 +98,12 @@ public sealed class NetdiskCoordinator : ObservableObject
         try
         {
             await using var session = await provider.ConnectAsync(account.ToCredentials());
+            string folderId = await ResolveUploadFolderAsync(session);
             foreach (string path in files)
             {
                 try
                 {
-                    await session.UploadAsync(string.Empty, path);
+                    await session.UploadAsync(folderId, path);
                     AppLog.Trace($"网盘上传：{path}", null);
                 }
                 catch (Exception ex)
@@ -129,6 +130,31 @@ public sealed class NetdiskCoordinator : ObservableObject
         }
 
         return failures;
+    }
+
+    /// <summary>
+    /// Switches to the configured storage space and ensures the configured remote folder exists.
+    /// Empty settings mean "account default drive / drive root".
+    /// </summary>
+    private async Task<string> ResolveUploadFolderAsync(INetdiskSession session)
+    {
+        string driveName = _settings.NetdiskUploadDrive?.Trim() ?? string.Empty;
+        if (driveName.Length > 0)
+        {
+            var drive = session.Drives.FirstOrDefault(d =>
+                string.Equals(d.Name, driveName, StringComparison.OrdinalIgnoreCase));
+            if (drive is null)
+            {
+                AppLog.Trace($"网盘上传：未找到存储盘「{driveName}」，使用账号默认盘。", null);
+            }
+            else if (!string.Equals(drive.Id, session.CurrentDriveId, StringComparison.Ordinal))
+            {
+                await session.SwitchDriveAsync(drive.Id);
+            }
+        }
+
+        string directory = _settings.NetdiskUploadDirectory?.Trim() ?? string.Empty;
+        return directory.Length == 0 ? string.Empty : await session.EnsureFolderAsync(directory);
     }
 
     /// <summary>
@@ -216,7 +242,8 @@ public sealed class NetdiskCoordinator : ObservableObject
         // the main window while browsing files side by side. An independent top-level window
         // z-orders normally.
         _window = new NetdiskWindow(
-            new NetdiskViewModel(Catalog, Accounts, Upsert, _dialogs, AppLog.Trace),
+            new NetdiskViewModel(Catalog, Accounts, Upsert, _dialogs, AppLog.Trace,
+                requestMoveTarget: NetdiskMoveDialog.Prompt),
             Settings);
         _window.Closed += (_, _) => _window = null;
         _window.Show();
@@ -251,9 +278,10 @@ public sealed class NetdiskCoordinator : ObservableObject
         try
         {
             await using var session = await provider.ConnectAsync(account.ToCredentials());
+            string folderId = await ResolveUploadFolderAsync(session);
             foreach (var path in files)
             {
-                await session.UploadAsync(string.Empty, path);
+                await session.UploadAsync(folderId, path);
                 AppLog.Trace($"网盘快速上传：{path}", null);
             }
 

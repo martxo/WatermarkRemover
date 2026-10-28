@@ -182,9 +182,13 @@
                             <Button Content="新建" Command="{Binding NewFolderCommand}"
                                     Style="{StaticResource GhostButton}" Padding="14,6" Margin="6,0,0,0"/>
                         </StackPanel>
-                        <Button Content="上传…" Command="{Binding UploadCommand}"
+                        <Button Content="全选" Click="OnSelectAllClick"
                                 Style="{StaticResource GhostButton}" Padding="14,6" Margin="10,0,0,0"/>
+                        <Button Content="上传…" Command="{Binding UploadCommand}"
+                                Style="{StaticResource GhostButton}" Padding="14,6" Margin="6,0,0,0"/>
                         <Button Content="下载" Command="{Binding DownloadCommand}"
+                                Style="{StaticResource GhostButton}" Padding="14,6" Margin="6,0,0,0"/>
+                        <Button Content="移动" Command="{Binding MoveCommand}"
                                 Style="{StaticResource GhostButton}" Padding="14,6" Margin="6,0,0,0"/>
                         <Button Content="删除" Command="{Binding DeleteCommand}"
                                 Style="{StaticResource GhostButton}" Padding="14,6" Margin="6,0,0,0"/>
@@ -233,6 +237,9 @@
                     <TextBlock DockPanel.Dock="Right" Text="{Binding QuotaText}"
                                Foreground="{StaticResource TextTertiaryBrush}" FontSize="12"
                                VerticalAlignment="Center" Margin="10,0,0,0"/>
+                    <TextBlock DockPanel.Dock="Right" Text="{Binding SelectionText}"
+                               Foreground="{StaticResource AccentBrush}" FontSize="12"
+                               VerticalAlignment="Center" Margin="10,0,0,0"/>
                     <TextBlock Text="{Binding StatusText}" VerticalAlignment="Center" FontSize="12"
                                Foreground="{StaticResource TextSecondaryBrush}"
                                TextTrimming="CharacterEllipsis"/>
@@ -254,9 +261,11 @@
             <Border Background="{StaticResource SurfaceBrush}"
                     BorderBrush="{StaticResource BorderBrushLight}" BorderThickness="1"
                     CornerRadius="10" ClipToBounds="True">
-                <DataGrid ItemsSource="{Binding Items}"
+                <DataGrid x:Name="FileGrid" ItemsSource="{Binding Items}"
                           SelectedItem="{Binding SelectedItem, Mode=TwoWay}"
-                          AutoGenerateColumns="False" IsReadOnly="True" SelectionMode="Single"
+                          SelectionChanged="OnFileSelectionChanged"
+                          AutoGenerateColumns="False" IsReadOnly="True"
+                          SelectionMode="Extended" SelectionUnit="FullRow"
                           CanUserAddRows="False" HeadersVisibility="Column"
                           GridLinesVisibility="Horizontal" HorizontalGridLinesBrush="#FFF3F4F7"
                           Background="Transparent" BorderThickness="0" RowHeight="34"

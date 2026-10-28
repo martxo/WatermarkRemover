@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Input;
 using WatermarkRemover.App.ViewModels;
 
@@ -39,6 +40,17 @@ public partial class NetdiskWindow : Window
             e.Handled = true;
         }
     }
+
+    /// <summary>Projects the DataGrid's extended selection into the view model.</summary>
+    private void OnFileSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (DataContext is NetdiskViewModel vm && sender is DataGrid grid)
+        {
+            vm.SetSelection(grid.SelectedItems.OfType<NetdiskItemViewModel>());
+        }
+    }
+
+    private void OnSelectAllClick(object sender, RoutedEventArgs e) => FileGrid.SelectAll();
 
     private void OnMinimizeClick(object sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
 
