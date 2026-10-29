@@ -701,6 +701,8 @@ public sealed class MainViewModel : ObservableObject
     {
         using var op = AppLog.BeginOperation(LogCategory.Scan, "扫描流程", slowMs: 0);
 
+        // Stamped here so the naming pass can report scan→rename as one number when it ends.
+        long chainTicks = Stopwatch.GetTimestamp();
         FileJobViewModel job = AddScanningJob();
         bool scanFinished = false;
         Task<AutoNameResult?>? earlyNaming = null;
@@ -819,7 +821,7 @@ public sealed class MainViewModel : ObservableObject
 
         // Naming may already have finished from page 1 while the scan continued; the rename
         // still waits for the PDF (and the strip's writes) before moving the file.
-        _ = RenameScanInBackgroundAsync(job, path, earlyNaming);
+        _ = RenameScanInBackgroundAsync(job, path, earlyNaming, chainTicks);
         op.Step("启动后台命名", earlyNaming is null ? "无首屏命名结果" : "复用首屏命名结果");
 
         op.Complete(summary);
@@ -854,7 +856,8 @@ public sealed class MainViewModel : ObservableObject
     private async Task RenameScanInBackgroundAsync(
         FileJobViewModel job,
         string pdfPath,
-        Task<AutoNameResult?>? earlyNaming = null)
+        Task<AutoNameResult?>? earlyNaming = null,
+        long chainTicks = 0)
     {
         using var op = AppLog.BeginOperation(
             LogCategory.Naming, "后台命名", Path.GetFileName(pdfPath));
@@ -899,6 +902,7 @@ public sealed class MainViewModel : ObservableObject
             {
                 if (namingOn) job.SetNamingNote("未识别到标题，保留时间戳名");
                 op.Complete("无更名");
+                LogScanChain(chainTicks, finalPath, "保留时间戳名");
                 return;
             }
 
@@ -910,6 +914,7 @@ public sealed class MainViewModel : ObservableObject
             {
                 job.SetNamingNote(null);
                 op.Complete($"→ {Path.GetFileName(finalPath)}");
+                LogScanChain(chainTicks, finalPath, "已改名");
                 return;
             }
 
@@ -919,13 +924,28 @@ public sealed class MainViewModel : ObservableObject
                 job.SetNamingNote(null);
             });
             op.Complete($"→ {Path.GetFileName(finalPath)}");
+            LogScanChain(chainTicks, finalPath, "已改名");
         }
         catch (Exception ex)
         {
             AppLog.Trace("命名：后台自动命名异常，保留时间戳命名", ex);
             if (namingOn) job.SetNamingNote("命名失败，保留时间戳名");
             op.Fail("后台自动命名异常，保留时间戳命名", ex);
+            LogScanChain(chainTicks, pdfPath, "命名失败，保留时间戳名");
         }
+    }
+
+    /// <summary>
+    /// One line per finished document tying the three operations together — scan start → PDF on
+    /// disk → name resolved. Their own log lines only share an op id, which is hard to read when
+    /// a user reports "this scan took ten seconds even though each step looks fine".
+    /// </summary>
+    private static void LogScanChain(long chainTicks, string finalPath, string outcome)
+    {
+        if (chainTicks == 0) return;
+        long totalMs = (long)Stopwatch.GetElapsedTime(chainTicks).TotalMilliseconds;
+        AppLog.Info($"扫描链路：{Path.GetFileName(finalPath)}，{outcome}，" +
+                    $"扫描开始到命名落盘共 {totalMs} ms");
     }
 
     /// <summary>Persists the live settings; false when the file could not be written.</summary>

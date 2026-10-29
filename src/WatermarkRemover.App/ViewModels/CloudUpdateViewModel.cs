@@ -323,7 +323,7 @@ public sealed class CloudUpdateViewModel : ObservableObject
             }
 
             StatusText = "下载完成，正在重启并替换文件…";
-            AppLog.Flush();
+            App.NoteExitReason($"云更新（{direction} {note}），重启以替换文件");
             _service.ApplyAndRestart(staged, direction, note);
             Application.Current.Shutdown();
         }

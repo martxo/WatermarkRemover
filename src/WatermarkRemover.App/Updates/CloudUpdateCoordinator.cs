@@ -112,7 +112,7 @@ public static class CloudUpdateCoordinator
             notifier.PublishReady(version, () =>
             {
                 AppLog.Info($"用户从更新图标确认，应用云更新 v{version}");
-                AppLog.Flush();
+                App.NoteExitReason($"用户确认云更新到 v{version}");
                 service.ApplyAndRestart(staged, "update", $"更新到 v{version}");
                 Application.Current.Shutdown();
             });
@@ -147,8 +147,7 @@ public static class CloudUpdateCoordinator
             await Task.Delay(1000).ConfigureAwait(true);
             progressWindow.Close();
 
-            AppLog.Info($"准备退出程序以应用云更新 v{version}");
-            AppLog.Flush();
+            App.NoteExitReason($"应用云更新到 v{version}");
             service.ApplyAndRestart(staged, "update", $"更新到 v{version}");
             Application.Current.Shutdown();
         }

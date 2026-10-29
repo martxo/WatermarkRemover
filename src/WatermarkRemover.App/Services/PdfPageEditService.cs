@@ -1,3 +1,5 @@
+using System.IO;
+using WatermarkRemover.App.Logging;
 using WatermarkRemover.Pdf;
 using WatermarkRemover.Pdf.Preview;
 
@@ -80,6 +82,8 @@ public sealed class PdfPageEditService
     {
         if (!string.Equals(newPath, original, StringComparison.OrdinalIgnoreCase))
         {
+            AppLog.Warn($"原文件被占用（{FileLockInspector.Describe(original)}），" +
+                        $"修改已另存为 {Path.GetFileName(newPath)}");
             _file.RelocateTo(newPath);
             _file.RememberStamp(force: true);
             return true;

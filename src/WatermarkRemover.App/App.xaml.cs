@@ -14,6 +14,21 @@ public partial class App : Application
 {
     private SingleInstanceGuard? _instanceGuard;
 
+    /// <summary>Why this process is ending; the OnExit line names it so a log never just says
+    /// "应用退出" after a crash or an updater hand-off.</summary>
+    private static string _exitReason = "用户关闭窗口";
+
+    /// <summary>
+    /// Records the reason of an imminent exit and flushes it immediately: updaters terminate via
+    /// Environment.Exit (no OnExit), and a fatal crash may not reach the exit handler either.
+    /// </summary>
+    public static void NoteExitReason(string reason)
+    {
+        _exitReason = reason;
+        AppLog.Info($"退出原因：{reason}");
+        AppLog.Flush();
+    }
+
     protected override void OnStartup(StartupEventArgs e)
     {
         // Must run before anything else: Velopack's install/update hooks intercept --veloapp-*
@@ -78,7 +93,7 @@ public partial class App : Application
 
     protected override void OnExit(ExitEventArgs e)
     {
-        AppLog.Info("应用退出");
+        AppLog.Info($"应用退出（{_exitReason}）");
         AppLog.Shutdown();
         _instanceGuard?.Dispose();
         _instanceGuard = null;
@@ -101,7 +116,7 @@ public partial class App : Application
     private static void OnDomainUnhandledException(object sender, UnhandledExceptionEventArgs e)
     {
         AppLog.Error("后台线程致命异常", e.ExceptionObject as Exception);
-        AppLog.Flush();
+        NoteExitReason($"后台线程致命异常（{e.ExceptionObject?.GetType().Name}）");
     }
 
     private static void OnUnobservedTaskException(object? sender, UnobservedTaskExceptionEventArgs e)

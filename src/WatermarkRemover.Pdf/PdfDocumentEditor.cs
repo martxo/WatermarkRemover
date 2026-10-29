@@ -28,11 +28,16 @@ internal static class PdfDocumentEditor
 
         PdfSharpRuntime.EnsureInitialized();
 
+        // Named only when a lock message needs it: querying the Restart Manager costs a few ms
+        // and the happy path must stay untouched.
+        string? holders = null;
+        string LockHolders() => holders ??= FileLockInspector.Describe(pdfPath);
+
         bool locked = IsLockedForWrite(pdfPath);
         if (locked && !keepCopyOnLock)
         {
             throw new IOException(
-                "PDF 正在被其他程序占用（如 WPS），无法保存修改。请关闭后重试，原文件未改动。");
+                $"PDF 正在被其他程序占用（{LockHolders()}），无法保存修改。请关闭后重试，原文件未改动。");
         }
 
         // A viewer's read lock cannot block reading, so a locked target is edited as a private
@@ -50,7 +55,7 @@ internal static class PdfDocumentEditor
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
                 throw new IOException(
-                    "PDF 正在被其他程序占用（如 WPS），无法读取。请关闭后重试，原文件未改动。", ex);
+                    $"PDF 正在被其他程序占用（{LockHolders()}），无法读取。请关闭后重试，原文件未改动。", ex);
             }
 
             editSourcePath = sourceCopyPath;
@@ -68,7 +73,7 @@ internal static class PdfDocumentEditor
                 catch (IOException ex)
                 {
                     throw new IOException(
-                        "PDF 正在被其他程序占用（如 WPS），无法打开编辑。请关闭后重试，原文件未改动。", ex);
+                        $"PDF 正在被其他程序占用（{LockHolders()}），无法打开编辑。请关闭后重试，原文件未改动。", ex);
                 }
 
                 edit(doc);
@@ -95,7 +100,7 @@ internal static class PdfDocumentEditor
             if (!keepCopyOnLock)
             {
                 throw new IOException(
-                    "PDF 正在被其他程序占用（如 WPS），无法保存修改。请关闭后重试，原文件未改动。", ex);
+                    $"PDF 正在被其他程序占用（{LockHolders()}），无法保存修改。请关闭后重试，原文件未改动。", ex);
             }
 
             string fallbackPath = BuildFallbackPath(pdfPath, fallbackSuffix);

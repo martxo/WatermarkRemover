@@ -297,7 +297,8 @@ public static class UpdateCoordinator
                 {
                     UpdateApplier.ApplyAndRestart(downloadedPath);
                 }
-                AppLog.Info($"准备退出当前程序以完成 v{version} 更新");
+                App.NoteExitReason($"更新到 v{version}，交给更新器重启" +
+                                   (info.IsSetup ? "（安装程序）" : "（Velopack）"));
                 Application.Current.Shutdown();
             }
             notifier.PublishReady(version, Apply);
@@ -363,6 +364,7 @@ public static class UpdateCoordinator
             UpdateReadyNotifier.Current.PublishReady(version, () =>
             {
                 AppLog.Info($"用户从更新图标确认，应用 v{version}；{VelopackUpdateService.DescribeInstall()}");
+                App.NoteExitReason($"用户确认更新到 v{version}");
                 if (info.IsSetup)
                     UpdateApplier.ApplySetup(downloadedPath);
                 else

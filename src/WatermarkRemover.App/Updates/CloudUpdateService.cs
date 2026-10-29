@@ -454,6 +454,7 @@ public sealed class CloudUpdateService
         {
             progress?.Report(new CloudUpdateProgress(CloudUpdateStage.Downloading, 0, 0, plan.DownloadBytes,
                 $"正在读取云端分块列表（缺少 {plan.RequiredChunks.Count} 个）…"));
+            long listTicks = Stopwatch.GetTimestamp();
             try
             {
                 foreach (NetdiskFile item in await bundle.Session.ListAllAsync(bundle.ChunksFolderId, cancellationToken)
@@ -467,7 +468,8 @@ public sealed class CloudUpdateService
             }
             catch (Exception ex) when (!IsCallerCancellation(ex, cancellationToken))
             {
-                AppLog.Warn($"云更新：读取分块列表失败，改用 CLI 逐个下载：{ex.Message}");
+                AppLog.Warn($"云更新：读取分块列表失败（耗时 {ElapsedMs(listTicks)} ms），" +
+                            $"改用 CLI 逐个下载：{ex.Message}");
             }
         }
 
@@ -488,6 +490,7 @@ public sealed class CloudUpdateService
             bool fetched = false;
             if (remote.TryGetValue(chunk.Sha256, out string? fileId))
             {
+                long apiTicks = Stopwatch.GetTimestamp();
                 try
                 {
                     using var chunkTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -497,13 +500,16 @@ public sealed class CloudUpdateService
                 }
                 catch (Exception ex) when (!IsCallerCancellation(ex, cancellationToken))
                 {
-                    AppLog.Warn($"云更新：接口下载分块 {chunk.Sha256[..12]}… 失败，改用 CLI：{ex.Message}");
+                    // The elapsed time is what separates "CDN stalled" from "endpoint rejected".
+                    AppLog.Warn($"云更新：接口下载分块 {chunk.Sha256[..12]}… 失败" +
+                                $"（耗时 {ElapsedMs(apiTicks)} ms），改用 CLI：{ex.Message}");
                     try { File.Delete(temp); } catch { /* best effort */ }
                 }
             }
 
             if (!fetched)
             {
+                long cliTicks = Stopwatch.GetTimestamp();
                 try
                 {
                     await DownloadChunkViaCliAsync(
@@ -513,8 +519,11 @@ public sealed class CloudUpdateService
                 catch (Exception ex) when (!IsCallerCancellation(ex, cancellationToken))
                 {
                     try { File.Delete(temp); } catch { /* best effort */ }
-                    throw new InvalidDataException($"下载分块 {chunk.Sha256[..12]}… 失败：{ex.Message}", ex);
+                    throw new InvalidDataException(
+                        $"下载分块 {chunk.Sha256[..12]}… 失败（CLI 耗时 {ElapsedMs(cliTicks)} ms）：{ex.Message}", ex);
                 }
+
+                AppLog.Debug($"云更新：CLI 下载分块 {chunk.Sha256[..12]}… 耗时 {ElapsedMs(cliTicks)} ms");
             }
             if (new FileInfo(temp).Length != chunk.Size || !string.Equals(HashFile(temp), chunk.Sha256, StringComparison.Ordinal))
             {
@@ -992,6 +1001,10 @@ public sealed class CloudUpdateService
     private static bool IsCallerCancellation(Exception ex, CancellationToken cancellationToken) =>
         ex is OperationCanceledException && cancellationToken.IsCancellationRequested;
 
+    /// <summary>Wall time of one download attempt, so a fallback line says how long it burned.</summary>
+    private static long ElapsedMs(long startTicks) =>
+        (long)Stopwatch.GetElapsedTime(startTicks).TotalMilliseconds;
+
     /// <summary>
     /// Downloads one cloud file through the API; when the signed CDN URL is unreachable or
     /// stalls, the bundled CLI (same stable login) fetches it instead. The CLI path is slower
@@ -1010,6 +1023,7 @@ public sealed class CloudUpdateService
             // and the CLI takes over instead of stalling startup for minutes.
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(TimeSpan.FromSeconds(25));
+            long apiTicks = Stopwatch.GetTimestamp();
             try
             {
                 return await bundle.Session.DownloadBytesAsync(folderId, name, timeout.Token)
@@ -1017,11 +1031,15 @@ public sealed class CloudUpdateService
             }
             catch (Exception ex) when (!IsCallerCancellation(ex, cancellationToken))
             {
-                AppLog.Warn($"云更新：接口下载 {name} 失败，改用 CLI：{ex.Message}");
+                AppLog.Warn($"云更新：接口下载 {name} 失败（耗时 {ElapsedMs(apiTicks)} ms），" +
+                            $"改用 CLI：{ex.Message}");
             }
         }
 
-        return await DownloadBytesViaCliAsync(remotePath, cancellationToken).ConfigureAwait(false);
+        long cliTicks = Stopwatch.GetTimestamp();
+        byte[]? bytes = await DownloadBytesViaCliAsync(remotePath, cancellationToken).ConfigureAwait(false);
+        AppLog.Debug($"云更新：CLI 下载 {Path.GetFileName(remotePath)} 耗时 {ElapsedMs(cliTicks)} ms");
+        return bytes;
     }
 
     private static async Task<byte[]?> DownloadBytesViaCliAsync(
