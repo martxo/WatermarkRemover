@@ -638,10 +638,13 @@ public sealed class MainViewModel : ObservableObject
             int maxConcurrency = Math.Clamp(Settings.MaxConcurrency, 1, 8);
             AppLog.Info($"批次处理开始：{jobs.Count} 个文件，并发 {maxConcurrency}");
 
+            // 只让这一批里最后完成的行展开缩略条：批量处理时若每份都展开，会为每一份各渲染
+            // 一遍页面再被下一份折叠，白烧 CPU。最后一份正是用户要看的结果，其余保持折叠。
+            int pendingRows = jobs.Count;
             await _queue.RunAsync(jobs, feature, context, maxConcurrency, job =>
             {
                 Board.MarkCompleted(job);
-                _preview.OpenWhenFinished(job);
+                if (Interlocked.Decrement(ref pendingRows) == 0) _preview.OpenWhenFinished(job);
             }).ConfigureAwait(true);
 
             AppLog.Info($"批次处理结束：{jobs.Count} 个文件，并发 {maxConcurrency}，" +
@@ -806,13 +809,13 @@ public sealed class MainViewModel : ObservableObject
             _dialogs.Warn(warning, "扫描保存");
         }
 
-        // Scan records stay folded after completion: a long history no longer unfolds every
-        // document automatically. The strip still loads in the background (auto-orient / blank
-        // cleanup run), then releases its tiles; the row's 预览 button expands it on demand.
+        // The scan that just landed unfolds its own strip, seeded with the pages shown live, so
+        // the user sees the result without clicking 预览. Older rows fold (accordion), keeping
+        // just one document's pixels resident.
         var livePages = job.LiveThumbnails.ToArray();
-        _preview.Open(job, livePages, autoOpen: false);
+        _preview.Open(job, livePages);
         job.ClearLiveThumbnails();
-        op.Step("记录已折叠", $"{Path.GetFileName(path)}，可点「预览」展开");
+        op.Step("记录已展开", $"{Path.GetFileName(path)}，{livePages.Length} 页缩略图");
 
         // Naming may already have finished from page 1 while the scan continued; the rename
         // still waits for the PDF (and the strip's writes) before moving the file.
@@ -1452,6 +1455,9 @@ public sealed class MainViewModel : ObservableObject
         job.Apply(FeatureResult.Success(path, path, $"来自手机 · {size}", 1));
         Board.Add(job);
         Board.MoveToTop(job);
+        // 手机传文件 is its own entry with no queue behind it: unfold this new record's strip here
+        // so a completed transfer reads exactly like a completed scan or drop.
+        _preview.OpenWhenFinished(job);
     }
 
     /// <summary>Worker thread → UI thread: a file composed from a CamScanner share joins the

@@ -1376,7 +1376,8 @@
                                                 ToolTip="复制完整报错信息（含系统环境与异常堆栈）用于反馈问题"/>
 
                                         <!-- finished rows: expand the inline thumbnail strip (again = fold).
-                                             Scan rows hide the button entirely — their strip unfolds itself. -->
+                                             The row that just finished unfolds on its own, so its button
+                                             already reads 收起; older rows stay folded. -->
                                         <Button Style="{StaticResource RowPreviewButton}"
                                                 Margin="0,0,8,0"
                                                 Visibility="{Binding PreviewButtonVisibility}"

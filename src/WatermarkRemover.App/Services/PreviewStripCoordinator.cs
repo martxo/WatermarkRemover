@@ -70,16 +70,15 @@ public sealed class PreviewStripCoordinator
     }
 
     /// <summary>
-    /// Builds the row's strip. Scans pass <paramref name="autoOpen"/>=false: the post-load work
-    /// still runs, but the row stays folded until the user presses 预览. Other sections open it
-    /// through the preview button (autoOpen defaults to true).
-    /// <paramref name="seedThumbnails"/> are the pages already shown live during the scan: the
-    /// strip starts with them so it never flashes an empty grid and then a second set of tiles.
+    /// Builds the row's strip and unfolds it — the record that just finished is the one the user
+    /// wants to look at, so no extra click is needed; every other row folds via
+    /// <see cref="ReleaseOtherStrips"/>. <paramref name="seedThumbnails"/> are the pages already
+    /// shown live during the scan: the strip starts with them so it never flashes an empty grid
+    /// and then a second set of tiles.
     /// </summary>
     public void Open(
         FileJobViewModel job,
-        IReadOnlyList<ImageSource>? seedThumbnails = null,
-        bool autoOpen = true)
+        IReadOnlyList<ImageSource>? seedThumbnails = null)
     {
         string? path = job.OutputPath;
         if (string.IsNullOrWhiteSpace(path) || !File.Exists(path) ||
@@ -104,22 +103,20 @@ public sealed class PreviewStripCoordinator
             scanProvider: scanRow ? _scanIntoStrip : null, // scan rows can insert scans into gaps
             seedThumbnails: seedThumbnails);
         strip.EnlargeRequested += (_, _) => EnlargeRequested(strip);
-        job.AttachStrip(strip, autoOpen);
+        job.AttachStrip(strip);
         // Accordion: the row being opened is the only one whose decoded tiles stay resident.
         // Older strips fold and release their bitmaps, so a scan-heavy session holds one
         // document's pixels instead of every document's.
         ReleaseOtherStrips(job);
         AppLog.Info($"打开预览：{path}");
-        _ = LoadAndMaybeFoldAsync(strip, job, autoOpen);
+        _ = LoadAsync(strip, job);
     }
 
     /// <summary>
-    /// Runs the strip's post-load work (auto-orient / blank cleanup) even when it stays folded:
-    /// scans keep their corrected output, but a folded row releases every decoded tile once the
-    /// load finishes instead of holding the document's pixels in the history list.
+    /// Runs the strip's post-load work (auto-orient / blank cleanup). A row folded while its
+    /// load was still in flight hands the decoded tiles back instead of keeping them resident.
     /// </summary>
-    private static async Task LoadAndMaybeFoldAsync(
-        PdfPreviewViewModel strip, FileJobViewModel job, bool autoOpen)
+    private static async Task LoadAsync(PdfPreviewViewModel strip, FileJobViewModel job)
     {
         try
         {
@@ -131,7 +128,7 @@ public sealed class PreviewStripCoordinator
             return;
         }
 
-        if (!autoOpen && !job.StripOpen)
+        if (!job.StripOpen)
         {
             strip.ReleaseThumbnailImages();
         }
@@ -149,16 +146,16 @@ public sealed class PreviewStripCoordinator
     }
 
     /// <summary>
-    /// Zero-click preview for drag-dropped rows: the moment a watermark job lands its PDF, the
-    /// strip unfolds exactly like a fresh scan's. Runs on the queue's worker thread, so the strip
-    /// build marshals to the UI thread. Scan rows are excluded — their strip already opened when
-    /// the scan landed, and a second call would fold it back up.
+    /// Zero-click preview for every entry that just finished (扫描 / 拖入文件 / 手机传文件 …):
+    /// the new record unfolds its strip while all other rows stay folded. Rows whose output is
+    /// not a PDF on disk (images and other formats) are skipped silently — no dialog, no strip.
+    /// Called from queue workers and transfer callbacks, so the build marshals to the UI thread.
     /// </summary>
     public void OpenWhenFinished(FileJobViewModel job)
     {
-        if (job.OwnerFeatureId != "watermark.badge") return;
         if (job.State != JobState.Succeeded) return;
-        if (job.Strip is not null) return;
+        if (job.Strip is not null) return; // scan rows already opened their own strip
+        if (!job.ShowPreview || job.OutputPath is not { } output || !File.Exists(output)) return;
 
         var dispatcher = Application.Current?.Dispatcher;
         if (dispatcher is null) return;

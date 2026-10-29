@@ -26,10 +26,12 @@ public partial class App : Application
         _instanceGuard = new SingleInstanceGuard();
         if (!_instanceGuard.IsFirst)
         {
-            StartupUri = null;
+            // StartupUri cannot be cleared: WPF's setter rejects null with ArgumentNullException,
+            // so the old "clear it and shut down" crashed the second copy (APPCRASH in WER)
+            // instead of leaving quietly. Exit right here — nothing has been initialised yet and
+            // the first copy is already being activated by the guard.
             _instanceGuard.Dispose();
-            Shutdown(0);
-            return;
+            Environment.Exit(0);
         }
 
         base.OnStartup(e);

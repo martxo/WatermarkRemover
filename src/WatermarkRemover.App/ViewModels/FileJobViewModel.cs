@@ -169,8 +169,8 @@ public sealed class FileJobViewModel : ObservableObject
         string.Equals(Path.GetExtension(path), ".pdf", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
-    /// Every finished row — scans included — keeps a 预览/收起 button. Scan records start folded
-    /// so a long history stays compact; the strip is built on first expand and released on fold.
+    /// Every finished row — scans included — keeps a 预览/收起 button. The row that just finished
+    /// unfolds its strip on its own; older rows stay folded, and a fold hands the tiles back.
     /// </summary>
     public Visibility PreviewButtonVisibility =>
         ShowPreview ? Visibility.Visible : Visibility.Collapsed;
@@ -249,11 +249,11 @@ public sealed class FileJobViewModel : ObservableObject
         return image;
     }
 
-    /// <summary>Owner side (coordinator): attach a freshly built strip; unfold only when asked.</summary>
-    internal void AttachStrip(PdfPreviewViewModel strip, bool autoOpen = true)
+    /// <summary>Owner side (coordinator): attach a freshly built strip and unfold it.</summary>
+    internal void AttachStrip(PdfPreviewViewModel strip)
     {
         Strip = strip;
-        StripOpen = autoOpen;
+        StripOpen = true;
     }
 
     public string Detail
