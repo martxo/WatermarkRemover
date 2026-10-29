@@ -161,6 +161,15 @@ public partial class SettingsPage : UserControl
         vm.NotifyCloudChanged();
     }
 
+    /// <summary>PasswordBox cannot bind, so the passphrase is pushed into the view model here.</summary>
+    private void OnLoginPackPassphraseChanged(object sender, RoutedEventArgs e)
+    {
+        if (ViewModel is { } vm && sender is PasswordBox box)
+        {
+            vm.LoginPackPassphrase = box.Password;
+        }
+    }
+
     /// <summary>File picker for the private login pack; the view model does the import.</summary>
     private void OnImportLoginPackRequested(object? sender, EventArgs e)
     {

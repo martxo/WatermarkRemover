@@ -531,9 +531,16 @@
                             <StackPanel>
                                 <TextBlock Text="{Binding LoginPackStatusText}"
                                            Style="{StaticResource RowCaption}"/>
-                                <TextBlock Text="导出后会在本机生成 login-pack.json，并以私有文件上传到阿里云盘 资源库/WatermarkRemover/private/。另一台把这个文件放到程序目录或 %APPDATA%\WatermarkRemover 后启动即可自动登录；也可用下方按钮手动导入。登录包含账号令牌，请勿发到公开群/仓库。"
+                                <TextBlock Text="导出后会在本机生成 login-pack.json，并以私有文件上传到阿里云盘 资源库/WatermarkRemover/private/。登录包含账号令牌，会用下面的口令做 AES-256-GCM 加密；另一台在「导入登录状态文件」里选中它并输入同一口令即可登录。口令只保存在当前窗口，不写盘。"
                                            Style="{StaticResource RowCaption}"
                                            Margin="0,4,0,0"/>
+                                <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                    <TextBlock Text="登录包口令：" FontSize="13" VerticalAlignment="Center"
+                                               Foreground="{StaticResource TextPrimaryBrush}"/>
+                                    <PasswordBox x:Name="LoginPackPassphraseBox"
+                                                 Width="220" Padding="8,6" VerticalContentAlignment="Center"
+                                                 PasswordChanged="OnLoginPackPassphraseChanged"/>
+                                </StackPanel>
                                 <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
                                     <Button Content="导出登录状态到云盘"
                                             Style="{StaticResource SmallButton}"
@@ -835,6 +842,23 @@
                                     <Button Content="复制日志" Style="{StaticResource SmallButton}" Margin="8,0,0,0" Command="{Binding CopyLogCommand}"/>
                                     <Button Content="导出日志文件…" Style="{StaticResource SmallButton}" Margin="8,0,0,0" Command="{Binding ExportLogCommand}"/>
                                     <Button Content="打开日志文件夹" Style="{StaticResource SmallButton}" Margin="8,0,0,0" Command="{Binding OpenLogFolderCommand}"/>
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- 崩溃报告：程序出错时自动生成诊断包，默认只留本机，用户主动才上传 -->
+                        <TextBlock Text="崩溃报告" Style="{StaticResource SectionTitle}"/>
+                        <Border Style="{StaticResource InsetCard}">
+                            <StackPanel>
+                                <TextBlock Text="界面线程或后台线程出现未处理异常时，会自动把一个诊断包（版本、系统、异常、最近 400 行日志）保存在本机；最多保留 10 个，不含文档内容。上传是可选项，只会上传到阿里云盘私有目录。"
+                                           Style="{StaticResource RowCaption}"/>
+                                <TextBlock Text="{Binding CrashReportText}"
+                                           Style="{StaticResource RowCaption}"
+                                           Margin="0,6,0,0"/>
+                                <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                    <Button Content="刷新" Style="{StaticResource SmallButton}" Command="{Binding RefreshCrashReportsCommand}"/>
+                                    <Button Content="打开崩溃报告文件夹" Style="{StaticResource SmallButton}" Margin="8,0,0,0" Command="{Binding OpenCrashFolderCommand}"/>
+                                    <Button Content="上传到云盘（可选）" Style="{StaticResource SmallButton}" Margin="8,0,0,0" Command="{Binding UploadCrashReportsCommand}"/>
                                 </StackPanel>
                             </StackPanel>
                         </Border>

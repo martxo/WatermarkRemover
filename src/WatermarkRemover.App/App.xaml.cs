@@ -108,6 +108,7 @@ public partial class App : Application
     {
         AppLog.Error("界面线程未处理异常", e.Exception);
         AppLog.Flush(); // the crash may be followed by a kill: get the stack on disk first
+        CrashReporter.Capture(e.Exception, "界面线程未处理异常");
         ShowUnexpectedErrorDialog(e.Exception);
         e.Handled = true;
     }
@@ -116,6 +117,7 @@ public partial class App : Application
     private static void OnDomainUnhandledException(object sender, UnhandledExceptionEventArgs e)
     {
         AppLog.Error("后台线程致命异常", e.ExceptionObject as Exception);
+        CrashReporter.Capture(e.ExceptionObject as Exception, "后台线程致命异常");
         NoteExitReason($"后台线程致命异常（{e.ExceptionObject?.GetType().Name}）");
     }
 

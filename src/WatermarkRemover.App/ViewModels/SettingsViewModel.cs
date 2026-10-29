@@ -91,6 +91,10 @@ public sealed class SettingsViewModel : ObservableObject
         RefreshUpdateStorage();
         RefreshReportsCommand = new RelayCommand(_ => RefreshReports());
         OpenReportsFolderCommand = new RelayCommand(_ => OpenReportsFolder());
+        RefreshCrashReportsCommand = new RelayCommand(_ => RefreshCrashReports());
+        OpenCrashFolderCommand = new RelayCommand(_ => OpenCrashFolder());
+        UploadCrashReportsCommand = new RelayCommand(_ => _ = UploadCrashReportsAsync());
+        RefreshCrashReports();
 
         ExportLoginPackCommand = new RelayCommand(() => _ = ExportLoginPackAsync());
         ImportLoginPackCommand = new RelayCommand(() => ImportLoginPackRequested?.Invoke(this, EventArgs.Empty));
@@ -120,6 +124,18 @@ public sealed class SettingsViewModel : ObservableObject
     // ── 登录状态迁移（私有登录包）──
 
     private string _loginPackStatusText = string.Empty;
+    private string _loginPackPassphrase = string.Empty;
+
+    /// <summary>
+    /// Passphrase that encrypts an exported pack and opens an encrypted one on the other PC.
+    /// Never persisted: it only lives for this window, so a leaked settings file cannot unlock
+    /// the cloud copy.
+    /// </summary>
+    public string LoginPackPassphrase
+    {
+        get => _loginPackPassphrase;
+        set => SetProperty(ref _loginPackPassphrase, value);
+    }
 
     /// <summary>One-line state of the portable aliyunpan login on this machine.</summary>
     public string LoginPackStatusText
@@ -148,10 +164,21 @@ public sealed class SettingsViewModel : ObservableObject
                 return;
             }
 
+            // A pack carries live tokens: without a passphrase it would be uploaded in the clear.
+            if (string.IsNullOrWhiteSpace(LoginPackPassphrase))
+            {
+                _dialogs.Warn(
+                    "请先输入「登录包口令」。登录包里是账号令牌，必须用口令加密后才能导出/上传。",
+                    "登录状态");
+                return;
+            }
+
             LoginPackStatusText = "正在导出登录状态到云盘…";
-            CloudLoginPackResult result = await service.ExportLoginPackAsync().ConfigureAwait(true);
+            CloudLoginPackResult result = await service
+                .ExportLoginPackAsync(LoginPackPassphrase).ConfigureAwait(true);
             LoginPackStatusText =
-                $"已导出：本机 {result.LocalPath}；云端 {result.CloudPath}。另一台下载后放到程序目录即可自动导入。";
+                $"已导出（口令加密）：本机 {result.LocalPath}；云端 {result.CloudPath}。" +
+                "另一台导入时需要同一口令。";
 
             // Tokens may have rotated during the export — refresh the account summary.
             NotifyCloudChanged();
@@ -159,8 +186,8 @@ public sealed class SettingsViewModel : ObservableObject
                 "登录状态已导出。\n\n" +
                 $"本机文件：{result.LocalPath}\n" +
                 $"云端私有文件：{result.CloudPath}\n\n" +
-                "另一台电脑把这个 login-pack.json 放到程序目录（或 %APPDATA%\\WatermarkRemover）后启动，就会自动登录；" +
-                "也可以在「网盘设置」里用「导入登录状态文件」手动导入。",
+                "这个 login-pack.json 已用口令加密。另一台电脑在「导入登录状态文件」里选中它并输入同一口令即可登录" +
+                "（加密包不会在启动时自动导入，必须手动输入口令）。",
                 "登录状态");
         }
         catch (Exception ex)
@@ -176,7 +203,7 @@ public sealed class SettingsViewModel : ObservableObject
     {
         try
         {
-            CloudUpdateService.ImportLoginPack(path);
+            CloudUpdateService.ImportLoginPack(path, LoginPackPassphrase);
             if (AliyunpanCliRuntime.TryBuildAccountValues() is { } values)
             {
                 Netdisk?.AddImportedCliAccount("阿里云盘（导入）", values);
@@ -584,6 +611,73 @@ public sealed class SettingsViewModel : ObservableObject
     public RelayCommand RefreshReportsCommand { get; }
 
     public RelayCommand OpenReportsFolderCommand { get; }
+
+    // ── 崩溃报告 ──
+
+    private string _crashReportText = string.Empty;
+
+    /// <summary>One line: how many crash bundles are waiting and how old the newest one is.</summary>
+    public string CrashReportText
+    {
+        get => _crashReportText;
+        private set => SetProperty(ref _crashReportText, value);
+    }
+
+    public RelayCommand RefreshCrashReportsCommand { get; }
+
+    public RelayCommand OpenCrashFolderCommand { get; }
+
+    /// <summary>Opt-in upload to /WatermarkRemover/private/crashes; never automatic.</summary>
+    public RelayCommand UploadCrashReportsCommand { get; }
+
+    private void RefreshCrashReports()
+    {
+        IReadOnlyList<FileInfo> reports = CrashReporter.Reports();
+        CrashReportText = reports.Count == 0
+            ? "本机没有崩溃报告。程序出错时会自动生成一个诊断包保存在这里。"
+            : $"{reports.Count} 个崩溃报告待处理（最新 {reports[0].LastWriteTime:MM-dd HH:mm}，" +
+              $"共 {Math.Max(1, reports.Sum(r => r.Length) / 1024)} KB）";
+    }
+
+    private void OpenCrashFolder()
+    {
+        if (!_shell.TryOpenDirectory(CrashReporter.Directory, out string? error))
+            _dialogs.Warn($"打开失败：{error}", "提示");
+    }
+
+    private async Task UploadCrashReportsAsync()
+    {
+        IReadOnlyList<FileInfo> reports = CrashReporter.Reports();
+        if (reports.Count == 0)
+        {
+            _dialogs.Info("没有待上传的崩溃报告。", "崩溃报告");
+            return;
+        }
+
+        var service = new CloudUpdateService(_target, new DpapiSecretProtector());
+        if (!service.IsConfigured)
+        {
+            _dialogs.Warn("请先在「网盘设置」完成阿里云盘登录，再上传崩溃报告。", "崩溃报告");
+            return;
+        }
+
+        try
+        {
+            int uploaded = await service
+                .UploadCrashReportsAsync(reports.Select(r => r.FullName).ToArray())
+                .ConfigureAwait(true);
+            CrashReportText = $"已上传 {uploaded} 个崩溃报告到云盘私有目录。";
+            _dialogs.Info(
+                $"已上传 {uploaded} 个崩溃报告到 阿里云盘 /WatermarkRemover/private/crashes。\n\n" +
+                "在任意一台已登录的电脑上都能看到，便于统一排查。",
+                "崩溃报告");
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("上传崩溃报告失败", ex);
+            _dialogs.Warn($"上传崩溃报告失败：{ex.Message}", "崩溃报告");
+        }
+    }
 
     /// <summary>Notifies bindings that depend on the output suffix (the preview line).</summary>
     public void NotifySuffixChanged() => OnPropertyChanged(nameof(SuffixPreviewText));

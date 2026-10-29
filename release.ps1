@@ -19,7 +19,19 @@ param(
     # Release note shown in the 云更新版本列表 (defaults to the version tag).
     [string]$Note = '',
     # Skip the 阿里云盘 step (GitHub-only publish).
-    [switch]$SkipCloud
+    [switch]$SkipCloud,
+    # Code signing. An unsigned installer is blocked by SmartScreen and can be replaced in the
+    # update channel, so a shipped release must be signed. Supply ONE of:
+    #   -SignPfx <path> -SignPassword <pwd>      → signtool with a .pfx file
+    #   -SignThumbprint <sha1 thumbprint>        → a certificate already in CurrentUser\My
+    #   -AzureSignMetadata <metadata.json>       → Azure Trusted Signing
+    # CI can set WM_SIGN_PFX / WM_SIGN_PASSWORD / WM_SIGN_THUMBPRINT / WM_AZURE_SIGN_FILE.
+    [string]$SignPfx = '',
+    [string]$SignPassword = '',
+    [string]$SignThumbprint = '',
+    [string]$AzureSignMetadata = '',
+    # Fail instead of silently producing an unsigned installer (use for real releases).
+    [switch]$RequireSigning
 )
 
 $ErrorActionPreference = 'Stop'
@@ -47,10 +59,41 @@ Write-Host "== 1/4 vpk pack $Version =="
 # --noPortable: the Portable zip is a second 236MB copy of the same payload, uploaded only for
 # people who unzip instead of installing — which we no longer support (Setup installs get
 # deltas; an unzipped copy never can). Skipping it cuts ~1/5 of every release upload.
-vpk pack --packId WatermarkRemover --packVersion $Version `
-    --packTitle "办公助理" `
-    --packDir d:\code\publish-staging --mainExe WatermarkRemover.exe --noPortable
+$signPfx = if ($SignPfx) { $SignPfx } else { $env:WM_SIGN_PFX }
+$signPassword = if ($SignPassword) { $SignPassword } else { $env:WM_SIGN_PASSWORD }
+$signThumbprint = if ($SignThumbprint) { $SignThumbprint } else { $env:WM_SIGN_THUMBPRINT }
+$azureSign = if ($AzureSignMetadata) { $AzureSignMetadata } else { $env:WM_AZURE_SIGN_FILE }
+
+$packArgs = @('pack', '--packId', 'WatermarkRemover', '--packVersion', $Version,
+    '--packTitle', '办公助理', '--packDir', 'd:\code\publish-staging',
+    '--mainExe', 'WatermarkRemover.exe', '--noPortable')
+if ($azureSign) {
+    $packArgs += @('--azureTrustedSignFile', $azureSign)
+} elseif ($signPfx) {
+    $packArgs += @('--signParams',
+        "/f `"$signPfx`" /p `"$signPassword`" /fd SHA256 /tr http://timestamp.digicert.com /td SHA256")
+} elseif ($signThumbprint) {
+    $packArgs += @('--signParams',
+        "/sha1 $signThumbprint /fd SHA256 /tr http://timestamp.digicert.com /td SHA256")
+} elseif ($RequireSigning) {
+    throw ('签名证书缺失：请传 -SignPfx/-SignThumbprint/-AzureSignMetadata（或设置 WM_SIGN_*），' +
+           '或去掉 -RequireSigning 来生成未签名包。未签名安装包会被 SmartScreen 拦截。')
+} else {
+    Write-Host '  WARN: 未配置签名证书 — 本次生成未签名安装包（SmartScreen 会拦截）。'
+}
+
+& vpk @packArgs
 if ($LASTEXITCODE -ne 0) { throw "vpk pack failed ($LASTEXITCODE)" }
+
+# The setup bundle is what users actually double-click: check the signature is really valid
+# rather than trusting that the parameters were applied.
+$setupPath = 'd:\code\Releases\WatermarkRemover-win-Setup.exe'
+$signature = Get-AuthenticodeSignature $setupPath
+$signer = if ($signature.SignerCertificate) { $signature.SignerCertificate.Subject } else { '(unsigned)' }
+Write-Host ("  setup signature: " + $signature.Status + "  " + $signer)
+if ($RequireSigning -and $signature.Status -ne 'Valid') {
+    throw "安装包签名校验失败：$($signature.Status)"
+}
 
 if (-not $SkipCloud) {
     Write-Host "== 2/4 publish 阿里云盘 incremental (only changed chunks) =="

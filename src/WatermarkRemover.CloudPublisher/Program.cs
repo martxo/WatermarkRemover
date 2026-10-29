@@ -45,7 +45,9 @@ if (options.ImportLogin is { } importFile)
         return 2;
     }
 
-    string stable = AliyunpanCliRuntime.ImportConfig(await File.ReadAllTextAsync(importFile, ct));
+    string text = await File.ReadAllTextAsync(importFile, ct);
+    string json = LoginPack.Unprotect(text, options.LoginPassphrase);
+    string stable = AliyunpanCliRuntime.ImportConfig(json);
     Console.WriteLine($"登录状态已导入：{stable}");
     return 0;
 }
@@ -63,7 +65,15 @@ if (options.ExportLogin)
 
     string raw = AliyunpanCliRuntime.TryReadRawConfig()
         ?? throw new InvalidOperationException("未找到阿里云盘登录配置，请先登录。");
-    string pack = LoginPack.Create(raw);
+    if (string.IsNullOrWhiteSpace(options.LoginPassphrase))
+    {
+        Console.Error.WriteLine(
+            "导出登录状态需要口令：--login-passphrase <口令> 或环境变量 WM_LOGIN_PACK_KEY。\n" +
+            "登录包带账号令牌，禁止明文上传。");
+        return 2;
+    }
+
+    string pack = LoginPack.Protect(LoginPack.Create(raw), options.LoginPassphrase);
     string localDir = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "WatermarkRemover");
     Directory.CreateDirectory(localDir);
@@ -77,7 +87,7 @@ if (options.ExportLogin)
 
     Console.WriteLine($"登录状态已导出：{localPath}");
     Console.WriteLine($"云端私有文件：/{CloudUpdateFormat.RootFolder}/private/{LoginPack.FileName}");
-    Console.WriteLine("把该文件放到另一台电脑的程序目录或 %APPDATA%\\WatermarkRemover 后启动即可自动登录。");
+    Console.WriteLine("文件已用口令加密。另一台电脑用同一口令导入（设置→网盘设置→导入登录状态文件）。");
     return 0;
 }
 
@@ -502,6 +512,7 @@ static PublishOptions? ParseArgs(string[] arguments)
     string? importLogin = null;
     string? latestFile = null;
     string? versionsFile = null;
+    string? loginPassphrase = null;
     string note = string.Empty;
     int keep = CloudUpdateFormat.DefaultKeep;
     bool dryRun = false;
@@ -552,8 +563,14 @@ static PublishOptions? ParseArgs(string[] arguments)
             case "--no-gc":
                 noGc = true;
                 break;
+            case "--login-passphrase":
+                loginPassphrase = ++i < arguments.Length ? arguments[i] : null;
+                break;
         }
     }
+
+    // The passphrase may also arrive through the environment, which keeps it out of shell history.
+    loginPassphrase ??= Environment.GetEnvironmentVariable("WM_LOGIN_PACK_KEY");
 
     bool toolMode = exportLogin || probeMove ||
                     !string.IsNullOrWhiteSpace(probe) || !string.IsNullOrWhiteSpace(importLogin);
@@ -574,7 +591,8 @@ static PublishOptions? ParseArgs(string[] arguments)
         probeMove,
         latestFile is null ? null : Path.GetFullPath(latestFile),
         versionsFile is null ? null : Path.GetFullPath(versionsFile),
-        noGc);
+        noGc,
+        loginPassphrase);
 }
 
 internal sealed record PublishOptions(
@@ -590,4 +608,5 @@ internal sealed record PublishOptions(
     bool ProbeMove,
     string? LatestFile,
     string? VersionsFile,
-    bool NoGc);
+    bool NoGc,
+    string? LoginPassphrase);

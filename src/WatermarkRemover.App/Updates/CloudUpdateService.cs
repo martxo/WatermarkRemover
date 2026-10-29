@@ -158,9 +158,12 @@ public sealed class CloudUpdateService
 
     /// <summary>
     /// Exports the current CLI login as a portable pack: a local copy in the stable data folder
-    /// and a private copy under /WatermarkRemover/private/ on the account's 资源库.
+    /// and a private copy under /WatermarkRemover/private/ on the account's 资源库. The pack is
+    /// encrypted with <paramref name="passphrase"/> — a pack holds live tokens and must never sit
+    /// in the cloud (or a Downloads folder) in the clear.
     /// </summary>
-    public async Task<CloudLoginPackResult> ExportLoginPackAsync(CancellationToken cancellationToken = default)
+    public async Task<CloudLoginPackResult> ExportLoginPackAsync(
+        string passphrase, CancellationToken cancellationToken = default)
     {
         if (_account is null)
         {
@@ -170,7 +173,7 @@ public sealed class CloudUpdateService
         AliyunpanCliRuntime.EnsureStableConfig();
         string raw = AliyunpanCliRuntime.TryReadRawConfig()
             ?? throw new InvalidOperationException("未找到本机 aliyunpan 登录配置，请先完成扫码登录。");
-        string pack = LoginPack.Create(raw);
+        string pack = LoginPack.Protect(LoginPack.Create(raw), passphrase);
 
         Directory.CreateDirectory(AppFolders.Root);
         string localPath = Path.Combine(AppFolders.Root, LoginPack.FileName);
@@ -195,10 +198,53 @@ public sealed class CloudUpdateService
         return new CloudLoginPackResult(localPath, cloudPath);
     }
 
-    /// <summary>Imports a pack into the stable CLI config used by the app.</summary>
-    public static string ImportLoginPack(string packPath)
+    /// <summary>
+    /// Uploads local crash bundles to /WatermarkRemover/private/crashes. Opt-in only (设置 → 日志):
+    /// the app never sends diagnostics on its own, and the files contain no document content.
+    /// </summary>
+    public async Task<int> UploadCrashReportsAsync(
+        IReadOnlyList<string> localPaths, CancellationToken cancellationToken = default)
     {
-        string json = File.ReadAllText(packPath);
+        if (_account is null)
+        {
+            throw new InvalidOperationException("尚未登录阿里云盘，无法上传崩溃报告。");
+        }
+
+        if (localPaths.Count == 0) return 0;
+
+        await using AliyunDriveSessionBundle bundle = await OpenAsync(createFolders: true, cancellationToken)
+            .ConfigureAwait(false);
+        if (bundle.RootFolderId is null)
+        {
+            throw new InvalidOperationException("云端更新目录不存在，无法上传崩溃报告。");
+        }
+
+        string folder = await bundle.Session
+            .EnsureFolderAsync($"{CloudUpdateFormat.RootFolder}/private/crashes", cancellationToken)
+            .ConfigureAwait(false);
+
+        int uploaded = 0;
+        foreach (string path in localPaths)
+        {
+            byte[] bytes = await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
+            await bundle.Session
+                .UploadBytesAsync(folder, Path.GetFileName(path), bytes, cancellationToken)
+                .ConfigureAwait(false);
+            uploaded++;
+        }
+
+        AppLog.Info($"崩溃报告已上传 {uploaded} 个：/{CloudUpdateFormat.RootFolder}/private/crashes");
+        return uploaded;
+    }
+
+    /// <summary>
+    /// Imports a pack into the stable CLI config used by the app. Encrypted packs need the passphrase
+    /// chosen at export; legacy plaintext packs import without one.
+    /// </summary>
+    public static string ImportLoginPack(string packPath, string? passphrase = null)
+    {
+        string text = File.ReadAllText(packPath);
+        string json = LoginPack.Unprotect(text, passphrase);
         string stable = AliyunpanCliRuntime.ImportConfig(json);
         AppLog.Info($"已导入阿里云盘登录状态：{packPath}");
         return stable;
@@ -206,7 +252,8 @@ public sealed class CloudUpdateService
 
     /// <summary>
     /// Startup import: a login-pack.json beside the executable or in the stable data folder is
-    /// applied when no CLI login exists yet (a fresh machine).
+    /// applied when no CLI login exists yet (a fresh machine). Encrypted packs cannot be opened
+    /// without a passphrase, so they are left for the settings page (which can ask for it).
     /// </summary>
     public static bool TryAutoImportLoginPack()
     {
@@ -217,6 +264,12 @@ public sealed class CloudUpdateService
             if (!File.Exists(candidate)) continue;
             try
             {
+                if (LoginPack.IsProtected(File.ReadAllText(candidate)))
+                {
+                    AppLog.Info($"检测到已加密的登录包（{candidate}），需在设置→网盘设置里输入口令导入。");
+                    continue;
+                }
+
                 ImportLoginPack(candidate);
                 return true;
             }
