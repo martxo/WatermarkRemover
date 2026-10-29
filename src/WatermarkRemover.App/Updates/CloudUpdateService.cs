@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.IO;
 using System.Security.Cryptography;
 using System.Text;
@@ -85,22 +85,6 @@ public sealed class CloudApplyResult
     public string FinishedAt { get; set; } = string.Empty;
 }
 
-internal sealed class CloudApplyPlan
-{
-    public string AppDir { get; set; } = string.Empty;
-    public string StagingDir { get; set; } = string.Empty;
-    public string BackupDir { get; set; } = string.Empty;
-    public string ResultPath { get; set; } = string.Empty;
-    public string ExePath { get; set; } = string.Empty;
-    public string FromVersion { get; set; } = string.Empty;
-    public string ToVersion { get; set; } = string.Empty;
-    public string Direction { get; set; } = "update";
-    public string Note { get; set; } = string.Empty;
-    public int WaitPid { get; set; }
-    public List<string> Files { get; set; } = new();
-    public List<string> Deletes { get; set; } = new();
-}
-
 /// <summary>
 /// 阿里云盘 file-level update channel. The repository holds one manifest per retained version and
 /// content-addressed chunks shared by all versions; a client hashes its own install, reuses chunks
@@ -111,13 +95,6 @@ public sealed class CloudUpdateService
 {
     private const string ProviderId = "alipan";
     private const string DriveName = "资源库";
-
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        WriteIndented = true,
-        PropertyNameCaseInsensitive = true,
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-    };
 
     private readonly AppSettings _settings;
     private readonly ISecretProtector _protector;
@@ -302,17 +279,9 @@ public sealed class CloudUpdateService
     public string AccountName => _account?.Name ?? string.Empty;
 
     /// <summary>Where staging, chunk cache, backups and the install log live (never inside the app dir).</summary>
-    public static string StateDirectory { get; } = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "WatermarkRemover", "cloud-updates");
+    public static string StateDirectory => CloudUpdatePaths.State;
 
-    public static string ChunkCacheDirectory => Path.Combine(StateDirectory, "chunks");
-
-    private static string StagingRoot => Path.Combine(StateDirectory, "staging");
-    private static string BackupRoot => Path.Combine(StateDirectory, "backup");
-    private static string LocalIndexPath => Path.Combine(StateDirectory, "local-index.json");
-    private static string HistoryPath => Path.Combine(StateDirectory, "history.json");
-    private static string ResultPath => Path.Combine(StateDirectory, "last-apply.json");
+    public static string ChunkCacheDirectory => CloudUpdatePaths.ChunkCache;
 
     // ── check ────────────────────────────────────────────────────────────────
 
@@ -359,7 +328,7 @@ public sealed class CloudUpdateService
                     $"云端版本号无法识别：{manifest.Version}", current, null, manifest, null, null, versions);
             }
 
-            string appDir = AppDirectory();
+            string appDir = CloudApplyService.AppDirectory();
             string[] localPaths = manifest.Files.Select(f => f.Path).Concat(manifest.Deleted).ToArray();
             LocalFileIndex local = await Task.Run(() => BuildLocalIndex(appDir, localPaths), cancellationToken)
                 .ConfigureAwait(false);
@@ -445,7 +414,7 @@ public sealed class CloudUpdateService
                     .ToList();
             }
 
-            string appDir = AppDirectory();
+            string appDir = CloudApplyService.AppDirectory();
             string[] localPaths = target.Files.Select(f => f.Path).Concat(target.Deleted).ToArray();
             LocalFileIndex local = await Task.Run(() => BuildLocalIndex(appDir, localPaths), cancellationToken)
                 .ConfigureAwait(false);
@@ -497,7 +466,7 @@ public sealed class CloudUpdateService
         }
 
         Directory.CreateDirectory(ChunkCacheDirectory);
-        string staging = Path.Combine(StagingRoot, $"{check.Manifest.Version}-{Guid.NewGuid():N}");
+        string staging = Path.Combine(CloudUpdatePaths.Staging, $"{check.Manifest.Version}-{Guid.NewGuid():N}");
         Directory.CreateDirectory(staging);
 
         // Remote chunk ids are only listed when something actually has to be fetched. A listing
@@ -578,7 +547,8 @@ public sealed class CloudUpdateService
 
                 AppLog.Debug($"云更新：CLI 下载分块 {chunk.Sha256[..12]}… 耗时 {ElapsedMs(cliTicks)} ms");
             }
-            if (new FileInfo(temp).Length != chunk.Size || !string.Equals(HashFile(temp), chunk.Sha256, StringComparison.Ordinal))
+            if (new FileInfo(temp).Length != chunk.Size ||
+                !string.Equals(CloudHash.Sha256HexFile(temp), chunk.Sha256, StringComparison.Ordinal))
             {
                 File.Delete(temp);
                 throw new InvalidDataException($"分块 {chunk.Sha256[..12]}… 校验失败，已放弃本次更新。");
@@ -591,7 +561,7 @@ public sealed class CloudUpdateService
 
         progress?.Report(new CloudUpdateProgress(CloudUpdateStage.Assembling, 100, downloaded, totalBytes,
             $"正在组装 {plan.ChangedFiles.Count} 个文件…"));
-        string appDir = AppDirectory();
+        string appDir = CloudApplyService.AppDirectory();
         foreach (CloudManifestFile file in plan.ChangedFiles)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -615,391 +585,20 @@ public sealed class CloudUpdateService
 
     // ── apply + rollback ─────────────────────────────────────────────────────
 
-    /// <summary>
-    /// Schedules the staged files to replace the install after this process exits. The caller
-    /// shuts the application down right after this returns; the script relaunches it.
-    /// </summary>
-    public void ApplyAndRestart(CloudStageResult staged, string direction, string note)
-    {
-        if (string.IsNullOrEmpty(staged.StagingDirectory) || !Directory.Exists(staged.StagingDirectory))
-        {
-            throw new InvalidOperationException("暂存目录不存在，无法应用更新。");
-        }
+    /// <summary>Hands the staged files to the detached apply script (see CloudApplyService).</summary>
+    public void ApplyAndRestart(CloudStageResult staged, string direction, string note) =>
+        CloudApplyService.ApplyAndRestart(staged, direction, note);
 
-        string appDir = AppDirectory();
-        string exe = Environment.ProcessPath
-            ?? throw new InvalidOperationException("无法确定当前程序路径。");
-        string guid = Guid.NewGuid().ToString("N");
-        Directory.CreateDirectory(StateDirectory);
-        string backup = Path.Combine(BackupRoot, guid);
-        Directory.CreateDirectory(backup);
+    /// <summary>The background script's verdict, folded into the install history at startup.</summary>
+    public static CloudApplyResult? ReconcileLastApply() => CloudApplyService.ReconcileLastApply();
 
-        var plan = new CloudApplyPlan
-        {
-            AppDir = appDir,
-            StagingDir = staged.StagingDirectory,
-            BackupDir = backup,
-            ResultPath = ResultPath,
-            ExePath = exe,
-            FromVersion = staged.Check.Current.ToString(),
-            ToVersion = staged.Check.Latest?.ToString() ?? staged.Check.Manifest?.Version ?? string.Empty,
-            Direction = direction,
-            Note = note,
-            WaitPid = Environment.ProcessId,
-            Files = staged.Files.ToList(),
-            Deletes = staged.Deletes.ToList(),
-        };
+    public static IReadOnlyList<CloudUpdateHistoryEntry> ReadHistory() => CloudApplyService.ReadHistory();
 
-        string planPath = Path.Combine(StateDirectory, $"apply-{guid}.json");
-        File.WriteAllText(planPath, JsonSerializer.Serialize(plan, JsonOptions), new UTF8Encoding(false));
+    // local index (hash cache)
 
-        AppendHistory(new CloudUpdateHistoryEntry
-        {
-            At = DateTimeOffset.Now.ToString("O"),
-            FromVersion = plan.FromVersion,
-            ToVersion = plan.ToVersion,
-            Direction = direction,
-            Note = note,
-            Status = "应用中",
-            FileCount = plan.Files.Count,
-            Bytes = staged.DownloadedBytes,
-        });
-
-        string scriptPath = Path.Combine(StateDirectory, $"apply-{guid}.ps1");
-        File.WriteAllText(scriptPath, BuildApplyScript(), new UTF8Encoding(true));
-
-        var start = new ProcessStartInfo
-        {
-            FileName = "powershell.exe",
-            Arguments = $"-NoProfile -ExecutionPolicy Bypass -File \"{scriptPath}\" -PlanPath \"{planPath}\"",
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
-        if (Process.Start(start) is null)
-        {
-            throw new InvalidOperationException("无法启动更新脚本。");
-        }
-
-        AppLog.Info($"云更新已交给后台脚本：{plan.FromVersion} → {plan.ToVersion}（{direction}），" +
-                    $"{plan.Files.Count} 个文件、下载 {FormatBytes(staged.DownloadedBytes)}。");
-    }
-
-    private static string BuildApplyScript() => """
-        param([string]$PlanPath)
-        $ErrorActionPreference = 'Stop'
-        $plan = Get-Content -LiteralPath $PlanPath -Raw -Encoding UTF8 | ConvertFrom-Json
-        function Copy-WithRetry([string]$Source, [string]$Target) {
-            for ($i = 0; $i -lt 6; $i++) {
-                try {
-                    Copy-Item -LiteralPath $Source -Destination $Target -Force
-                    return
-                } catch {
-                    if ($i -eq 5) { throw }
-                    Start-Sleep -Milliseconds 500
-                }
-            }
-        }
-        $deadline = (Get-Date).AddMinutes(3)
-        while ((Get-Process -Id $plan.waitPid -ErrorAction SilentlyContinue) -and ((Get-Date) -lt $deadline)) {
-            Start-Sleep -Milliseconds 400
-        }
-        Start-Sleep -Milliseconds 400
-
-        New-Item -ItemType Directory -Force -Path $plan.backupDir | Out-Null
-        $ok = $true
-        $msg = ''
-        try {
-            foreach ($rel in $plan.files) {
-                $target = Join-Path $plan.appDir $rel
-                if (Test-Path -LiteralPath $target) {
-                    $bak = Join-Path $plan.backupDir $rel
-                    New-Item -ItemType Directory -Force -Path (Split-Path $bak -Parent) | Out-Null
-                    Copy-WithRetry $target $bak
-                }
-                $src = Join-Path $plan.stagingDir $rel
-                New-Item -ItemType Directory -Force -Path (Split-Path $target -Parent) | Out-Null
-                Copy-WithRetry $src $target
-            }
-            foreach ($rel in $plan.deletes) {
-                $target = Join-Path $plan.appDir $rel
-                if (Test-Path -LiteralPath $target) {
-                    $bak = Join-Path $plan.backupDir $rel
-                    New-Item -ItemType Directory -Force -Path (Split-Path $bak -Parent) | Out-Null
-                    Copy-WithRetry $target $bak
-                    Remove-Item -LiteralPath $target -Force
-                }
-            }
-
-            # Keep Velopack's install metadata in step with the files we just replaced; otherwise
-            # the next startup sees sq.version older than the running assembly.
-            $sq = Join-Path $plan.appDir 'sq.version'
-            if (Test-Path -LiteralPath $sq) {
-                Copy-WithRetry $sq (Join-Path $plan.backupDir 'sq.version')
-                $xml = Get-Content -LiteralPath $sq -Raw
-                $xml = [regex]::Replace($xml, '<version>[^<]+</version>', "<version>$($plan.toVersion)</version>")
-                [IO.File]::WriteAllText($sq, $xml, [Text.UTF8Encoding]::new($false))
-            }
-        } catch {
-            $ok = $false
-            $msg = $_.Exception.Message
-            try {
-                foreach ($rel in $plan.files) {
-                    $target = Join-Path $plan.appDir $rel
-                    $bak = Join-Path $plan.backupDir $rel
-                    if (Test-Path -LiteralPath $bak) {
-                        Copy-Item -LiteralPath $bak -Destination $target -Force
-                    } else {
-                        Remove-Item -LiteralPath $target -Force -ErrorAction SilentlyContinue
-                    }
-                }
-                foreach ($rel in $plan.deletes) {
-                    $bak = Join-Path $plan.backupDir $rel
-                    if (Test-Path -LiteralPath $bak) {
-                        Copy-Item -LiteralPath $bak -Destination (Join-Path $plan.appDir $rel) -Force
-                    }
-                }
-                $bakSq = Join-Path $plan.backupDir 'sq.version'
-                if (Test-Path -LiteralPath $bakSq) {
-                    Copy-Item -LiteralPath $bakSq -Destination (Join-Path $plan.appDir 'sq.version') -Force
-                }
-            } catch { }
-        }
-
-        $result = @{
-            success = $ok
-            message = $msg
-            toVersion = $plan.toVersion
-            fromVersion = $plan.fromVersion
-            finishedAt = (Get-Date).ToString('O')
-        } | ConvertTo-Json
-        [IO.File]::WriteAllText($plan.resultPath, $result, [Text.UTF8Encoding]::new($false))
-        Remove-Item -LiteralPath $plan.stagingDir -Recurse -Force -ErrorAction SilentlyContinue
-        Start-Process -FilePath $plan.exePath
-        Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue
-        """;
-
-    /// <summary>
-    /// Called once at startup: folds the background script's result into the install history,
-    /// deletes the consumed result file and prunes old staging/backup folders.
-    /// </summary>
-    public static CloudApplyResult? ReconcileLastApply()
-    {
-        CloudApplyResult? result = null;
-        try
-        {
-            if (File.Exists(ResultPath))
-            {
-                result = JsonSerializer.Deserialize<CloudApplyResult>(File.ReadAllText(ResultPath), JsonOptions);
-                File.Delete(ResultPath);
-            }
-
-            if (result is not null)
-            {
-                var history = ReadHistory();
-                var entry = history.LastOrDefault(e => e.Status == "应用中");
-                if (entry is not null)
-                {
-                    entry.Status = result.Success ? "成功" : "已还原";
-                    entry.Message = result.Message;
-                    WriteHistory(history);
-                }
-
-                AppLog.Info(result.Success
-                    ? $"云更新完成：v{result.FromVersion} → v{result.ToVersion}"
-                    : $"云更新失败，已还原 v{result.FromVersion}：{result.Message}");
-            }
-
-            CleanupStagingAndBackups(result?.Success == true);
-        }
-        catch (Exception ex)
-        {
-            AppLog.Warn($"读取云更新结果失败：{ex.Message}");
-        }
-
-        return result;
-    }
-
-    public static IReadOnlyList<CloudUpdateHistoryEntry> ReadHistory()
-    {
-        try
-        {
-            if (!File.Exists(HistoryPath)) return Array.Empty<CloudUpdateHistoryEntry>();
-            return JsonSerializer.Deserialize<List<CloudUpdateHistoryEntry>>(File.ReadAllText(HistoryPath), JsonOptions)
-                ?? new List<CloudUpdateHistoryEntry>();
-        }
-        catch (Exception ex)
-        {
-            AppLog.Warn($"读取云更新记录失败：{ex.Message}");
-            return Array.Empty<CloudUpdateHistoryEntry>();
-        }
-    }
-
-    private static void AppendHistory(CloudUpdateHistoryEntry entry)
-    {
-        var history = ReadHistory().ToList();
-        history.Add(entry);
-        if (history.Count > 30) history = history.Skip(history.Count - 30).ToList();
-        WriteHistory(history);
-    }
-
-    private static void WriteHistory(IEnumerable<CloudUpdateHistoryEntry> history)
-    {
-        Directory.CreateDirectory(StateDirectory);
-        File.WriteAllText(HistoryPath, JsonSerializer.Serialize(history, JsonOptions), new UTF8Encoding(false));
-    }
-
-    private static void CleanupStagingAndBackups(bool applySucceeded)
-    {
-        try
-        {
-            if (Directory.Exists(StagingRoot))
-            {
-                foreach (string dir in Directory.GetDirectories(StagingRoot))
-                {
-                    try { Directory.Delete(dir, recursive: true); } catch { /* in use / best effort */ }
-                }
-            }
-
-            if (!applySucceeded || !Directory.Exists(BackupRoot)) return;
-            foreach (string dir in Directory.GetDirectories(BackupRoot)
-                         .OrderByDescending(Directory.GetLastWriteTimeUtc)
-                         .Skip(CloudUpdateFormat.DefaultKeep))
-            {
-                try { Directory.Delete(dir, recursive: true); } catch { /* best effort */ }
-            }
-        }
-        catch (Exception ex)
-        {
-            AppLog.Warn($"清理云更新缓存失败：{ex.Message}");
-        }
-    }
-
-    // ── local index (hash cache) ─────────────────────────────────────────────
-
-    private static LocalFileIndex BuildLocalIndex(string appDir, IEnumerable<string> paths)
-    {
-        var cache = ReadLocalIndexCache();
-        string[] wanted = paths.Select(LocalFileIndex.Normalize)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-        var index = new LocalFileIndex();
-        bool dirty = false;
-
-        foreach (string relative in wanted)
-        {
-            string path = LocalFileIndex.ToLocalPath(appDir, relative);
-            if (!File.Exists(path)) continue;
-
-            var info = new FileInfo(path);
-            if (cache.TryGetValue(relative, out CachedFile? cached) &&
-                cached.Size == info.Length &&
-                cached.LastWriteUtcTicks == info.LastWriteTimeUtc.Ticks)
-            {
-                index.Files[relative] = new LocalFileRecord(relative, cached.Size, cached.Sha256,
-                    cached.Chunks.Select(c => new LocalChunkRef(relative, c.Offset, c.Length)).ToList());
-                continue;
-            }
-
-            byte[] bytes = File.ReadAllBytes(path);
-            var chunks = ContentChunker.Split(bytes);
-            index.Files[relative] = new LocalFileRecord(relative, bytes.Length, Hash(bytes),
-                chunks.Select(c => new LocalChunkRef(relative, c.Offset, c.Length)).ToList());
-            cache[relative] = new CachedFile
-            {
-                Size = bytes.Length,
-                LastWriteUtcTicks = info.LastWriteTimeUtc.Ticks,
-                Sha256 = index.Files[relative].Sha256,
-                Chunks = chunks.Select(c => new CachedChunk(c.Sha256, c.Offset, c.Length)).ToList(),
-            };
-            dirty = true;
-        }
-
-        // Build the global chunk → location map once, from every file (cached or fresh).
-        index.Chunks.Clear();
-        foreach (LocalFileRecord record in index.Files.Values)
-        {
-            foreach (LocalChunkRef chunk in record.Chunks)
-            {
-                string sha = ChunkHashAt(record, chunk, appDir, cache);
-                if (sha.Length > 0) index.Chunks[sha] = chunk;
-            }
-        }
-
-        if (dirty) WriteLocalIndexCache(cache);
-        return index;
-    }
-
-    private static string ChunkHashAt(
-        LocalFileRecord record, LocalChunkRef chunk, string appDir, Dictionary<string, CachedFile> cache)
-    {
-        if (cache.TryGetValue(record.Path, out CachedFile? cached))
-        {
-            CachedChunk? match = cached.Chunks.FirstOrDefault(c => c.Offset == chunk.Offset && c.Length == chunk.Length);
-            if (match is not null) return match.Sha256;
-        }
-
-        // Cache miss after a fresh scan is not expected; re-chunk the file to recover the hash.
-        string path = LocalFileIndex.ToLocalPath(appDir, record.Path);
-        byte[] bytes = File.ReadAllBytes(path);
-        var chunks = ContentChunker.Split(bytes);
-        CachedChunk? found = chunks.Select(c => new CachedChunk(c.Sha256, c.Offset, c.Length))
-            .FirstOrDefault(c => c.Offset == chunk.Offset && c.Length == chunk.Length);
-        return found?.Sha256 ?? string.Empty;
-    }
-
-    private static Dictionary<string, CachedFile> ReadLocalIndexCache()
-    {
-        try
-        {
-            if (!File.Exists(LocalIndexPath)) return new Dictionary<string, CachedFile>(StringComparer.OrdinalIgnoreCase);
-            return JsonSerializer.Deserialize<Dictionary<string, CachedFile>>(
-                       File.ReadAllText(LocalIndexPath), JsonOptions)
-                   ?? new Dictionary<string, CachedFile>(StringComparer.OrdinalIgnoreCase);
-        }
-        catch
-        {
-            return new Dictionary<string, CachedFile>(StringComparer.OrdinalIgnoreCase);
-        }
-    }
-
-    private static void WriteLocalIndexCache(Dictionary<string, CachedFile> cache)
-    {
-        try
-        {
-            Directory.CreateDirectory(StateDirectory);
-            File.WriteAllText(LocalIndexPath, JsonSerializer.Serialize(cache, JsonOptions), new UTF8Encoding(false));
-        }
-        catch (Exception ex)
-        {
-            AppLog.Warn($"写入本地文件索引缓存失败：{ex.Message}");
-        }
-    }
-
-    private sealed class CachedFile
-    {
-        public long Size { get; set; }
-        public long LastWriteUtcTicks { get; set; }
-        public string Sha256 { get; set; } = string.Empty;
-        public List<CachedChunk> Chunks { get; set; } = new();
-    }
-
-    private sealed class CachedChunk
-    {
-        public CachedChunk()
-        {
-        }
-
-        public CachedChunk(string sha256, int offset, int length)
-        {
-            Sha256 = sha256;
-            Offset = offset;
-            Length = length;
-        }
-
-        public string Sha256 { get; set; } = string.Empty;
-        public int Offset { get; set; }
-        public int Length { get; set; }
-    }
+    /// <summary>Hashes the given files, reusing the on-disk cache (see LocalFileIndexService).</summary>
+    private static LocalFileIndex BuildLocalIndex(string appDir, IEnumerable<string> paths) =>
+        LocalFileIndexService.Build(appDir, paths);
 
     // ── cloud downloads: API first, bundled aliyunpan CLI as fallback ─────────
 
@@ -1104,20 +703,8 @@ public sealed class CloudUpdateService
 
     // ── small helpers ────────────────────────────────────────────────────────
 
-    private static string AppDirectory() =>
-        Path.GetDirectoryName(Environment.ProcessPath) ?? AppContext.BaseDirectory;
-
     private static T? Parse<T>(byte[]? bytes) where T : class =>
         bytes is null ? null : CloudUpdateFormat.TryParse<T>(Encoding.UTF8.GetString(bytes));
-
-    private static string Hash(byte[] bytes) =>
-        Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
-
-    private static string HashFile(string path)
-    {
-        using var stream = File.OpenRead(path);
-        return Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
-    }
 
     private static void ReportProgress(IProgress<CloudUpdateProgress>? progress, long done, long total, string? message)
     {
