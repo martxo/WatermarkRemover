@@ -279,19 +279,45 @@ public sealed class TransferPanelViewModel : ObservableObject, IDisposable
         {
             Messages.Insert(0, new ReceivedMessageViewModel(message, shareLink));
             OnPropertyChanged(nameof(HasMessages));
-            try
+            string prefix = $"已收到 {message.SenderLabel} 的文本（{message.Text.Length} 字）";
+            if (TryCopyToClipboard(message.Text, out Exception? copyError))
             {
-                Clipboard.SetText(message.Text);
-                StatusText = $"已收到 {message.SenderLabel} 的文本（{message.Text.Length} 字），已自动复制到剪贴板";
+                StatusText = $"{prefix}，已自动复制到剪贴板";
             }
-            catch (Exception ex)
+            else
             {
-                AppLog.Error("手机传文件：写入剪贴板失败", ex);
-                StatusText = $"已收到 {message.SenderLabel} 的文本（{message.Text.Length} 字），写入剪贴板失败，可从列表手动复制";
+                AppLog.Error("手机传文件：写入剪贴板失败", copyError);
+                StatusText = $"{prefix}，写入剪贴板失败，可从列表手动复制";
             }
         });
 
         if (shareLink) StartShareDownload(link);
+    }
+
+    /// <summary>
+    /// Copies the received text with a couple of retries: another app can hold the clipboard for
+    /// a few dozen milliseconds (CLIPBRD_E_CANT_OPEN) exactly while a phone message arrives.
+    /// Only a final failure is reported; the waits total ~120 ms and only when copying fails.
+    /// </summary>
+    private static bool TryCopyToClipboard(string text, out Exception? error)
+    {
+        error = null;
+        for (int attempt = 0; attempt < 3; attempt++)
+        {
+            try
+            {
+                Clipboard.SetText(text);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                error = ex;
+                if (attempt == 2) break;
+                Thread.Sleep(60);
+            }
+        }
+
+        return false;
     }
 
     /// <summary>Background chain for a recognized CamScanner share link: resolve the short link →

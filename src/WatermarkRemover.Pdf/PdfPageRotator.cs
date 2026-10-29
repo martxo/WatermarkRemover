@@ -18,10 +18,15 @@ public static class PdfPageRotator
     /// <summary>Current /Rotate plus a quarter turn, always landing on 0 / 90 / 180 / 270.</summary>
     public static int NextClockwiseRotation(int currentRotation) => (currentRotation % 360 + 90) % 360;
 
-    /// <param name="pdfPath">The file to modify in place.</param>
+    /// <summary>
+    /// Turns one page a quarter turn clockwise and returns the file holding the result: the same
+    /// path, or a "原名 (已旋转).pdf" copy when a viewer holds the original.
+    /// </summary>
+    /// <param name="pdfPath">The file to modify.</param>
     /// <param name="pageIndex">Zero-based page index; out-of-range throws before anything is written.</param>
-    public static void RotateClockwise(string pdfPath, int pageIndex) =>
-        EditInPlace(pdfPath, pageIndex, static (_, page) => page.Rotate = NextClockwiseRotation(page.Rotate));
+    public static string RotateClockwise(string pdfPath, int pageIndex) =>
+        EditInPlace(pdfPath, pageIndex,
+            static (_, page) => page.Rotate = NextClockwiseRotation(page.Rotate), "已旋转");
 
     /// <summary>
     /// Turns a page by the given number of clockwise quarter turns in one in-place edit — the
@@ -79,18 +84,19 @@ public static class PdfPageRotator
         ((currentRotation % 360) + 360 + 90 * (quarterTurns % 4)) % 360;
 
     /// <summary>
-    /// Removes one page from the document, shifting later pages up one index. The last remaining
-    /// page cannot be deleted: a zero-page PDF is not a valid document and readers cannot open it.
+    /// Removes one page and returns the file holding the result: the same path, or a
+    /// "原名 (已删除).pdf" copy when a viewer holds the original. Later pages shift up one index;
+    /// the last remaining page cannot be deleted — a zero-page PDF cannot be opened.
     /// </summary>
-    /// <param name="pdfPath">The file to modify in place.</param>
+    /// <param name="pdfPath">The file to modify.</param>
     /// <param name="pageIndex">Zero-based page index; out-of-range throws before anything is written.</param>
-    public static void DeletePage(string pdfPath, int pageIndex) =>
+    public static string DeletePage(string pdfPath, int pageIndex) =>
         EditInPlace(pdfPath, pageIndex, static (doc, page) =>
         {
             if (doc.PageCount <= 1)
                 throw new InvalidOperationException("PDF 至少要保留一页，不能删除最后一页。");
             doc.Pages.Remove(page);
-        });
+        }, "已删除");
 
     /// <summary>
     /// Removes several pages in one in-place save — the blank-page cleaner may drop any number
@@ -119,14 +125,15 @@ public static class PdfPageRotator
         return removed;
     }
 
-    private static void EditInPlace(string pdfPath, int pageIndex, Action<PdfDocument, PdfPage> edit) =>
-        EditDocument(pdfPath, doc =>
+    private static string EditInPlace(
+        string pdfPath, int pageIndex, Action<PdfDocument, PdfPage> edit, string copySuffix) =>
+        PdfDocumentEditor.EditDocument(pdfPath, doc =>
         {
             if (pageIndex < 0 || pageIndex >= doc.PageCount)
                 throw new ArgumentOutOfRangeException(nameof(pageIndex),
                     $"页码超出范围：第 {pageIndex + 1} 页（共 {doc.PageCount} 页）。");
             edit(doc, doc.Pages[pageIndex]);
-        });
+        }, keepCopyOnLock: true, fallbackSuffix: copySuffix);
 
     private static void EditDocument(string pdfPath, Action<PdfDocument> edit) =>
         PdfDocumentEditor.EditDocument(pdfPath, edit);

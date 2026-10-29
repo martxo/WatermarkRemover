@@ -19,28 +19,74 @@ public sealed class PdfPageEditService
         _file = file ?? throw new ArgumentNullException(nameof(file));
     }
 
-    /// <summary>Turns one page clockwise and drops only that page's rendered bytes.</summary>
-    public async Task RotateAsync(int pageIndex)
+    /// <summary>
+    /// Turns one page clockwise and drops only that page's rendered bytes.
+    /// Returns true when a locked original forced the result into a "原名 (已旋转).pdf" copy.
+    /// </summary>
+    public async Task<bool> RotateAsync(int pageIndex)
     {
-        await _cache.RunWriteAsync(() => PdfPageRotator.RotateClockwise(_file.Path, pageIndex)).ConfigureAwait(false);
-        _file.RememberStamp(force: true);
+        // Read the target inside the gate: a rename the user made behind our back is resolved
+        // there, and only a path *different from the one written* means a locked-copy fallback.
+        string original = _file.Path;
+        string path = await _cache.RunWriteAsync(() =>
+        {
+            original = _file.Path;
+            return PdfPageRotator.RotateClockwise(original, pageIndex);
+        }).ConfigureAwait(false);
+        bool savedAsCopy = Follow(path, original);
         _cache.InvalidatePage(pageIndex);
+        return savedAsCopy;
     }
 
-    /// <summary>Removes one page; every index after it shifts, so the whole cache goes.</summary>
-    public async Task DeleteAsync(int pageIndex)
+    /// <summary>
+    /// Removes one page; every index after it shifts, so the whole cache goes.
+    /// Returns true when a locked original forced the result into a copy beside it.
+    /// </summary>
+    public async Task<bool> DeleteAsync(int pageIndex)
     {
-        await _cache.RunWriteAsync(() => PdfPageRotator.DeletePage(_file.Path, pageIndex)).ConfigureAwait(false);
-        _file.RememberStamp(force: true);
+        string original = _file.Path;
+        string path = await _cache.RunWriteAsync(() =>
+        {
+            original = _file.Path;
+            return PdfPageRotator.DeletePage(original, pageIndex);
+        }).ConfigureAwait(false);
+        bool savedAsCopy = Follow(path, original);
         _cache.InvalidateAll();
+        return savedAsCopy;
     }
 
-    /// <summary>Moves a page to its new slot in one save; every cache key is index-based, so all go.</summary>
-    public async Task MoveAsync(int fromIndex, int toIndex)
+    /// <summary>
+    /// Moves a page to its new slot in one save; every cache key is index-based, so all go.
+    /// Returns true when a locked original forced the result into a copy beside it.
+    /// </summary>
+    public async Task<bool> MoveAsync(int fromIndex, int toIndex)
     {
-        await _cache.RunWriteAsync(() => PdfPageOrderer.MovePage(_file.Path, fromIndex, toIndex)).ConfigureAwait(false);
-        _file.RememberStamp(force: true);
+        string original = _file.Path;
+        string? path = await _cache.RunWriteAsync(() =>
+        {
+            original = _file.Path;
+            return PdfPageOrderer.MovePage(original, fromIndex, toIndex);
+        }).ConfigureAwait(false);
+        bool savedAsCopy = path is not null && Follow(path, original);
         _cache.InvalidateAll();
+        return savedAsCopy;
+    }
+
+    /// <summary>
+    /// A locked original (WPS, another viewer) makes the edit land beside it as a copy instead of
+    /// failing; the session then follows that copy so every later tile, render and edit uses it.
+    /// </summary>
+    private bool Follow(string newPath, string original)
+    {
+        if (!string.Equals(newPath, original, StringComparison.OrdinalIgnoreCase))
+        {
+            _file.RelocateTo(newPath);
+            _file.RememberStamp(force: true);
+            return true;
+        }
+
+        _file.RememberStamp(force: true);
+        return false;
     }
 
     /// <summary>

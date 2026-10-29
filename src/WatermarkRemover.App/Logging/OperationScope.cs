@@ -21,6 +21,7 @@ public sealed class OperationScope : IDisposable
     private readonly OperationContext _context;
     private readonly OperationContext? _previous;
     private long _lastTicks;
+    private long _excludedMs;
     private bool _finished;
 
     internal OperationScope(
@@ -47,6 +48,17 @@ public sealed class OperationScope : IDisposable
 
     /// <summary>Milliseconds since the operation started.</summary>
     public long ElapsedMs => (long)Stopwatch.GetElapsedTime(_startTicks).TotalMilliseconds;
+
+    /// <summary>
+    /// Removes time this operation spent waiting on something else (an open preview strip finishing
+    /// its own passes, a lock held by another program) from the slow-operation verdict. The waiting
+    /// is still reported, but separately — otherwise a naming pass that only waited 5 s reads as a
+    /// 5 s OCR pass and hides the real bottleneck.
+    /// </summary>
+    public void Exclude(long milliseconds)
+    {
+        if (milliseconds > 0) Interlocked.Add(ref _excludedMs, milliseconds);
+    }
 
     /// <summary>
     /// Closes the previous step and emits its duration plus the running total. Call it right
@@ -77,21 +89,24 @@ public sealed class OperationScope : IDisposable
         _finished = true;
 
         long totalMs = ElapsedMs;
+        long waitedMs = Interlocked.Read(ref _excludedMs);
+        long measuredMs = Math.Max(0, totalMs - waitedMs);
+        string waitNote = waitedMs > 0 ? $"，已剔除等待 {waitedMs} ms（实际 {totalMs} ms）" : string.Empty;
         string result = string.IsNullOrWhiteSpace(outcome) ? "完成" : outcome!;
         string memory = AppLog.MemorySnapshot();
 
-        if (_slowMs > 0 && totalMs >= _slowMs)
+        if (_slowMs > 0 && measuredMs >= _slowMs)
         {
             AppLog.WriteFor(
                 _context, LogLevel.Warn,
-                $"慢操作[{_category}]：{_name} {totalMs} ms" +
-                $"（慢操作阈值 {_slowMs} ms；{result}；内存 {memory}）");
+                $"慢操作[{_category}]：{_name} {measuredMs} ms" +
+                $"（慢操作阈值 {_slowMs} ms；{result}{waitNote}；内存 {memory}）");
             return;
         }
 
         AppLog.WriteFor(
             _context, LogLevel.Info,
-            $"操作完成[{_category}]：{_name} {totalMs} ms（{result}；内存 {memory}）");
+            $"操作完成[{_category}]：{_name} {measuredMs} ms（{result}{waitNote}；内存 {memory}）");
     }
 
     /// <summary>Failed end: ERROR with the exception attached, duration and memory included.</summary>

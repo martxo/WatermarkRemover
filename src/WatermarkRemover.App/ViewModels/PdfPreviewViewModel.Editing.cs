@@ -152,8 +152,9 @@ public sealed partial class PdfPreviewViewModel
         StatusText = $"正在旋转第 {pageIndex + 1} 页并保存…";
         try
         {
-            await _edits.RotateAsync(pageIndex).ConfigureAwait(true);
-            op.Step("旋转写盘", $"第 {pageIndex + 1} 页，顺时针 90°");
+            bool savedAsCopy = await _edits.RotateAsync(pageIndex).ConfigureAwait(true);
+            op.Step("旋转写盘",
+                $"第 {pageIndex + 1} 页，顺时针 90°{(savedAsCopy ? $"，原文件被占用，已另存为 {Path.GetFileName(_file.Path)}" : string.Empty)}");
 
             if (IsCancelled)
             {
@@ -177,9 +178,12 @@ public sealed partial class PdfPreviewViewModel
 
             // Only replace our own progress line; a render failure reported by RenderAsync must stay.
             // RenderAsync empties the line on success, so a blank line is ours to fill too.
+            string copyNote = savedAsCopy
+                ? $"，原文件被占用，已另存为 {Path.GetFileName(_file.Path)}"
+                : string.Empty;
             if (StatusText.Length == 0 || StatusText.StartsWith("正在旋转", StringComparison.Ordinal))
-                ShowTransientStatus($"第 {pageIndex + 1} 页已旋转，已保存");
-            op.Complete($"第 {pageIndex + 1} 页已顺时针旋转");
+                ShowTransientStatus($"第 {pageIndex + 1} 页已旋转，已保存{copyNote}");
+            op.Complete($"第 {pageIndex + 1} 页已顺时针旋转{copyNote}");
         }
         catch (FileNotFoundException ex)
         {
@@ -217,8 +221,9 @@ public sealed partial class PdfPreviewViewModel
         StatusText = $"正在删除第 {pageIndex + 1} 页…";
         try
         {
-            await _edits.DeleteAsync(pageIndex).ConfigureAwait(true);
-            op.Step("删除页写盘", $"第 {pageIndex + 1} 页");
+            bool savedAsCopy = await _edits.DeleteAsync(pageIndex).ConfigureAwait(true);
+            op.Step("删除页写盘",
+                $"第 {pageIndex + 1} 页{(savedAsCopy ? $"，原文件被占用，已另存为 {Path.GetFileName(_file.Path)}" : string.Empty)}");
 
             if (IsCancelled)
             {
@@ -236,9 +241,12 @@ public sealed partial class PdfPreviewViewModel
             // The page that took the deleted one's place becomes the shown page.
             await RenderAsync(Math.Min(pageIndex, PageCount - 1), force: true);
             op.Step("画布刷新", $"第 {PageIndex + 1} 页");
+            string copyNote = savedAsCopy
+                ? $"，原文件被占用，已另存为 {Path.GetFileName(_file.Path)}"
+                : string.Empty;
             if (StatusText.Length == 0 || StatusText.StartsWith("正在删除", StringComparison.Ordinal))
-                ShowTransientStatus($"第 {pageIndex + 1} 页已删除，剩余 {PageCount} 页");
-            op.Complete($"第 {pageIndex + 1} 页已删除，剩余 {PageCount} 页");
+                ShowTransientStatus($"第 {pageIndex + 1} 页已删除，剩余 {PageCount} 页{copyNote}");
+            op.Complete($"第 {pageIndex + 1} 页已删除，剩余 {PageCount} 页{copyNote}");
         }
         catch (FileNotFoundException ex)
         {
@@ -281,8 +289,9 @@ public sealed partial class PdfPreviewViewModel
             // change. Already-loaded images travel with their tiles and stay correct.
             int generation = ++_thumbnailLoadGeneration;
 
-            await _edits.MoveAsync(fromIndex, toIndex).ConfigureAwait(true);
-            op.Step("调整顺序写盘", $"第 {fromIndex + 1} 页 → 第 {toIndex + 1} 页");
+            bool savedAsCopy = await _edits.MoveAsync(fromIndex, toIndex).ConfigureAwait(true);
+            op.Step("调整顺序写盘",
+                $"第 {fromIndex + 1} 页 → 第 {toIndex + 1} 页{(savedAsCopy ? $"，原文件被占用，已另存为 {Path.GetFileName(_file.Path)}" : string.Empty)}");
 
             if (IsCancelled)
             {
@@ -306,9 +315,12 @@ public sealed partial class PdfPreviewViewModel
 
             await RenderAsync(toIndex, force: true).ConfigureAwait(true);
             op.Step("画布刷新", $"第 {PageIndex + 1} 页");
+            string copyNote = savedAsCopy
+                ? $"，原文件被占用，已另存为 {Path.GetFileName(_file.Path)}"
+                : string.Empty;
             if (StatusText.Length == 0 || StatusText.StartsWith("正在调整", StringComparison.Ordinal))
-                ShowTransientStatus($"已把第 {fromIndex + 1} 页移到第 {toIndex + 1} 页");
-            op.Complete($"第 {fromIndex + 1} 页 → 第 {toIndex + 1} 页，共 {PageCount} 页");
+                ShowTransientStatus($"已把第 {fromIndex + 1} 页移到第 {toIndex + 1} 页{copyNote}");
+            op.Complete($"第 {fromIndex + 1} 页 → 第 {toIndex + 1} 页，共 {PageCount} 页{copyNote}");
         }
         catch (FileNotFoundException ex)
         {

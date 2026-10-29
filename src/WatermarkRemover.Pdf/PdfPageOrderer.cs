@@ -14,13 +14,14 @@ public static class PdfPageOrderer
     /// Moves the page at <paramref name="fromIndex"/> so it ends up at <paramref name="toIndex"/>
     /// in the resulting document. Both indexes refer to the current document; <c>toIndex</c> is
     /// the slot the page occupies afterwards (the pages in between shift by one).
-    /// Returns false when the two indexes are the same, i.e. there is nothing to write.
     /// </summary>
-    public static bool MovePage(string pdfPath, int fromIndex, int toIndex)
+    /// <returns>The file holding the result — the same path, or a "原名 (已重排).pdf" copy when a
+    /// viewer holds the original — or null when both indexes are the same (nothing to write).</returns>
+    public static string? MovePage(string pdfPath, int fromIndex, int toIndex)
     {
-        if (fromIndex == toIndex) return false;
+        if (fromIndex == toIndex) return null;
 
-        PdfDocumentEditor.EditDocument(pdfPath, doc =>
+        return PdfDocumentEditor.EditDocument(pdfPath, doc =>
         {
             if (fromIndex < 0 || fromIndex >= doc.PageCount)
                 throw new ArgumentOutOfRangeException(nameof(fromIndex),
@@ -33,7 +34,6 @@ public static class PdfPageOrderer
             // tree; a remove + insert of the same object throws "Object already in table". Its
             // dedicated MovePage keeps the object identity and only rewrites the page order.
             doc.Pages.MovePage(fromIndex, toIndex);
-        });
-        return true;
+        }, keepCopyOnLock: true, fallbackSuffix: "已重排");
     }
 }

@@ -866,7 +866,11 @@ public sealed class MainViewModel : ObservableObject
         {
             // The open strip auto-orients / rewrites the file right after landing; a rename
             // (File.Move) during that write throws, so drain the strip's busy passes first.
+            // The wait is another component's work, not naming time — keep it out of the
+            // slow-operation verdict so a genuine ocr slowdown stays visible.
+            long settleTicks = Stopwatch.GetTimestamp();
             await (job.Strip?.WaitForSettledAsync() ?? Task.CompletedTask).ConfigureAwait(false);
+            op.Exclude((long)Stopwatch.GetElapsedTime(settleTicks).TotalMilliseconds);
             op.Step("等待预览稳定");
 
             // Use the page-1 suggestion when it produced one. Otherwise fall back to probing the

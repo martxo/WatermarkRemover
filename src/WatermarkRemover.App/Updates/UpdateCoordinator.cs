@@ -1,4 +1,5 @@
 using System.IO;
+using System.Net.Http;
 using System.Threading;
 using System.Windows;
 using Velopack;
@@ -185,7 +186,7 @@ public static class UpdateCoordinator
         catch (Exception ex)
         {
             checkingWindow?.Close();
-            AppLog.Error("检查更新失败", ex);
+            LogCheckFailure(ex);
             if (!silent)
                 dialogs.Warn(
                     "检查更新时出错，可能是网络不稳定。\n可稍后重试，或到发布页手动下载。\n\n" +
@@ -458,6 +459,26 @@ public static class UpdateCoordinator
     }
 
     /// <summary>
+    /// Network trouble (a timeout, a reset connection, GitHub unreachable) is expected on this
+    /// machine and must not read as a defect: it lands as WARN with a one-line reason, while a
+    /// real failure keeps its stack as ERROR. Support logs then stay triageable.
+    /// </summary>
+    private static void LogCheckFailure(Exception ex)
+    {
+        if (IsNetworkFailure(ex))
+        {
+            AppLog.Warn($"检查更新失败（网络）：{ex.GetType().Name}：{ex.Message}");
+            return;
+        }
+
+        AppLog.Error("检查更新失败", ex);
+    }
+
+    private static bool IsNetworkFailure(Exception ex) =>
+        ex is HttpRequestException or OperationCanceledException or IOException
+        || (ex.InnerException is not null && IsNetworkFailure(ex.InnerException));
+
+    /// <summary>
     /// Restarts into the downloaded update after one confirmation. Shared by the shell's update
     /// icon and by a manual "check for updates" click made while the package is already waiting.
     /// </summary>
@@ -507,7 +528,7 @@ public static class UpdateCoordinator
         catch (Exception ex)
         {
             checkingWindow?.Close();
-            AppLog.Error("检查更新失败", ex);
+            LogCheckFailure(ex);
             if (!silent)
                 dialogs.Warn(
                     "检查更新时出错，可能是网络不稳定。\n可稍后重试，或到发布页手动下载。\n\n" +

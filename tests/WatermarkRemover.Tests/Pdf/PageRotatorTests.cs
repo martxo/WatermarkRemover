@@ -70,6 +70,39 @@ public class PageRotatorTests : IDisposable
     }
 
     [Fact]
+    public void A_locked_document_rotates_into_a_copy_beside_it()
+    {
+        string path = WriteLandscapeFixture();
+        string originalBytes = File.ReadAllText(path);
+
+        // A viewer holding the file for reading (the WPS case) blocks the swap-over save.
+        using (var hold = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            string result = PdfPageRotator.RotateClockwise(path, 0);
+
+            Assert.False(string.Equals(path, result, StringComparison.OrdinalIgnoreCase));
+            Assert.True(File.Exists(result));
+            Assert.Equal(originalBytes, File.ReadAllText(path)); // the original is untouched
+            Assert.Equal(90, ReadRotate(result));
+        }
+    }
+
+    [Fact]
+    public void A_locked_document_deletes_into_a_copy_beside_it()
+    {
+        string path = WriteMultiPageFixture(2);
+
+        using (var hold = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            string result = PdfPageRotator.DeletePage(path, 1);
+
+            Assert.False(string.Equals(path, result, StringComparison.OrdinalIgnoreCase));
+            Assert.Equal(2, ReadPageCount(path));
+            Assert.Equal(1, ReadPageCount(result));
+        }
+    }
+
+    [Fact]
     public void An_out_of_range_page_fails_before_anything_is_written()
     {
         string path = WriteLandscapeFixture();

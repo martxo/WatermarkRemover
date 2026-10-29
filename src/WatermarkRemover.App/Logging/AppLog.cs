@@ -116,13 +116,18 @@ public static class AppLog
         }
     }
 
-    /// <summary>Working set / managed heap / gen-2 collection snapshot for performance lines.</summary>
+    /// <summary>
+    /// Working set / private bytes / managed heap / gen-2 collection snapshot for performance
+    /// lines. The process object is refreshed first: a cached one reported the same working set
+    /// for hours while the managed heap moved by gigabytes, which made support logs unreadable.
+    /// </summary>
     public static string MemorySnapshot()
     {
         try
         {
-            return $"工作集 {Self.WorkingSet64 / 1048576} MB" +
-                   $"（托管 {GC.GetTotalMemory(false) / 1048576} MB，GC2 {GC.CollectionCount(2)}）";
+            Self.Refresh();
+            return $"工作集 {Self.WorkingSet64 / 1048576} MB（私有 {Self.PrivateMemorySize64 / 1048576} MB，" +
+                   $"托管 {GC.GetTotalMemory(false) / 1048576} MB，GC2 {GC.CollectionCount(2)}）";
         }
         catch
         {

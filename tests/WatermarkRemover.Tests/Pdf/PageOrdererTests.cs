@@ -51,7 +51,7 @@ public class PageOrdererTests : IDisposable
     {
         string pdf = WritePdf("later.pdf", 100, 110, 120, 130);
 
-        Assert.True(PdfPageOrderer.MovePage(pdf, 0, 2));
+        Assert.Equal(pdf, PdfPageOrderer.MovePage(pdf, 0, 2)); // written in place, no copy
 
         Assert.Equal(new[] { 110.0, 120.0, 100.0, 130.0 }, PagesOf(pdf).Select(p => p.Width));
         Assert.Equal(90, PagesOf(pdf)[2].Rotate); // the page kept its own /Rotate
@@ -63,7 +63,7 @@ public class PageOrdererTests : IDisposable
     {
         string pdf = WritePdf("earlier.pdf", 100, 110, 120, 130);
 
-        Assert.True(PdfPageOrderer.MovePage(pdf, 3, 1));
+        Assert.Equal(pdf, PdfPageOrderer.MovePage(pdf, 3, 1));
 
         Assert.Equal(new[] { 100.0, 130.0, 110.0, 120.0 }, PagesOf(pdf).Select(p => p.Width));
     }
@@ -75,7 +75,7 @@ public class PageOrdererTests : IDisposable
         // append position: the reorder must accept it instead of rejecting the original index.
         string pdf = WritePdf("last.pdf", 100, 110, 120);
 
-        Assert.True(PdfPageOrderer.MovePage(pdf, 0, 2));
+        Assert.Equal(pdf, PdfPageOrderer.MovePage(pdf, 0, 2));
 
         Assert.Equal(new[] { 110.0, 120.0, 100.0 }, PagesOf(pdf).Select(p => p.Width));
     }
@@ -98,8 +98,23 @@ public class PageOrdererTests : IDisposable
         string pdf = WritePdf("same.pdf", 100, 110);
         byte[] before = File.ReadAllBytes(pdf);
 
-        Assert.False(PdfPageOrderer.MovePage(pdf, 1, 1));
+        Assert.Null(PdfPageOrderer.MovePage(pdf, 1, 1));
 
         Assert.Equal(before, File.ReadAllBytes(pdf));
+    }
+
+    [Fact]
+    public void A_locked_document_reorders_into_a_copy_beside_it()
+    {
+        string pdf = WritePdf("locked.pdf", 100, 110, 120);
+
+        // A viewer holding the file for reading blocks the swap-over save.
+        using var hold = new FileStream(pdf, FileMode.Open, FileAccess.Read, FileShare.Read);
+        string? result = PdfPageOrderer.MovePage(pdf, 0, 2);
+
+        Assert.NotNull(result);
+        Assert.False(string.Equals(pdf, result, StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(new[] { 100.0, 110.0, 120.0 }, PagesOf(pdf).Select(p => p.Width));
+        Assert.Equal(new[] { 110.0, 120.0, 100.0 }, PagesOf(result!).Select(p => p.Width));
     }
 }
