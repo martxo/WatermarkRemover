@@ -14,10 +14,6 @@ namespace WatermarkRemover.Core.Features;
 /// </summary>
 public sealed class WatermarkFeature : IFeature
 {
-    public string Glyph => "\uE75C"; // Erase
-
-    public string Tagline => "拖入 PDF → 去水印 · 智能命名 · 页面管理";
-
     /// <summary>Render resolution for the naming OCR pass; low is enough to read labels.</summary>
     private const int NamingRenderDpi = 150;
 
@@ -49,8 +45,6 @@ public sealed class WatermarkFeature : IFeature
     public string Id => "watermark.badge";
 
     public string DisplayName => "去水印";
-
-    public string ProcessingText => "正在分析并去除水印…";
 
     public bool CanHandle(string filePath) =>
         string.Equals(Path.GetExtension(filePath), ".pdf", StringComparison.OrdinalIgnoreCase);

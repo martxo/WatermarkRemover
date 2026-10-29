@@ -1071,7 +1071,7 @@
                     <!-- One-line capability note for the current feature page. -->
                     <Border Width="1" Height="15" Background="{StaticResource BorderBrushLight}"
                             Margin="14,0,0,0" VerticalAlignment="Center"/>
-                    <TextBlock Text="{Binding SelectedFeature.Tagline}"
+                    <TextBlock Text="{Binding SelectedPresentation.Tagline}"
                                FontSize="12"
                                Foreground="{StaticResource TextSecondaryBrush}"
                                VerticalAlignment="Center" Margin="10,0,0,0"/>
@@ -1081,7 +1081,7 @@
         <!-- Feature page: the ViewLocator picks the template declared by the feature's
              PageKind, so adding a feature never edits this visual tree. -->
         <ContentControl Grid.Row="1"
-                        Grid.RowSpan="{Binding SelectedFeature.PageKind, Converter={StaticResource FeaturePageKind}, ConverterParameter=RowSpan}"
+                        Grid.RowSpan="{Binding SelectedPresentation.PageKind, Converter={StaticResource FeaturePageKind}, ConverterParameter=RowSpan}"
                         Content="{Binding SelectedFeature}"
                         ContentTemplateSelector="{StaticResource FeaturePageSelector}"
                         Focusable="False"
@@ -1090,7 +1090,7 @@
         <!-- File list -->
         <Border Grid.Row="2"
                 Style="{StaticResource CardBorder}"
-                Visibility="{Binding SelectedFeature.PageKind, Converter={StaticResource FeaturePageKind}, ConverterParameter=JobList}">
+                Visibility="{Binding SelectedPresentation.PageKind, Converter={StaticResource FeaturePageKind}, ConverterParameter=JobList}">
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>

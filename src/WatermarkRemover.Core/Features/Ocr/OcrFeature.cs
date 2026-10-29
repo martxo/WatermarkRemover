@@ -14,8 +14,6 @@ public sealed class OcrFeature : IFeature
     /// <summary>Suffix of the generated text file.</summary>
     public const string OutputSuffix = "_ocr";
 
-    public string Tagline => "拖入 PDF 或图片 → 识别文字 → 生成同名 txt";
-
     /// <summary>Render resolution. 200 DPI keeps even A3 pages inside OCR size limits.</summary>
     private const int RenderDpi = 200;
 
@@ -46,8 +44,6 @@ public sealed class OcrFeature : IFeature
     public string Id => "ocr.text";
 
     public string DisplayName => "OCR 识别";
-
-    public string ProcessingText => "正在渲染页面并识别文字…";
 
     public bool CanHandle(string filePath)
     {

@@ -12,14 +12,6 @@ public sealed class LanTransferFeature : IFeature
 
     public string DisplayName => "手机传文件";
 
-    public string ProcessingText => "正在接收…";
-
-    public FeaturePageKind PageKind => FeaturePageKind.Transfer;
-
-    public string Glyph => "\uE8EA"; // CellPhone
-
-    public string Tagline => "手机扫码 → 浏览器选文件 → 传到电脑";
-
     /// <summary>No existing file is ever handled by the transfer feature.</summary>
     public bool CanHandle(string filePath) => false;
 

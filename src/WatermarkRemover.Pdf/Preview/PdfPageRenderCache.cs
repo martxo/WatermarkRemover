@@ -19,6 +19,16 @@ public sealed class PdfPageRenderCache
     /// a miss only costs a re-render of the page actually being shown.</summary>
     private const long RenderCacheBudgetBytes = 48L * 1024 * 1024;
 
+    /// <summary>
+    /// Ceiling across every open document. The per-document budget alone let a long session with
+    /// several strips hold several times that (the log showed a multi-GB managed heap); when the
+    /// total crosses this line the other documents hand their bytes back.
+    /// </summary>
+    internal static long ProcessBudgetBytes = 192L * 1024 * 1024;
+
+    private static readonly object ProcessSync = new();
+    private static readonly List<WeakReference<PdfPageRenderCache>> Live = new();
+
     private readonly IPdfPageRenderer _renderer;
     private readonly PdfDocumentFile _file;
     private readonly CancellationToken _cancellationToken;
@@ -42,6 +52,9 @@ public sealed class PdfPageRenderCache
         _cancellationToken = cancellationToken;
         _debug = debug;
         _warn = warn;
+
+        // Weakly: a closed row's cache must be collectable even if nobody calls Trim first.
+        lock (ProcessSync) Live.Add(new WeakReference<PdfPageRenderCache>(this));
     }
 
     /// <summary>Bytes currently held by this cache.</summary>
@@ -99,8 +112,11 @@ public sealed class PdfPageRenderCache
                 {
                     _warn?.Invoke($"预览渲染缓存超预算：清空前 {cacheBytes / 1048576.0:F1} MB" +
                                   $"（{cacheBytes} 字节），上限 {RenderCacheBudgetBytes / 1048576} MB");
-                    _renderedPages.Clear();
-                    Interlocked.Exchange(ref _bytes, 0);
+                    ClearAll();
+                }
+                else
+                {
+                    EnforceProcessBudget(this);
                 }
             }
             _debug?.Invoke($"预览缓存未命中：第 {pageIndex + 1} 页，{dpi}dpi，等待闸门 {gateMs} ms，" +
@@ -161,8 +177,68 @@ public sealed class PdfPageRenderCache
     public void InvalidateAll()
     {
         Interlocked.Increment(ref _epoch);
+        ClearAll();
+    }
+
+    /// <summary>Drops every cached byte and keeps the accounting truthful for both budgets.</summary>
+    private void ClearAll()
+    {
         _renderedPages.Clear();
         Interlocked.Exchange(ref _bytes, 0);
+    }
+
+    /// <summary>Total bytes held by every live cache in this process.</summary>
+    private static long LiveBytes()
+    {
+        long total = 0;
+        lock (ProcessSync)
+        {
+            Live.RemoveAll(reference => !reference.TryGetTarget(out _));
+            foreach (WeakReference<PdfPageRenderCache> reference in Live)
+            {
+                if (reference.TryGetTarget(out PdfPageRenderCache? cache))
+                {
+                    total += Interlocked.Read(ref cache._bytes);
+                }
+            }
+        }
+
+        return total;
+    }
+
+    /// <summary>
+    /// Over the process budget: other documents release their caches (the one being read keeps
+    /// its bytes). Creation order, oldest first — those are the rows the user has scrolled past.
+    /// </summary>
+    private void EnforceProcessBudget(PdfPageRenderCache keep)
+    {
+        if (LiveBytes() <= ProcessBudgetBytes) return;
+
+        var others = new List<PdfPageRenderCache>();
+        lock (ProcessSync)
+        {
+            Live.RemoveAll(reference => !reference.TryGetTarget(out _));
+            foreach (WeakReference<PdfPageRenderCache> reference in Live)
+            {
+                if (reference.TryGetTarget(out PdfPageRenderCache? cache) && !ReferenceEquals(cache, keep))
+                {
+                    others.Add(cache);
+                }
+            }
+        }
+
+        foreach (PdfPageRenderCache cache in others)
+        {
+            long released = Interlocked.Exchange(ref cache._bytes, 0);
+            if (released > 0)
+            {
+                cache._renderedPages.Clear();
+                _warn?.Invoke($"预览缓存总预算超限：释放 {Path.GetFileName(cache._file.Path)} " +
+                              $"{released / 1048576.0:F1} MB（另一份文档正在使用）");
+            }
+
+            if (LiveBytes() <= ProcessBudgetBytes) break;
+        }
     }
 
     /// <summary>Drops every cached render of one page (its bytes changed on disk).</summary>
@@ -195,9 +271,5 @@ public sealed class PdfPageRenderCache
     }
 
     /// <summary>Drops the byte cache without invalidating in-flight renders (fold / off-screen).</summary>
-    public void Trim()
-    {
-        _renderedPages.Clear();
-        Interlocked.Exchange(ref _bytes, 0);
-    }
+    public void Trim() => ClearAll();
 }

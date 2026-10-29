@@ -1,7 +1,6 @@
 using System.Globalization;
 using System.Windows;
 using System.Windows.Data;
-using WatermarkRemover.Core.Features;
 
 namespace WatermarkRemover.App.Presentation;
 

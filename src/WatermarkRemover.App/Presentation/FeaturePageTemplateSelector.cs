@@ -23,7 +23,7 @@ public sealed class FeaturePageTemplateSelector : DataTemplateSelector
 
     public override DataTemplate? SelectTemplate(object item, DependencyObject container) =>
         item is IFeature feature
-            ? feature.PageKind switch
+            ? FeaturePresentationCatalog.For(feature).PageKind switch
             {
                 FeaturePageKind.Scan => ScanTemplate,
                 FeaturePageKind.Search => SearchTemplate,

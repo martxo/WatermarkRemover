@@ -12,9 +12,23 @@ public enum OutputMode
     CustomDirectory = 1,
 }
 
+/// <summary>
+/// Format version of the settings document. Every saved file carries it, so a later release can
+/// migrate an older file instead of guessing what defaults used to mean. Bump only together with
+/// a migration arm in SettingsService.
+/// </summary>
+public static class SettingsSchema
+{
+    /// <summary>1 = the unversioned files shipped before this field existed.</summary>
+    public const int CurrentVersion = 2;
+}
+
 /// <summary>User preferences, persisted as JSON alongside the application.</summary>
 public sealed class AppSettings
 {
+    /// <summary>Written by every save; lets an upgrade tell an old layout from a new one.</summary>
+    public int SchemaVersion { get; set; } = SettingsSchema.CurrentVersion;
+
     /// <summary>Suffix appended to the input file name to form the output name.</summary>
     public string OutputSuffix { get; set; } = "_no-watermark";
 

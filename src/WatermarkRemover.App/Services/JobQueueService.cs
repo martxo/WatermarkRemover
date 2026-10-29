@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.IO;
 using WatermarkRemover.App.Logging;
+using WatermarkRemover.App.Presentation;
 using WatermarkRemover.App.Recognition;
 using WatermarkRemover.App.ViewModels;
 using WatermarkRemover.Core.Features;
@@ -69,7 +70,7 @@ public sealed class JobQueueService
             using var op = AppLog.BeginOperation(
                 LogCategory.Job, "任务处理", Path.GetFileName(job.InputPath));
 
-            job.MarkProcessing(feature.ProcessingText);
+            job.MarkProcessing(FeaturePresentationCatalog.ProcessingText(feature));
             // Inside the task body on purpose: sibling jobs must not see each other's scope.
             using var scope = RecognitionRunScope.Begin(job.InputPath, feature.DisplayName);
             try

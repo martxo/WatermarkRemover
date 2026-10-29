@@ -1,3 +1,4 @@
+using WatermarkRemover.App.Presentation;
 using WatermarkRemover.App.Recognition;
 using WatermarkRemover.App.Services;
 using WatermarkRemover.App.ViewModels;
@@ -97,10 +98,10 @@ public class JobQueueServiceTests
 
         Assert.True(entered.Wait(TimeSpan.FromSeconds(5)));
         Assert.Equal(JobState.Processing, job.State);
-        // StubFeature doesn't override ProcessingText: the interface default must surface,
-        // and the hard-coded watermark wording must never appear for another feature.
+        // StubFeature has no presentation entry: the catalog's generic text must surface, and the
+        // watermark wording must never appear for another feature.
         IFeature asInterface = feature;
-        Assert.Equal(asInterface.ProcessingText, job.Detail);
+        Assert.Equal(FeaturePresentationCatalog.ProcessingText(asInterface), job.Detail);
         Assert.DoesNotContain("水印", job.Detail);
 
         release.Set();

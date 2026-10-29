@@ -5,6 +5,7 @@ using System.IO;
 using System.Windows;
 using WatermarkRemover.App.Logging;
 using WatermarkRemover.App.Ocr;
+using WatermarkRemover.App.Presentation;
 using WatermarkRemover.Pdf.Rendering;
 using WatermarkRemover.Ocr;
 using WatermarkRemover.App.Services;
@@ -216,6 +217,12 @@ public sealed class MainViewModel : ObservableObject
             }
         }
     }
+
+    /// <summary>
+    /// Icon / caption / page kind of the selected feature. The shell binds here instead of on the
+    /// feature itself: those are UI facts and live in the presentation catalog, not in Core.
+    /// </summary>
+    public FeaturePresentation SelectedPresentation => FeaturePresentationCatalog.For(SelectedFeature);
 
     public string AppVersion =>
         "v" + (System.Reflection.Assembly.GetEntryAssembly()
@@ -436,6 +443,7 @@ public sealed class MainViewModel : ObservableObject
     /// <summary>Section switch: swap the board's view filter without rebuilding the data.</summary>
     private void OnSelectedFeatureChanged()
     {
+        OnPropertyChanged(nameof(SelectedPresentation));
         Board.SetSection(_selectedFeature.Id, _selectedFeature.DisplayName);
         OnPropertyChanged(nameof(DropHint));
         OnPropertyChanged(nameof(FilePickerFilter));

@@ -1,3 +1,4 @@
+using WatermarkRemover.App.Presentation;
 using WatermarkRemover.Core.Features;
 
 namespace WatermarkRemover.App.ViewModels;
@@ -12,8 +13,8 @@ public sealed class FeatureNavItemViewModel : ObservableObject
 
     public IFeature Feature { get; }
 
-    /// <summary>Segoe MDL2 Assets glyph shown left of the feature name; owned by the feature.</summary>
-    public string Glyph => Feature.Glyph;
+    /// <summary>Segoe MDL2 Assets glyph shown left of the feature name (presentation metadata).</summary>
+    public string Glyph => FeaturePresentationCatalog.For(Feature).Glyph;
 
     public string DisplayName => Feature.DisplayName;
 

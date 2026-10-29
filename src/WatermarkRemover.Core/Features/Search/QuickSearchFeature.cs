@@ -11,14 +11,6 @@ public sealed class QuickSearchFeature : IFeature
 
     public string DisplayName => "快速搜索";
 
-    public string ProcessingText => "正在搜索…";
-
-    public FeaturePageKind PageKind => FeaturePageKind.Search;
-
-    public string Glyph => "\uE721"; // Search
-
-    public string Tagline => "NTFS 索引 · 文件名秒搜 · 打开/定位";
-
     /// <summary>No existing file is ever handled by the search page.</summary>
     public bool CanHandle(string filePath) => false;
 

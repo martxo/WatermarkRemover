@@ -1,4 +1,5 @@
 ﻿using System.Text;
+using WatermarkRemover.App.Presentation;
 using WatermarkRemover.Core.Features;
 using WatermarkRemover.Core.Features.Ocr;
 using WatermarkRemover.Core.Settings;
@@ -121,8 +122,9 @@ public class OcrFeatureTests : IDisposable
     {
         var feature = new OcrFeature(new FakeRenderer(1), new FakeEngine(Array.Empty<string>()));
 
-        Assert.Contains("识别", feature.ProcessingText);
-        Assert.DoesNotContain("水印", feature.ProcessingText);
+        string text = FeaturePresentationCatalog.ProcessingText(feature);
+        Assert.Contains("识别", text);
+        Assert.DoesNotContain("水印", text);
     }
 
     [Fact]

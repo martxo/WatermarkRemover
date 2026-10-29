@@ -1,4 +1,5 @@
-﻿using WatermarkRemover.Core.Features;
+﻿using WatermarkRemover.App.Presentation;
+using WatermarkRemover.Core.Features;
 using WatermarkRemover.Core.Features.Naming;
 using WatermarkRemover.Core.Features.Ocr;
 using WatermarkRemover.Core.Settings;
@@ -94,7 +95,7 @@ public class WatermarkFeatureTests : IDisposable
     [Fact]
     public void ProcessingText_keeps_the_watermark_wording()
     {
-        Assert.Equal("正在分析并去除水印…", CreateFeature().ProcessingText);
+        Assert.Equal("正在分析并去除水印…", FeaturePresentationCatalog.ProcessingText(CreateFeature()));
     }
 
     [Fact]
