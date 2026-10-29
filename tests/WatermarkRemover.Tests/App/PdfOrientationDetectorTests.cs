@@ -34,8 +34,11 @@ public class PdfOrientationDetectorTests
         Assert.True(render >= 0 && firstOcr > render && orient > firstOcr && retryOcr > orient,
             "WatermarkFeature.TryAutoName must OCR as-is first, orient only when starved, then OCR again.");
 
-        string main = Read("src", "WatermarkRemover.App", "ViewModels", "MainViewModel.cs");
-        Assert.Contains("orientPage: image => new PdfOrientationDetector(SharedOcrEngine).OrientAsync(image)", main);
+        // The registration moved out of the view model into the composition root; the guard
+        // follows it so the detector stays wired into the watermark feature.
+        string composition = Read("src", "WatermarkRemover.App", "AppComposition.cs");
+        Assert.Contains(
+            "orientPage: image => new PdfOrientationDetector(ocrEngine).OrientAsync(image)", composition);
     }
 
     private static string FindSolutionRoot()

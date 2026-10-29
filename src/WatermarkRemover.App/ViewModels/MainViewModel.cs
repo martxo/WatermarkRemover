@@ -44,36 +44,12 @@ public enum DropZoneState
 /// </summary>
 public sealed class MainViewModel : ObservableObject
 {
-    /// <summary>One shared engine: the WeChat OCR worker is a single channel, so both features
-    /// must go through the same instance to keep recognition serialised. The instance is a
-    /// stable proxy — the settings OCR section swaps its target at runtime.</summary>
-    private static readonly IOcrEngine SharedOcrEngine = CreateOcrEngine();
-
-    /// <summary>One shared PDF renderer: turning pages into images is stateless, so the OCR
-    /// features and the preview overlay all go through the same instance.</summary>
-    private static readonly IPdfPageRenderer SharedPdfRenderer = new PdfiumPdfPageRenderer();
-
-    private readonly FeatureRegistry _registry = new(new IFeature[]
-    {
-        // Scan first: the app opens straight onto the scan page, so a walk-up user can scan
-        // without touching navigation. Registration order drives both the sidebar and the
-        // default selection (NavItems[0] below).
-        new ScanFeature(),
-        // 快速搜索 sits next to the default page: it is a tool, not a processor (CanHandle=false),
-        // so it never interferes with first-match routing in FindForFile.
-        new QuickSearchFeature(),
-        new WatermarkFeature(
-            new PdfDocumentSource(),
-            new IWatermarkStrategy[] { new BottomRightBadgeStrategy() },
-            SharedPdfRenderer,
-            SharedOcrEngine,
-            orientPage: image => new PdfOrientationDetector(SharedOcrEngine).OrientAsync(image),
-            trace: AppLog.Trace),
-        new OcrFeature(SharedPdfRenderer, SharedOcrEngine, trace: AppLog.Trace,
-            imageLoader: ImageOcrInput.LoadAsOcrPng),
-        new NetdiskFeature(),
-        new LanTransferFeature(),
-    });
+    /// <summary>
+    /// Built once outside the UI layer; the shell only consumes it. One shared OCR engine and one
+    /// shared renderer live inside it (the WeChat OCR worker is a single channel, so both features
+    /// must go through the same proxy).
+    /// </summary>
+    private readonly AppComposition _composition;
 
     private IFeature _selectedFeature;
     private readonly IDialogService _dialogs;
@@ -97,19 +73,25 @@ public sealed class MainViewModel : ObservableObject
     }
 
     /// <summary>Service-injected constructor; tests drive the UI surface through fakes. The journal
-    /// is optional so a test run never reads or writes the machine's real job history.</summary>
-    internal MainViewModel(IDialogService dialogs, IShellOpenService shell, TaskJournal? journal = null)
+    /// is optional so a test run never reads or writes the machine's real job history; the
+    /// composition is injectable so a test can swap engines/renderers without touching the UI.</summary>
+    internal MainViewModel(
+        IDialogService dialogs,
+        IShellOpenService shell,
+        TaskJournal? journal = null,
+        AppComposition? composition = null)
     {
         _dialogs = dialogs ?? throw new ArgumentNullException(nameof(dialogs));
         _shell = shell ?? throw new ArgumentNullException(nameof(shell));
         _journal = journal;
+        _composition = composition ?? AppComposition.Shared;
 
         Settings = SettingsService.Load();
         // Honour the pipeline pinned in settings (empty = automatic priority chains).
         AppOcrEngineChain.ApplyPipeline(Settings.PreferredLayoutStage, Settings.PreferredOcrEngine);
         Board = new JobBoard(_dialogs);
         NavItems = new ObservableCollection<FeatureNavItemViewModel>(
-            _registry.Features.Select(f => new FeatureNavItemViewModel(f)));
+            _composition.Registry.Features.Select(f => new FeatureNavItemViewModel(f)));
         NavItems[0].IsSelected = true;
         _selectedFeature = NavItems[0].Feature;
         Board.SetSection(_selectedFeature.Id, _selectedFeature.DisplayName);
@@ -125,10 +107,10 @@ public sealed class MainViewModel : ObservableObject
         // The job row owns scan progress (phase + page count). A second copy in the scan panel
         // and a third in the footer made one action read as three competing status lines.
         _scan = new ScanCoordinator(Settings, busy => IsBusy = busy);
-        _naming = new ContentNamingService(Settings, SharedPdfRenderer, SharedOcrEngine);
+        _naming = new ContentNamingService(Settings, _composition.PdfRenderer, _composition.OcrEngine);
         _renamer = new JobRenamer(_dialogs);
         _preview = new PreviewStripCoordinator(
-            Board.Jobs, _dialogs, SharedPdfRenderer, SharedOcrEngine,
+            Board.Jobs, _dialogs, _composition.PdfRenderer, _composition.OcrEngine,
             scanIntoStrip: progress => _scan.ScanIntoStripAsync(progress));
         Netdisk = new NetdiskCoordinator(Settings, _dialogs, () => IsBusy);
 
@@ -156,7 +138,7 @@ public sealed class MainViewModel : ObservableObject
         // The LAN receiver lives as long as the app; landed files become finished job rows in
         // the 手机传文件 section (rename / chips / delete / open-folder all work unchanged).
         Transfer = new TransferPanelViewModel(
-            Settings, _shell, message => AppLog.Trace(message, null), SharedOcrEngine);
+            Settings, _shell, message => AppLog.Trace(message, null), _composition.OcrEngine);
         Transfer.FileReceived += OnTransferFileReceived;
         Transfer.ShareDocumentReceived += OnTransferShareDocumentReceived;
 
@@ -168,21 +150,6 @@ public sealed class MainViewModel : ObservableObject
 
         // Last, once every service the restored rows talk to (netdisk accounts included) exists.
         RestoreJournal();
-    }
-
-    /// <summary>Logs the resolved engine (and every skipped link) once per process and returns
-    /// the switchable proxy the features keep for their whole lifetime.</summary>
-    private static IOcrEngine CreateOcrEngine()
-    {
-        foreach (ProbeLink<IOcrEngine> link in AppOcrEngineChain.Instance.Links)
-        {
-            if (link.Available)
-                AppLog.Info($"OCR 引擎：{link.Name}");
-            else
-                AppLog.Info($"未启用 {link.Name}：{link.Reason}");
-        }
-
-        return AppOcrEngineChain.Current;
     }
 
     public AppSettings Settings { get; }
@@ -1014,7 +981,7 @@ public sealed class MainViewModel : ObservableObject
     {
         if (_journal is null) return;
 
-        var knownSections = _registry.Features.Select(f => f.Id).ToHashSet(StringComparer.Ordinal);
+        var knownSections = _composition.Registry.Features.Select(f => f.Id).ToHashSet(StringComparer.Ordinal);
         var restored = new List<FileJobViewModel>();
 
         _restoringJournal = true;
@@ -1339,7 +1306,7 @@ public sealed class MainViewModel : ObservableObject
 
             op.Step("追加页面", $"新增 {added} 页 → {Path.GetFileName(target)}");
 
-            int total = await SharedPdfRenderer.GetPageCountAsync(target).ConfigureAwait(true);
+            int total = await _composition.PdfRenderer.GetPageCountAsync(target).ConfigureAwait(true);
             string summary = outcome.Cancelled
                 ? $"已取消，共保留 {total} 页"
                 : outcome.Interruption is { Length: > 0 }
