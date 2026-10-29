@@ -1,7 +1,7 @@
-using PdfSharpCore.Pdf;
-using PdfSharpCore.Pdf.Advanced;
-using PdfSharpCore.Pdf.Annotations;
-using PdfSharpCore.Pdf.IO;
+using PdfSharp.Pdf;
+using PdfSharp.Pdf.Advanced;
+using PdfSharp.Pdf.Annotations;
+using PdfSharp.Pdf.IO;
 using WatermarkRemover.Core.Documents;
 using WatermarkRemover.Core.Geometry;
 
@@ -26,6 +26,8 @@ public sealed class PdfDocumentSource : IDocumentSource
     {
         if (string.IsNullOrWhiteSpace(inputPath))
             throw new ArgumentException("Input path must not be empty.", nameof(inputPath));
+
+        PdfSharpRuntime.EnsureInitialized();
 
         PdfDocument? doc = null;
         try
@@ -58,6 +60,8 @@ public sealed class PdfDocumentSource : IDocumentSource
             throw new ArgumentException("Output path must not be empty.", nameof(outputPath));
         if (edits.Count == 0)
             throw new ArgumentException("At least one page edit is required.", nameof(edits));
+
+        PdfSharpRuntime.EnsureInitialized();
 
         PdfDocument? doc = null;
         try
@@ -127,7 +131,7 @@ public sealed class PdfDocumentSource : IDocumentSource
         for (int i = 0; i < annotations.Count; i++)
         {
             PdfAnnotation annotation = annotations[i];
-            PdfRectangle? rect = annotation.Elements.GetRectangle("/Rect");
+            PdfRectangle? rect = annotation.Rectangle;
             if (rect == null) continue;
 
             string? uri = null;

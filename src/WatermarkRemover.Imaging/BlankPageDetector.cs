@@ -1,4 +1,4 @@
-namespace WatermarkRemover.App.Scan;
+namespace WatermarkRemover.Imaging;
 
 /// <summary>
 /// Decides whether a scanned page image is blank — the empty back sides a duplex feeder

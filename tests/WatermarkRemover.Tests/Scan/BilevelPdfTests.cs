@@ -2,8 +2,7 @@ using System.Text;
 using Docnet.Core;
 using WatermarkRemover.Scan.Core.Models;
 using WatermarkRemover.Scan.Engine;
-using WatermarkRemover.Scan.Pdf;
-using WatermarkRemover.Scan.Pdf.Internal;
+using WatermarkRemover.Pdf;
 
 namespace WatermarkRemover.Tests.Scan;
 

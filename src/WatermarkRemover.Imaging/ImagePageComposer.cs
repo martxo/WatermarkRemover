@@ -1,6 +1,6 @@
 using SkiaSharp;
 
-namespace WatermarkRemover.App.Imaging;
+namespace WatermarkRemover.Imaging;
 
 /// <summary>
 /// Packs document images into one page per layout template, with no document-type knowledge:

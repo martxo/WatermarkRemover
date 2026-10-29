@@ -3,10 +3,9 @@ using System.Text.RegularExpressions;
 using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors; // ORT vendors DenseTensor here — not System.Numerics.Tensors
 using SkiaSharp;
-using WatermarkRemover.App.Logging;
 using WatermarkRemover.Core.Features.Layout;
 
-namespace WatermarkRemover.App.Layout;
+namespace WatermarkRemover.Ocr.Layout;
 
 /// <summary>
 /// Generic document layout block powered by the DocLayout-YOLO ONNX model (DocStructBench
@@ -40,7 +39,7 @@ public sealed class DocLayoutYoloStage : ILayoutStage
     public static bool TryCreate(out ILayoutStage? stage, out string reason)
     {
         stage = null;
-        string path = AppAssets.Model(ModelFile);
+        string path = OcrAssets.Model(ModelFile);
         if (!File.Exists(path))
         {
             reason = $"模型文件缺失：{ModelFile}";
@@ -78,7 +77,7 @@ public sealed class DocLayoutYoloStage : ILayoutStage
                 List<LayoutRegion> regions = YoloPrePost.ParseRegions(preds, rows, cols, geo, _names);
 
                 // Region dump for manual box verification during real-sample validation.
-                AppLog.Info($"[版面] DocLayout-YOLO 检出 {regions.Count} 区：" +
+                OcrLog.Write($"[版面] DocLayout-YOLO 检出 {regions.Count} 区：" +
                     string.Join("；", regions.Take(12).Select(r => $"{r.Kind}({r.Bounds})")));
                 return regions;
             }).ConfigureAwait(false);

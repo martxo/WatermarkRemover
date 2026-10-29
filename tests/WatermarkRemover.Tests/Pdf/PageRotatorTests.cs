@@ -90,11 +90,11 @@ public class PageRotatorTests : IDisposable
         // so the swap pushes a third of the portrait page outside the box and viewers clip it.
         // The rotator must walk the full 90→180→270→0→90 cycle leaving the box byte-identical.
         string path = Path.Combine(_dir, "flagged.pdf");
-        using (var doc = new PdfSharpCore.Pdf.PdfDocument())
+        using (var doc = new PdfSharp.Pdf.PdfDocument())
         {
             var page = doc.AddPage();
-            page.MediaBox = new PdfSharpCore.Pdf.PdfRectangle(
-                new PdfSharpCore.Drawing.XRect(0, 0, 578.16, 824.88));
+            page.MediaBox = new PdfSharp.Pdf.PdfRectangle(
+                new PdfSharp.Drawing.XRect(0, 0, 578.16, 824.88));
             page.Rotate = 90;
             doc.Save(path);
         }
@@ -131,7 +131,7 @@ public class PageRotatorTests : IDisposable
     private string WriteMultiPageFixture(int pageCount)
     {
         string path = Path.Combine(_dir, $"doc{pageCount}.pdf");
-        using (var doc = new PdfSharpCore.Pdf.PdfDocument())
+        using (var doc = new PdfSharp.Pdf.PdfDocument())
         {
             for (int i = 0; i < pageCount; i++) doc.AddPage();
             doc.Save(path);

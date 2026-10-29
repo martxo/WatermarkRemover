@@ -1,4 +1,4 @@
-namespace WatermarkRemover.App.Imaging;
+namespace WatermarkRemover.Imaging;
 
 /// <summary>How selected images are packed. Deliberately document-agnostic: no branch here
 /// knows about 身份证 / 户口本 / 执照 — the caller picks a pack, any document can use any pack.</summary>

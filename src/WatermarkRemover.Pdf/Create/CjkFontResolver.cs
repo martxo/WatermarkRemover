@@ -1,6 +1,6 @@
 ﻿using PdfSharp.Fonts;
 
-namespace WatermarkRemover.Scan.Pdf;
+namespace WatermarkRemover.Pdf;
 
 /// <summary>
 /// Font resolver for PDFsharp. The platform independent PDFsharp build only knows the base-14 Latin
@@ -11,10 +11,10 @@ namespace WatermarkRemover.Scan.Pdf;
 internal sealed class CjkFontResolver : IFontResolver
 {
     /// <summary>Logical family name passed to <c>XFont</c>; the resolver maps it to an embedded face.</summary>
-    public const string FamilyName = "IpsClone CJK";
+    public const string FamilyName = "WatermarkRemover CJK";
 
     /// <summary>Physical face name reported back to PDFsharp; also the key for <see cref="GetFont"/>.</summary>
-    public const string FaceName = "IpsCloneCjk";
+    public const string FaceName = "WatermarkRemoverCjk";
 
     // Ordered by preference: real CJK fonts first, a Latin font as an absolute last resort so PDF
     // generation never hard-fails on a machine without the usual Chinese fonts (Latin page text then

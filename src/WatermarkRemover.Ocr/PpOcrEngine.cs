@@ -5,7 +5,7 @@ using WatermarkRemover.Core.Features.Layout;
 using WatermarkRemover.Core.Features.Ocr;
 using WatermarkRemover.Core.Geometry;
 
-namespace WatermarkRemover.App.Ocr;
+namespace WatermarkRemover.Ocr;
 
 /// <summary>
 /// Text recognition through PP-OCR (PaddleOCR) ONNX models running fully offline on CPU — the
@@ -39,10 +39,10 @@ public sealed class PpOcrEngine : IOcrEngine, IBoundedOcrEngine, IDisposable
     {
         engine = null;
 
-        string det = AppAssets.Model(DetModelFile);
-        string cls = AppAssets.Model(ClsModelFile);
-        string rec = AppAssets.Model(RecModelFile);
-        string keys = AppAssets.Model(KeysFile);
+        string det = OcrAssets.Model(DetModelFile);
+        string cls = OcrAssets.Model(ClsModelFile);
+        string rec = OcrAssets.Model(RecModelFile);
+        string keys = OcrAssets.Model(KeysFile);
 
         string[] missing = new[] { det, cls, rec, keys }.Where(p => !File.Exists(p)).ToArray();
         if (missing.Length > 0)

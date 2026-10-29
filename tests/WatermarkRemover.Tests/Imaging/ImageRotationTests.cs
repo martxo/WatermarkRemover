@@ -1,5 +1,5 @@
 using SkiaSharp;
-using WatermarkRemover.App.Imaging;
+using WatermarkRemover.Imaging;
 
 namespace WatermarkRemover.Tests.Imaging;
 

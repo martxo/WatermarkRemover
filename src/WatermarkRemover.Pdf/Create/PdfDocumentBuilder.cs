@@ -1,13 +1,11 @@
 using WatermarkRemover.Scan.Core.Abstractions;
 using WatermarkRemover.Scan.Core.Models;
-using WatermarkRemover.Scan.Pdf.Internal;
 using PdfSharp;
 using PdfSharp.Drawing;
-using PdfSharp.Fonts;
 using PdfSharp.Pdf;
 using PdfSharp.Pdf.IO;
 
-namespace WatermarkRemover.Scan.Pdf;
+namespace WatermarkRemover.Pdf;
 
 /// <summary>Everything the PDF builder needs beyond the document itself.</summary>
 public sealed record PdfBuildOptions
@@ -42,6 +40,23 @@ public sealed record EncodedScanPage(
     double WidthPt,
     double HeightPt);
 
+/// <summary>One recognised word in page-pixel coordinates, drawn into the searchable layer.</summary>
+public sealed record PdfTextWord(string Text, double X, double Y, double Width, double Height);
+
+/// <summary>
+/// One finished page for the library-level assembly API: encoded payload plus the original
+/// pixel/point geometry and the text layer. Document-agnostic, so consumers with their own scan
+/// models (for example ipscan-clone) can build PDFs without adopting WatermarkRemover.Scan.Core.
+/// </summary>
+public sealed record PdfPageContent(
+    byte[]? Bytes,
+    byte[]? Ccitt,
+    int PixelWidth,
+    int PixelHeight,
+    double WidthPt,
+    double HeightPt,
+    IReadOnlyList<PdfTextWord> Words);
+
 /// <summary>
 /// Builds the PDF byte stream for a scanned document. Page layout, the optional searchable text
 /// layer and the page-number stamp exist in exactly one place; callers supply the image encoder.
@@ -56,30 +71,6 @@ public static class PdfDocumentBuilder
     /// <summary>JPEG quality for 高压缩 PDF embedded bitmaps (the target's 60~75 range).</summary>
     private const int HighCompressionJpegQuality = 70;
 
-    private static readonly object InitGate = new();
-    private static bool _initialized;
-
-    /// <summary>PDFsharp 6.x keeps a global (process wide) font resolver and licence state.</summary>
-    private static void EnsureInitialized()
-    {
-        lock (InitGate)
-        {
-            if (_initialized)
-            {
-                return;
-            }
-
-            // PDFsharp 6.x ships under AGPL-3.0 and refuses to create a PdfDocument until the
-            // licence is acknowledged at runtime, so this call is mandatory before any PdfDocument.
-            PdfSharpLicense.SetAgplLicense();
-
-            // The platform independent build cannot resolve Windows fonts, so install our own.
-            GlobalFontSettings.FontResolver ??= new CjkFontResolver();
-
-            _initialized = true;
-        }
-    }
-
     /// <param name="document">Pages, settings and base name to render.</param>
     /// <param name="options">Searchable layer / page numbers / password / compression knobs.</param>
     /// <param name="encoder">Image encoder supplied by the imaging layer (RasterImage -> bitmap bytes).</param>
@@ -88,7 +79,7 @@ public static class PdfDocumentBuilder
         ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(encoder);
-        EnsureInitialized();
+        PdfSharpRuntime.EnsureInitialized();
 
         var bytes = Render(document, options, encoder);
         if (options.Encrypted && !CanOpenWithPassword(bytes, options.UserPassword))
@@ -117,8 +108,36 @@ public static class PdfDocumentBuilder
         if (encodedPages.Count != document.Pages.Count)
             throw new ArgumentException("编码页数与文档页数不一致。", nameof(encodedPages));
 
-        EnsureInitialized();
-        byte[] bytes = Assemble(document, options, ResolveDpi(document.Settings), encodedPages);
+        PdfSharpRuntime.EnsureInitialized();
+        byte[] bytes = Assemble(
+            document.BaseName ?? string.Empty,
+            options,
+            ResolveDpi(document.Settings),
+            MapPages(document, encodedPages));
+        if (options.Encrypted && !CanOpenWithPassword(bytes, options.UserPassword))
+        {
+            throw new InvalidOperationException("加密 PDF 生成后无法用密码回读，已中止输出以免写出无法打开的文件。");
+        }
+        return bytes;
+    }
+
+    /// <summary>
+    /// Builds a PDF from already-encoded pages without any WatermarkRemover scan model. This is the
+    /// entry point for other projects (ipscan-clone, batch tools): they keep their own document
+    /// types and only hand over payload + geometry + recognised words.
+    /// </summary>
+    public static byte[] Build(
+        string title,
+        PdfBuildOptions options,
+        double dpi,
+        IReadOnlyList<PdfPageContent> pages)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(pages);
+        if (pages.Count == 0) throw new ArgumentException("没有可写入的页面", nameof(pages));
+
+        PdfSharpRuntime.EnsureInitialized();
+        byte[] bytes = Assemble(title ?? string.Empty, options, dpi > 0 ? dpi : FallbackDpi, pages);
         if (options.Encrypted && !CanOpenWithPassword(bytes, options.UserPassword))
         {
             throw new InvalidOperationException("加密 PDF 生成后无法用密码回读，已中止输出以免写出无法打开的文件。");
@@ -137,7 +156,27 @@ public static class PdfDocumentBuilder
     {
         double dpi = ResolveDpi(document.Settings);
         EncodedScanPage[] encodedPages = EncodePages(document.Pages, options, encoder, dpi);
-        return Assemble(document, options, dpi, encodedPages);
+        return Assemble(document.BaseName ?? string.Empty, options, dpi, MapPages(document, encodedPages));
+    }
+
+    /// <summary>Pairs each encoded page with its page's recognised words.</summary>
+    private static PdfPageContent[] MapPages(
+        ScanDocument document, IReadOnlyList<EncodedScanPage> encodedPages)
+    {
+        var pages = new PdfPageContent[encodedPages.Count];
+        for (var i = 0; i < pages.Length; i++)
+        {
+            EncodedScanPage encoded = encodedPages[i];
+            PdfTextWord[] words = document.Pages[i].Words
+                .Select(w => new PdfTextWord(w.Text, w.X, w.Y, w.Width, w.Height))
+                .ToArray();
+            pages[i] = new PdfPageContent(
+                encoded.Bytes, encoded.Ccitt,
+                encoded.PixelWidth, encoded.PixelHeight,
+                encoded.WidthPt, encoded.HeightPt,
+                words);
+        }
+        return pages;
     }
 
     /// <summary>
@@ -170,27 +209,26 @@ public static class PdfDocumentBuilder
     }
 
     private static byte[] Assemble(
-        ScanDocument document,
+        string title,
         PdfBuildOptions options,
         double dpi,
-        IReadOnlyList<EncodedScanPage> encodedPages)
+        IReadOnlyList<PdfPageContent> pages)
     {
         // --- Assemble the document single-threaded ---
         // PdfSharp's object graph is not thread-safe, so the assembly just consumes the finished
         // byte payloads — no pixel work happens here, it only writes dictionaries and streams.
         using var pdf = new PdfDocument();
-        pdf.Info.Title = document.BaseName ?? string.Empty;
+        pdf.Info.Title = title ?? string.Empty;
 
         if (options.Encrypted)
         {
             ApplyEncryption(pdf, options);
         }
 
-        var total = document.Pages.Count;
+        var total = pages.Count;
         for (var index = 0; index < total; index++)
         {
-            var source = document.Pages[index];
-            var encoded = encodedPages[index];
+            var encoded = pages[index];
 
             var page = pdf.AddPage();
             page.Width = XUnit.FromPoint(encoded.WidthPt);
@@ -201,12 +239,12 @@ public static class PdfDocumentBuilder
             if (encoded.Ccitt is { } ccitt)
             {
                 WriteBilevelPage(pdf, page, encoded.PixelWidth, encoded.PixelHeight, encoded.WidthPt, encoded.HeightPt, ccitt);
-                if (options.Searchable && source.Words.Count > 0)
+                if (options.Searchable && encoded.Words.Count > 0)
                 {
                     // Invisible text under the image: drawn into an earlier content stream, so
                     // the opaque fax image covers it (white glyphs stay hidden on paper).
                     using var textGfx = XGraphics.FromPdfPage(page, XGraphicsPdfPageOptions.Prepend);
-                    DrawTextLayer(textGfx, source.Words, dpi);
+                    DrawTextLayer(textGfx, encoded.Words, dpi);
                 }
             }
             else
@@ -218,9 +256,9 @@ public static class PdfDocumentBuilder
                 // hide the text. Drawing the OCR words first (in white) and the image second keeps the
                 // glyphs out of sight on screen and on paper while they still live in the page content
                 // stream: a PDF reader can select, copy and search them.
-                if (options.Searchable && source.Words.Count > 0)
+                if (options.Searchable && encoded.Words.Count > 0)
                 {
-                    DrawTextLayer(gfx, source.Words, dpi);
+                    DrawTextLayer(gfx, encoded.Words, dpi);
                 }
 
                 using var stream = new MemoryStream(encoded.Bytes!);
@@ -354,7 +392,7 @@ public static class PdfDocumentBuilder
         }
     }
 
-    private static void DrawTextLayer(XGraphics gfx, IReadOnlyList<OcrWord> words, double dpi)
+    private static void DrawTextLayer(XGraphics gfx, IReadOnlyList<PdfTextWord> words, double dpi)
     {
         var brush = new XSolidBrush(XColors.White);
         var fonts = new Dictionary<int, XFont>();

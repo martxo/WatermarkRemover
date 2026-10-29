@@ -1,6 +1,5 @@
-using PdfSharpCore;
-using PdfSharpCore.Pdf;
-using PdfSharpCore.Pdf.IO;
+using PdfSharp.Pdf;
+using PdfSharp.Pdf.IO;
 
 namespace WatermarkRemover.Pdf;
 

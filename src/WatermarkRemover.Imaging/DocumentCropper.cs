@@ -1,6 +1,6 @@
 using SkiaSharp;
 
-namespace WatermarkRemover.App.Imaging;
+namespace WatermarkRemover.Imaging;
 
 /// <summary>How aggressively a photo is cut down to its document.</summary>
 public enum CropMode

@@ -6,7 +6,7 @@ using Docnet.Core.Readers;
 using SkiaSharp;
 using WatermarkRemover.Core.Features.Ocr;
 
-namespace WatermarkRemover.App.Ocr;
+namespace WatermarkRemover.Pdf.Rendering;
 
 /// <summary>
 /// Renders PDF pages with PDFium (via Docnet.Core) instead of the WinRT Windows.Data.Pdf API.
@@ -14,6 +14,9 @@ namespace WatermarkRemover.App.Ocr;
 /// where the WinRT PDF stack is missing or unregistered (Windows N / LTSC / stripped systems) —
 /// the failure that surfaced as REGDB_E_CLASSNOTREG (0x80040154). Output is PNG, the format every
 /// OCR engine accepts.
+///
+/// This lives in the PDF library (not in the WPF app) so any consumer — OCR, naming, previews,
+/// or another project — gets the same serialised pdfium access without copying this logic.
 /// </summary>
 public sealed class PdfiumPdfPageRenderer : IPdfPageRenderer
 {

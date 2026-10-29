@@ -1,10 +1,11 @@
 using SkiaSharp;
-using WatermarkRemover.App.Layout;
 using WatermarkRemover.App.Logging;
 using WatermarkRemover.Core.Features;
 using WatermarkRemover.Core.Features.Layout;
 using WatermarkRemover.Core.Features.Ocr;
 using WatermarkRemover.Core.Geometry;
+using WatermarkRemover.Ocr;
+using WatermarkRemover.Ocr.Layout;
 
 namespace WatermarkRemover.App.Ocr;
 
@@ -17,6 +18,8 @@ namespace WatermarkRemover.App.Ocr;
 /// </summary>
 internal static class AppOcrEngineChain
 {
+    static AppOcrEngineChain() => OcrLog.Info = AppLog.Info;
+
     public static OcrEngineChain Instance { get; } = new(new IProbeFactory<IOcrEngine>[]
     {
         new DelegateProbeFactory<IOcrEngine>(
@@ -67,7 +70,7 @@ internal static class AppOcrEngineChain
     /// </summary>
     public static void ApplyPipeline(string? layoutName, string? engineName)
     {
-        ILayoutStage stage = AppLayoutStageChain.Instance.Select(layoutName);
+        ILayoutStage stage = OcrLayoutStageChain.Instance.Select(layoutName);
         IOcrEngine engine = Instance.Select(engineName);
         var pipeline = new PipelineOcrEngine(stage, engine, CropForOcr, trace: AppLog.Trace);
         Current.SwitchTo(pipeline);

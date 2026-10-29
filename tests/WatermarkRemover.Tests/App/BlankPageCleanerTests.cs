@@ -1,5 +1,5 @@
 ﻿using SkiaSharp;
-using WatermarkRemover.App.Scan;
+using WatermarkRemover.Imaging;
 using WatermarkRemover.App.ViewModels;
 using WatermarkRemover.Core.Features.Ocr;
 using WatermarkRemover.Core.Settings;
@@ -66,7 +66,7 @@ public class BlankPageCleanerTests
     private static string NewPdf(int pages)
     {
         string path = Path.Combine(Path.GetTempPath(), "wm-blank-" + Guid.NewGuid().ToString("N") + ".pdf");
-        var doc = new PdfSharpCore.Pdf.PdfDocument();
+        var doc = new PdfSharp.Pdf.PdfDocument();
         for (int i = 0; i < pages; i++)
             doc.AddPage();
         doc.Save(path);
@@ -75,7 +75,7 @@ public class BlankPageCleanerTests
 
     private static int PageCount(string pdfPath)
     {
-        using var doc = PdfSharpCore.Pdf.IO.PdfReader.Open(pdfPath, PdfSharpCore.Pdf.IO.PdfDocumentOpenMode.InformationOnly);
+        using var doc = PdfSharp.Pdf.IO.PdfReader.Open(pdfPath, PdfSharp.Pdf.IO.PdfDocumentOpenMode.InformationOnly);
         return doc.PageCount;
     }
 

@@ -1,7 +1,7 @@
 using System.IO;
 using SkiaSharp;
 
-namespace WatermarkRemover.App.Ocr;
+namespace WatermarkRemover.Ocr;
 
 /// <summary>
 /// Turns a user-supplied photo or scan into the same PNG the PDF renderer hands the OCR engines:

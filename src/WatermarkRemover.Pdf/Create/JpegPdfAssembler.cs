@@ -1,9 +1,8 @@
 using System.Text;
-using PdfSharp;
 using PdfSharp.Drawing;
 using PdfSharp.Pdf;
 
-namespace WatermarkRemover.Scan.Pdf;
+namespace WatermarkRemover.Pdf;
 
 /// <summary>
 /// Assembles JPEG pages into a PDF with no decode/re-encode round trip: each JPEG stream is
@@ -17,20 +16,6 @@ public static class JpegPdfAssembler
     /// <summary>Assumed resolution of the embedded pages; 2480 px ≈ A4 at this size.</summary>
     private const double DefaultDpi = 300;
 
-    private static readonly object InitGate = new();
-    private static bool _initialized;
-
-    /// <summary>PDFsharp 6.x keeps a global (process wide) licence state.</summary>
-    private static void EnsureInitialized()
-    {
-        lock (InitGate)
-        {
-            if (_initialized) return;
-            PdfSharpLicense.SetAgplLicense();
-            _initialized = true;
-        }
-    }
-
     /// <param name="title">Document metadata title (may be empty).</param>
     /// <param name="jpegPages">One complete JPEG stream per page, in page order.</param>
     public static byte[] Build(string title, IReadOnlyList<byte[]> jpegPages)
@@ -38,7 +23,7 @@ public static class JpegPdfAssembler
         ArgumentNullException.ThrowIfNull(jpegPages);
         if (jpegPages.Count == 0) throw new ArgumentException("没有可写入的页面", nameof(jpegPages));
 
-        EnsureInitialized();
+        PdfSharpRuntime.EnsureInitialized();
 
         using var pdf = new PdfDocument();
         pdf.Info.Title = title ?? string.Empty;

@@ -6,7 +6,7 @@ using WatermarkRemover.Core.Features.Layout;
 using WatermarkRemover.Core.Features.Ocr;
 using WatermarkRemover.Core.Geometry;
 
-namespace WatermarkRemover.App.Ocr;
+namespace WatermarkRemover.Ocr;
 
 /// <summary>
 /// Text recognition through the OCR engine built into Windows 10+ — zero footprint, zero

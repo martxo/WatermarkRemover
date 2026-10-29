@@ -1,4 +1,4 @@
-using PdfSharpCore.Pdf;
+using PdfSharp.Pdf;
 
 namespace WatermarkRemover.Pdf;
 
@@ -29,9 +29,10 @@ public static class PdfPageOrderer
                 throw new ArgumentOutOfRangeException(nameof(toIndex),
                     $"目标位置超出范围：第 {toIndex + 1} 位（共 {doc.PageCount} 页）。");
 
-            PdfPage page = doc.Pages[fromIndex];
-            doc.Pages.Remove(page);
-            doc.Pages.Insert(toIndex, page);
+            // PDFsharp 6.x keeps every page in the cross-reference table while it is in the page
+            // tree; a remove + insert of the same object throws "Object already in table". Its
+            // dedicated MovePage keeps the object identity and only rewrites the page order.
+            doc.Pages.MovePage(fromIndex, toIndex);
         });
         return true;
     }

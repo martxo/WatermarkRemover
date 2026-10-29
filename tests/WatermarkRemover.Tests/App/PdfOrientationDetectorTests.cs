@@ -1,5 +1,5 @@
 using SkiaSharp;
-using WatermarkRemover.App.Ocr;
+using WatermarkRemover.Ocr;
 using WatermarkRemover.Core.Features.Layout;
 using WatermarkRemover.Core.Features.Ocr;
 using WatermarkRemover.Core.Geometry;

@@ -3,7 +3,7 @@ using SkiaSharp;
 using WatermarkRemover.Core.Features.Layout;
 using WatermarkRemover.Core.Geometry;
 
-namespace WatermarkRemover.App.Layout;
+namespace WatermarkRemover.Ocr.Layout;
 
 /// <summary>
 /// Pre/post-processing for the DocLayout-YOLO ONNX export, mirroring the repository's official

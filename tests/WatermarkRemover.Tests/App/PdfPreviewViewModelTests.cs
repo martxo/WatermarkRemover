@@ -410,7 +410,7 @@ public class PdfPreviewViewModelTests
     private static string WriteMultiPagePdf(int pageCount)
     {
         string path = Path.Combine(Path.GetTempPath(), "wm-prevdel-" + Guid.NewGuid().ToString("N") + ".pdf");
-        using (var doc = new PdfSharpCore.Pdf.PdfDocument())
+        using (var doc = new PdfSharp.Pdf.PdfDocument())
         {
             for (int i = 0; i < pageCount; i++) doc.AddPage();
             doc.Save(path);
@@ -420,7 +420,7 @@ public class PdfPreviewViewModelTests
 
     private static int ReadPageCount(string path)
     {
-        using var doc = PdfSharpCore.Pdf.IO.PdfReader.Open(path, PdfSharpCore.Pdf.IO.PdfDocumentOpenMode.InformationOnly);
+        using var doc = PdfSharp.Pdf.IO.PdfReader.Open(path, PdfSharp.Pdf.IO.PdfDocumentOpenMode.InformationOnly);
         return doc.PageCount;
     }
 

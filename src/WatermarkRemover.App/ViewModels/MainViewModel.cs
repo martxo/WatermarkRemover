@@ -5,6 +5,8 @@ using System.IO;
 using System.Windows;
 using WatermarkRemover.App.Logging;
 using WatermarkRemover.App.Ocr;
+using WatermarkRemover.Pdf.Rendering;
+using WatermarkRemover.Ocr;
 using WatermarkRemover.App.Services;
 using WatermarkRemover.App.Settings;
 using WatermarkRemover.App.Updates;

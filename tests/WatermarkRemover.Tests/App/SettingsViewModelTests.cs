@@ -1,5 +1,5 @@
-using WatermarkRemover.App.Layout;
 using WatermarkRemover.App.Ocr;
+using WatermarkRemover.Ocr.Layout;
 using WatermarkRemover.App.Recognition;
 using WatermarkRemover.App.Services;
 using WatermarkRemover.App.ViewModels;
@@ -265,7 +265,7 @@ public class SettingsViewModelTests
 
         // One row per layout block registered in the app chain (declarative registration);
         // the full-image passthrough is pinned first, so an empty preference lands there.
-        Assert.Equal(AppLayoutStageChain.Instance.Factories.Count, vm.LayoutOptions.Count);
+        Assert.Equal(OcrLayoutStageChain.Instance.Factories.Count, vm.LayoutOptions.Count);
         Assert.Equal("整图直通", vm.LayoutOptions[0].Name);
         Assert.True(vm.LayoutOptions[0].IsSelected);
 

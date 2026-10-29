@@ -1,9 +1,9 @@
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Windows;
-using WatermarkRemover.App.Layout;
 using WatermarkRemover.App.Logging;
 using WatermarkRemover.App.Ocr;
+using WatermarkRemover.Ocr.Layout;
 using WatermarkRemover.App.Recognition;
 using WatermarkRemover.App.Services;
 using WatermarkRemover.App.Updates;
@@ -502,7 +502,7 @@ public sealed class SettingsViewModel : ObservableObject
                 engine.Read, engine.Write, "OcrEngineChoice"));
 
         LayoutOptions.Clear();
-        foreach (var factory in AppLayoutStageChain.Instance.Factories)
+        foreach (var factory in OcrLayoutStageChain.Instance.Factories)
             LayoutOptions.Add(new OcrEngineOptionViewModel(
                 Settings, factory.Name, factory.Name, factory.Description,
                 layout.Read, layout.Write, "LayoutStageChoice"));
@@ -525,7 +525,7 @@ public sealed class SettingsViewModel : ObservableObject
             ProbeLink<IOcrEngine>[] links = await Task.Run(() =>
             {
                 AppOcrEngineChain.Instance.EnsureAllProbed();
-                AppLayoutStageChain.Instance.EnsureAllProbed();
+                OcrLayoutStageChain.Instance.EnsureAllProbed();
                 return AppOcrEngineChain.Instance.Links.ToArray();
             });
 
@@ -552,7 +552,7 @@ public sealed class SettingsViewModel : ObservableObject
     /// <summary>Maps the layout chain's probe results onto the radio rows (UI-thread only).</summary>
     private void UpdateLayoutStatuses()
     {
-        ProbeLink<ILayoutStage>[] links = AppLayoutStageChain.Instance.Links.ToArray();
+        ProbeLink<ILayoutStage>[] links = OcrLayoutStageChain.Instance.Links.ToArray();
         foreach (var option in LayoutOptions)
         {
             ProbeLink<ILayoutStage>? link = links.FirstOrDefault(

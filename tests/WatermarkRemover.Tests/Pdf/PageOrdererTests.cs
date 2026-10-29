@@ -1,5 +1,5 @@
-using PdfSharpCore.Pdf;
-using PdfSharpCore.Pdf.IO;
+using PdfSharp.Pdf;
+using PdfSharp.Pdf.IO;
 using WatermarkRemover.Pdf;
 
 namespace WatermarkRemover.Tests.Pdf;
@@ -30,7 +30,7 @@ public class PageOrdererTests : IDisposable
             foreach (double width in widths)
             {
                 var page = doc.AddPage();
-                page.MediaBox = new PdfRectangle(new PdfSharpCore.Drawing.XRect(0, 0, width, 100));
+                page.MediaBox = new PdfRectangle(new PdfSharp.Drawing.XRect(0, 0, width, 100));
                 page.Rotate = 90;
             }
             doc.Save(path);

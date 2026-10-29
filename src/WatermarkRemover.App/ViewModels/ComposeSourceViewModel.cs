@@ -2,7 +2,7 @@ using System.IO;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using SkiaSharp;
-using WatermarkRemover.App.Imaging;
+using WatermarkRemover.Imaging;
 
 namespace WatermarkRemover.App.ViewModels;
 

@@ -1,17 +1,17 @@
 using WatermarkRemover.Core.Features;
 using WatermarkRemover.Core.Features.Layout;
 
-namespace WatermarkRemover.App.Layout;
+namespace WatermarkRemover.Ocr.Layout;
 
 /// <summary>
-/// The app's layout stage chain — the first pipeline stage (how the page is split), probed once
+/// The layout stage chain — the first pipeline stage (how the page is split), probed once
 /// per process. Registration order is priority order and the always-available full-image
 /// passthrough is pinned at the top, so a machine missing every model recognises exactly like
 /// the direct path. Adding a block = append one factory line here (name + description + probe);
 /// settings UI, selection and fallback all follow automatically — same contract as
 /// <c>AppOcrEngineChain</c>.
 /// </summary>
-internal static class AppLayoutStageChain
+public static class OcrLayoutStageChain
 {
     public static LayoutStageChain Instance { get; } = new(new IProbeFactory<ILayoutStage>[]
     {

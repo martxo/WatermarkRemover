@@ -1,4 +1,4 @@
-﻿using PdfSharpCore.Pdf.IO;
+﻿using PdfSharp.Pdf.IO;
 using SkiaSharp;
 using WatermarkRemover.App.ViewModels;
 using WatermarkRemover.Core.Features.Ocr;
@@ -55,7 +55,11 @@ public class PdfRenameTrackingTests
     public async Task A_renamed_file_is_tracked_and_the_edit_lands_on_the_new_name()
     {
         string pdf = Path.Combine(Path.GetTempPath(), "wm-rename-" + Guid.NewGuid().ToString("N") + ".pdf");
-        File.WriteAllBytes(pdf, PdfFixture.CamScannerLike().Build());
+        // Unique content per test: other classes write the same fixture into %TEMP% in parallel,
+        // and two byte-identical siblings cannot be told apart by the rename tracker (it refuses
+        // to guess). A unique comment keeps this test's file the only content match.
+        File.WriteAllBytes(pdf, PdfFixture.CamScannerLike()
+            .WithContent($"q Q\n% rename-tracking {Guid.NewGuid():N}\n").Build());
         string renamed = Path.ChangeExtension(pdf, ".renamed.pdf");
         try
         {
@@ -86,7 +90,8 @@ public class PdfRenameTrackingTests
     public async Task A_deleted_file_reports_clearly_instead_of_failing_silently()
     {
         string pdf = Path.Combine(Path.GetTempPath(), "wm-rename-" + Guid.NewGuid().ToString("N") + ".pdf");
-        File.WriteAllBytes(pdf, PdfFixture.CamScannerLike().Build());
+        File.WriteAllBytes(pdf, PdfFixture.CamScannerLike()
+            .WithContent($"q Q\n% rename-deleted {Guid.NewGuid():N}\n").Build());
         try
         {
             var vm = new PdfPreviewViewModel(pdf, "scan.pdf", new FakeRenderer(1));

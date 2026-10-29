@@ -4,12 +4,13 @@ using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using WatermarkRemover.App.Imaging;
+using WatermarkRemover.Imaging;
 using WatermarkRemover.App.Logging;
 using WatermarkRemover.App.Services;
 using WatermarkRemover.Core.Features.Ocr;
 using WatermarkRemover.Core.Features.Transfer;
 using WatermarkRemover.Core.Settings;
-using WatermarkRemover.Scan.Pdf;
+using WatermarkRemover.Pdf;
 
 namespace WatermarkRemover.App.ViewModels;
 

@@ -3,7 +3,7 @@ using System.IO;
 using BitMiracle.LibTiff.Classic;
 using WatermarkRemover.Scan.Core.Models;
 
-namespace WatermarkRemover.Scan.Pdf.Internal;
+namespace WatermarkRemover.Pdf;
 
 /// <summary>
 /// Embeds bilevel (engine 黑白) frames the way the target's official software does: a raw

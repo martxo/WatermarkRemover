@@ -7,15 +7,19 @@
     <!-- Netdisk feature (网盘): product providers (Aliyun Drive first), discovered at runtime. -->
     <ProjectReference Include="..\WatermarkRemover.Netdisk\WatermarkRemover.Netdisk.csproj" />
     <ProjectReference Include="..\WatermarkRemover.Pdf\WatermarkRemover.Pdf.csproj" />
-    <!-- Scan feature (扫描): engine channel (Brother bridge + WIA fallback) and PDF assembly. -->
+    <!-- OCR is a standalone library: engines, layout blocks and orientation detection, reusable
+         by non-WPF consumers. The app only composes them. -->
+    <ProjectReference Include="..\WatermarkRemover.Ocr\WatermarkRemover.Ocr.csproj" />
+    <!-- Pure Skia image primitives shared by the app and the OCR library. -->
+    <ProjectReference Include="..\WatermarkRemover.Imaging\WatermarkRemover.Imaging.csproj" />
+    <!-- Scan feature (扫描): engine channel (Brother bridge + WIA fallback). PDF assembly is
+         part of WatermarkRemover.Pdf now, so the app references one PDF library only. -->
     <ProjectReference Include="..\WatermarkRemover.Scan.Engine\WatermarkRemover.Scan.Engine.csproj" />
-    <ProjectReference Include="..\WatermarkRemover.Scan.Pdf\WatermarkRemover.Scan.Pdf.csproj" />
   </ItemGroup>
 
   <ItemGroup>
-    <!-- PDF page rendering through pdfium: works where WinRT's Windows.Data.Pdf is missing
-         (Windows N / LTSC / stripped systems), which surfaced as REGDB_E_CLASSNOTREG 0x80040154. -->
-    <PackageReference Include="Docnet.Core" Version="2.6.0" />
+    <!-- PDF page rendering (pdfium) now lives in WatermarkRemover.Pdf; the app only consumes
+         IPdfPageRenderer, so Docnet no longer needs a direct reference here. -->
     <!-- PP-OCR (PaddleOCR ONNX) recognition for machines without WeChat. -->
     <PackageReference Include="RapidOcrNet" Version="4.2.0" />
     <!-- QR code for the 手机传文件 page: PngByteQRCode has no System.Drawing dependency. -->

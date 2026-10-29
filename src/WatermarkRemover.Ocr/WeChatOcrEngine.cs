@@ -7,7 +7,7 @@ using WatermarkRemover.Core.Features.Layout;
 using WatermarkRemover.Core.Features.Ocr;
 using WatermarkRemover.Core.Geometry;
 
-namespace WatermarkRemover.App.Ocr;
+namespace WatermarkRemover.Ocr;
 
 /// <summary>
 /// Text recognition through the offline OCR engine bundled with WeChat (Weixin) 4.x. The engine

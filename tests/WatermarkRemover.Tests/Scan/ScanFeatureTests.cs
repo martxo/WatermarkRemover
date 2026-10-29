@@ -5,7 +5,7 @@ using WatermarkRemover.Core.Settings;
 using WatermarkRemover.Scan.Core.Models;
 using WatermarkRemover.Scan.Core.Pipeline;
 using WatermarkRemover.Scan.Engine;
-using WatermarkRemover.Scan.Pdf;
+using WatermarkRemover.Pdf;
 
 namespace WatermarkRemover.Tests.Scan;
 

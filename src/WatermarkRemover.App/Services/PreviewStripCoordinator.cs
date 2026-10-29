@@ -3,7 +3,7 @@ using System.IO;
 using System.Windows;
 using System.Windows.Media;
 using WatermarkRemover.App.Logging;
-using WatermarkRemover.App.Ocr;
+using WatermarkRemover.Pdf.Rendering;
 using WatermarkRemover.App.ViewModels;
 using WatermarkRemover.Core.Features.Ocr;
 

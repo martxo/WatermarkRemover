@@ -1,6 +1,6 @@
 ﻿using WatermarkRemover.Scan.Core.Models;
 
-namespace WatermarkRemover.Scan.Pdf;
+namespace WatermarkRemover.Pdf;
 
 /// <summary>
 /// Shared page geometry helpers: pixel&lt;-&gt;point conversion at a given DPI and a paper-size table.
@@ -44,6 +44,10 @@ internal static class PageGeometry
 
     /// <summary>Converts a pixel length to points: pt = px * 72 / dpi.</summary>
     public static double PixelsToPoints(int pixels, double dpi) =>
+        PixelsToPoints((double)pixels, dpi);
+
+    /// <summary>Converts a fractional pixel length (for example an OCR word box) to points.</summary>
+    public static double PixelsToPoints(double pixels, double dpi) =>
         pixels <= 0 || dpi <= 0 ? 0 : pixels * PointsPerInch / dpi;
 
     /// <summary>Converts a point length back to pixels: px = pt * dpi / 72.</summary>

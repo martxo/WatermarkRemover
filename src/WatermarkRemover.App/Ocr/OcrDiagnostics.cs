@@ -1,7 +1,7 @@
 using System.Runtime.InteropServices;
 using System.Text;
 using Windows.Storage.Streams;
-using WatermarkRemover.App.Layout;
+using WatermarkRemover.Ocr.Layout;
 
 namespace WatermarkRemover.App.Ocr;
 
@@ -34,8 +34,8 @@ public static class OcrDiagnostics
 
         // Layout blocks probe on demand: the report is only built for bug reports, so loading
         // the model files here to show every block's availability is acceptable.
-        AppLayoutStageChain.Instance.EnsureAllProbed();
-        sb.AppendLine(AppLayoutStageChain.Instance.Describe());
+        OcrLayoutStageChain.Instance.EnsureAllProbed();
+        sb.AppendLine(OcrLayoutStageChain.Instance.Describe());
 
         // The PDF renderer used to go through WinRT too; record whether the OS PDF stack still
         // answers — that activation is what threw REGDB_E_CLASSNOTREG before the pdfium switch.

@@ -1,4 +1,4 @@
-using PdfSharpCore.Pdf.IO;
+using PdfSharp.Pdf.IO;
 using SkiaSharp;
 using WatermarkRemover.App.ViewModels;
 using WatermarkRemover.Core.Features.Ocr;

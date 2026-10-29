@@ -1,5 +1,5 @@
 using SkiaSharp;
-using WatermarkRemover.App.Ocr;
+using WatermarkRemover.Ocr;
 
 namespace WatermarkRemover.Tests.App;
 

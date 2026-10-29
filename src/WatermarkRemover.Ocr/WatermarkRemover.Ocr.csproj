@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- WinRT projections are required by WindowsMediaOcrEngine (Windows.Media.Ocr). The
+         target framework matches the app, so the library can be consumed without retargeting. -->
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>WatermarkRemover.Ocr</RootNamespace>
+    <AssemblyName>WatermarkRemover.Ocr</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- PP-OCR (PaddleOCR ONNX) offline engine for machines without WeChat. -->
+    <PackageReference Include="RapidOcrNet" Version="4.2.0" />
+    <PackageReference Include="SkiaSharp" Version="3.119.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\WatermarkRemover.Core\WatermarkRemover.Core.csproj" />
+    <ProjectReference Include="..\WatermarkRemover.Imaging\WatermarkRemover.Imaging.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="WatermarkRemover.Tests" />
+  </ItemGroup>
+
+</Project>

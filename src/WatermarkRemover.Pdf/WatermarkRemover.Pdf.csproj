@@ -1,17 +1,34 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
-  <ItemGroup>
-    <ProjectReference Include="..\WatermarkRemover.Core\WatermarkRemover.Core.csproj" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <PackageReference Include="PdfSharpCore" Version="1.3.67" />
-  </ItemGroup>
-
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <RootNamespace>WatermarkRemover.Pdf</RootNamespace>
+    <AssemblyName>WatermarkRemover.Pdf</AssemblyName>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Single PDF engine for the whole solution: PDFsharp 6.x (AGPL-3.0, acknowledged at
+         runtime by PdfSharpRuntime). PdfSharpCore was a second fork of the same library and
+         has been removed so create/edit/render all share one object model. -->
+    <PackageReference Include="PDFsharp" Version="6.5.0" />
+    <!-- Pure-managed CCITT G4 (fax T.6) codec, BSD-licensed: compresses bilevel scan frames
+         for the official-style raw image XObject path (see CcittG4Image). -->
+    <PackageReference Include="BitMiracle.LibTiff.NET" Version="2.4.660" />
+    <!-- PDFium-based page rendering so other projects can rasterise PDFs without the WinRT
+         Windows.Data.Pdf stack (missing on N/LTSC builds). -->
+    <PackageReference Include="Docnet.Core" Version="2.6.0" />
+    <PackageReference Include="SkiaSharp" Version="3.119.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\WatermarkRemover.Core\WatermarkRemover.Core.csproj" />
+    <ProjectReference Include="..\WatermarkRemover.Scan.Core\WatermarkRemover.Scan.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="WatermarkRemover.Tests" />
+  </ItemGroup>
 
 </Project>

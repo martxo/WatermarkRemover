@@ -1,6 +1,6 @@
 using SkiaSharp;
 
-namespace WatermarkRemover.App.Imaging;
+namespace WatermarkRemover.Imaging;
 
 /// <summary>
 /// Quarter-turn rotation for page images in the 手机传文件 gallery. Rotation always re-encodes

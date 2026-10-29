@@ -2,6 +2,9 @@ using System.IO;
 using WatermarkRemover.App.Logging;
 using WatermarkRemover.App.Naming;
 using WatermarkRemover.App.Ocr;
+using WatermarkRemover.Pdf.Rendering;
+using WatermarkRemover.Ocr;
+using WatermarkRemover.Imaging;
 using WatermarkRemover.Core.Features.Layout;
 using WatermarkRemover.Core.Features.Naming;
 using WatermarkRemover.Core.Features.Ocr;
@@ -216,7 +219,7 @@ public sealed class ContentNamingService
         // A blank page cannot name anything, but it used to pay the orientation vote (four OCR
         // passes) plus a full-page OCR — the slow "空白页也在识别" the scanner reported. The pixel
         // verdict is cheap and lets the next probe page start immediately.
-        if (Scan.BlankPageDetector.IsBlank(image))
+        if (BlankPageDetector.IsBlank(image))
         {
             AppLog.Trace($"命名：第 {pageIndex + 1}/{pageCount} 页为空白页，跳过识别", null);
             op.Step($"第 {pageIndex + 1}/{pageCount} 页空白", "跳过");

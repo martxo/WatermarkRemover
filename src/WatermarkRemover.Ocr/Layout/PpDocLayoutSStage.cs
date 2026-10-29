@@ -2,11 +2,10 @@ using System.IO;
 using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
 using SkiaSharp;
-using WatermarkRemover.App.Logging;
 using WatermarkRemover.Core.Features.Layout;
 using WatermarkRemover.Core.Geometry;
 
-namespace WatermarkRemover.App.Layout;
+namespace WatermarkRemover.Ocr.Layout;
 
 /// <summary>
 /// Lightweight layout block on the PP-DocLayout-S ONNX export (4.7 MB, bundled in <c>Models\</c>).
@@ -57,7 +56,7 @@ public sealed class PpDocLayoutSStage : ILayoutStage
     public static bool TryCreate(out ILayoutStage? stage, out string reason)
     {
         stage = null;
-        string path = AppAssets.Model(ModelFile);
+        string path = OcrAssets.Model(ModelFile);
         if (!File.Exists(path))
         {
             reason = $"模型文件缺失：{ModelFile}";
@@ -115,7 +114,7 @@ public sealed class PpDocLayoutSStage : ILayoutStage
                 (float[] preds, int rows, int cols, int count) = RunSession(image, scale);
 
                 List<LayoutRegion> regions = ParseRegions(preds, rows, cols, count, origW, origH);
-                AppLog.Info($"[版面] PP-DocLayout-S 检出 {regions.Count} 区：" +
+                OcrLog.Write($"[版面] PP-DocLayout-S 检出 {regions.Count} 区：" +
                     string.Join("；", regions.Take(12).Select(r => $"{r.Kind}({r.Bounds})")));
                 return regions;
             }).ConfigureAwait(false);
@@ -204,7 +203,7 @@ public sealed class PpDocLayoutSStage : ILayoutStage
     {
         var regions = new List<LayoutRegion>();
         int limit = Math.Min(count, rows);
-        AppLog.Info($"[版面] PP-DocLayout-S 原始行：" + string.Join("；",
+        OcrLog.Write($"[版面] PP-DocLayout-S 原始行：" + string.Join("；",
             Enumerable.Range(0, limit)
                 .Select(i => $"cls{(int)preds[i * cols]}@{preds[i * cols + 1]:0.00}({preds[i * cols + 2]:0},{preds[i * cols + 3]:0},{preds[i * cols + 4]:0},{preds[i * cols + 5]:0})")
                 .Take(30)));
