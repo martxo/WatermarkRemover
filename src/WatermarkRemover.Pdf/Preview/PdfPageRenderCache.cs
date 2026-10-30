@@ -29,6 +29,13 @@ public sealed class PdfPageRenderCache
     private static readonly object ProcessSync = new();
     private static readonly List<WeakReference<PdfPageRenderCache>> Live = new();
 
+    /// <summary>
+    /// Pages kept when a folded strip hands its bytes back. A wholesale clear made the first
+    /// page after a reopen re-render (~130 ms at 150 dpi) even though the user had just been
+    /// looking at it; keeping the most recently viewed pages makes the accordion instant.
+    /// </summary>
+    private const int TrimKeepPages = 8;
+
     private readonly IPdfPageRenderer _renderer;
     private readonly PdfDocumentFile _file;
     private readonly CancellationToken _cancellationToken;
@@ -37,6 +44,10 @@ public sealed class PdfPageRenderCache
 
     private readonly ConcurrentDictionary<(int Page, int Dpi), byte[]> _renderedPages = new();
     private readonly SemaphoreSlim _gate = new(1, 1);
+    /// <summary>Recency order (most recent first) behind <see cref="Trim"/>. Guarded by
+    /// <see cref="_recentSync" so reads and the fold-time trim never race.</summary>
+    private readonly LinkedList<(int Page, int Dpi)> _recent = new();
+    private readonly object _recentSync = new();
     private long _bytes;
     private int _epoch;
 
@@ -71,6 +82,7 @@ public sealed class PdfPageRenderCache
         var key = (pageIndex, dpi);
         if (_renderedPages.TryGetValue(key, out byte[]? cached))
         {
+            Touch(key);
             _debug?.Invoke($"预览缓存命中：第 {pageIndex + 1} 页，{dpi}dpi，{cached.Length} 字节");
             return cached;
         }
@@ -82,6 +94,7 @@ public sealed class PdfPageRenderCache
         {
             if (_renderedPages.TryGetValue(key, out cached))
             {
+                Touch(key);
                 _debug?.Invoke($"预览缓存命中（等待闸门 {gateMs} ms）：第 {pageIndex + 1} 页，{dpi}dpi，{cached.Length} 字节");
                 return cached;
             }
@@ -107,6 +120,7 @@ public sealed class PdfPageRenderCache
             if (Volatile.Read(ref _epoch) == epoch)
             {
                 _renderedPages[key] = bytes;
+                Touch(key);
                 long cacheBytes = Interlocked.Add(ref _bytes, bytes.Length);
                 if (cacheBytes > RenderCacheBudgetBytes)
                 {
@@ -185,6 +199,24 @@ public sealed class PdfPageRenderCache
     {
         _renderedPages.Clear();
         Interlocked.Exchange(ref _bytes, 0);
+        lock (_recentSync) _recent.Clear();
+    }
+
+    /// <summary>Marks one page as most recently used — the fold-time trim keeps the newest.</summary>
+    private void Touch((int Page, int Dpi) key)
+    {
+        lock (_recentSync)
+        {
+            LinkedListNode<(int Page, int Dpi)>? node = _recent.Find(key);
+            if (node is null)
+            {
+                _recent.AddFirst(key);
+                return;
+            }
+
+            _recent.Remove(node);
+            _recent.AddFirst(key);
+        }
     }
 
     /// <summary>Total bytes held by every live cache in this process.</summary>
@@ -232,7 +264,7 @@ public sealed class PdfPageRenderCache
             long released = Interlocked.Exchange(ref cache._bytes, 0);
             if (released > 0)
             {
-                cache._renderedPages.Clear();
+                cache.ClearAll();
                 _warn?.Invoke($"预览缓存总预算超限：释放 {Path.GetFileName(cache._file.Path)} " +
                               $"{released / 1048576.0:F1} MB（另一份文档正在使用）");
             }
@@ -248,6 +280,17 @@ public sealed class PdfPageRenderCache
         foreach ((int page, int dpi) in _renderedPages.Keys.Where(key => key.Page == pageIndex).ToList())
             if (_renderedPages.TryRemove((page, dpi), out byte[]? bytes))
                 Interlocked.Add(ref _bytes, -bytes.Length);
+
+        lock (_recentSync)
+        {
+            LinkedListNode<(int Page, int Dpi)>? node = _recent.First;
+            while (node is not null)
+            {
+                LinkedListNode<(int Page, int Dpi)>? next = node.Next;
+                if (node.Value.Page == pageIndex) _recent.Remove(node);
+                node = next;
+            }
+        }
     }
 
     /// <summary>Drops one cache entry, used for probe rasters that are never displayed.</summary>
@@ -255,6 +298,12 @@ public sealed class PdfPageRenderCache
     {
         if (_renderedPages.TryRemove((pageIndex, dpi), out byte[]? bytes))
             Interlocked.Add(ref _bytes, -bytes.Length);
+
+        lock (_recentSync)
+        {
+            LinkedListNode<(int Page, int Dpi)>? node = _recent.Find((pageIndex, dpi));
+            if (node is not null) _recent.Remove(node);
+        }
     }
 
     /// <summary>Remaps the cache around an insert: pages after the gap travel with their new
@@ -268,8 +317,29 @@ public sealed class PdfPageRenderCache
         _renderedPages.Clear();
         foreach (var (key, bytes) in remapped)
             _renderedPages[key] = bytes;
+        lock (_recentSync) _recent.Clear(); // the old recency keys no longer exist
     }
 
-    /// <summary>Drops the byte cache without invalidating in-flight renders (fold / off-screen).</summary>
-    public void Trim() => ClearAll();
+    /// <summary>
+    /// Folds a strip: hands back everything except the <see cref="TrimKeepPages"/> most recently
+    /// viewed pages, so reopening paints instantly instead of re-rendering page one (~130 ms at
+    /// 150 dpi). In-flight renders stay valid (no epoch bump) — they were never on screen.
+    /// </summary>
+    public void Trim()
+    {
+        var dropped = new List<(int Page, int Dpi)>();
+        lock (_recentSync)
+        {
+            while (_recent.Count > TrimKeepPages)
+            {
+                LinkedListNode<(int Page, int Dpi)> last = _recent.Last!;
+                dropped.Add(last.Value);
+                _recent.RemoveLast();
+            }
+        }
+
+        foreach ((int page, int dpi) in dropped)
+            if (_renderedPages.TryRemove((page, dpi), out byte[]? bytes))
+                Interlocked.Add(ref _bytes, -bytes.Length);
+    }
 }

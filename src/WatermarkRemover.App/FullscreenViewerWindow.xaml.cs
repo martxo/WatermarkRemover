@@ -8,6 +8,10 @@ namespace WatermarkRemover.App;
 /// </summary>
 public partial class FullscreenViewerWindow : System.Windows.Window
 {
+    /// <summary>The viewer currently on screen, or null. The window is modal, so at most one
+    /// exists; the reference is what stops a second tile click from stacking a copy on top.</summary>
+    private static FullscreenViewerWindow? _current;
+
     private readonly ViewModels.PdfPreviewViewModel _strip;
 
     public FullscreenViewerWindow(ViewModels.PdfPreviewViewModel strip)
@@ -31,7 +35,47 @@ public partial class FullscreenViewerWindow : System.Windows.Window
         }
     }
 
-    /// <summary>Modal open: the viewer covers the screen until the user leaves it.</summary>
-    public static void ShowFor(ViewModels.PdfPreviewViewModel strip) =>
-        new FullscreenViewerWindow(strip).ShowDialog();
+    /// <summary>
+    /// Modal open: the viewer covers the screen until the user leaves it. Clicking a rail tile
+    /// raises EnlargeRequested again — including the tiles INSIDE this window — so without a
+    /// guard every click built another maximised transparent window over the open one (dozens of
+    /// pages meant dozens of stacked windows and a visible stutter while each new full-screen
+    /// layered surface was composed). The click has already rendered its page into the shared
+    /// view model, so bringing the open viewer forward is all that is needed: its canvas binds
+    /// that same instance and switches page by itself.
+    /// </summary>
+    public static void ShowFor(ViewModels.PdfPreviewViewModel strip)
+    {
+        if (_current is { } open && ReferenceEquals(open._strip, strip))
+        {
+            open.RestoreAndActivate();
+            return;
+        }
+
+        var window = new FullscreenViewerWindow(strip);
+        _current = window;
+        // While the viewer is up the strip prefetches neighbouring pages and lets the tile fill
+        // yield, so rail clicks stay a cache hit + a short render.
+        strip.SetViewerOpen(true);
+        try
+        {
+            window.ShowDialog();
+        }
+        finally
+        {
+            strip.SetViewerOpen(false);
+            if (ReferenceEquals(_current, window)) _current = null;
+        }
+    }
+
+    /// <summary>Pulls the open viewer back to the front (another app may hold the foreground).</summary>
+    private void RestoreAndActivate()
+    {
+        if (WindowState == System.Windows.WindowState.Minimized)
+        {
+            WindowState = System.Windows.WindowState.Maximized;
+        }
+
+        Activate();
+    }
 }

@@ -147,25 +147,26 @@ public class PdfPreviewViewModelTests
     }
 
     [Fact]
-    public async Task Trimming_the_cache_makes_the_next_visit_render_again()
+    public async Task Trimming_the_cache_keeps_the_pages_just_viewed()
     {
         var renderer = new FakeRenderer(3);
         var vm = new PdfPreviewViewModel(PdfPath, "scan.pdf", renderer);
         await vm.LoadAsync();
         await DrainAsync(vm);
-        vm.NextCommand.Execute(null); // page 1, cached so going back can hit it
+        vm.NextCommand.Execute(null); // page 1
         await DrainAsync(vm);
 
-        // Folded strips give their full-page PNGs back; the row keeps its tiles, so a reopen
-        // must re-render on demand rather than show a blank page.
+        // A fold hands back the bulk of the bytes but keeps the few pages used most recently:
+        // reopening the row must paint immediately instead of re-rendering page one (the old
+        // wholesale clear cost ~130 ms at 150 dpi on every reopen).
         vm.TrimRenderCache();
         int before = renderer.RenderedPageCount;
 
-        vm.PreviousCommand.Execute(null); // page 0 again — was cached, now must miss
+        vm.PreviousCommand.Execute(null); // page 0 — just viewed, still cached
         await DrainAsync(vm);
 
         Assert.Equal(0, vm.PageIndex);
-        Assert.True(renderer.RenderedPageCount > before);
+        Assert.Equal(before, renderer.RenderedPageCount);
         Assert.NotNull(vm.CurrentImage);
     }
 

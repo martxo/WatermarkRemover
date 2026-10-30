@@ -94,6 +94,10 @@ public sealed partial class PdfPreviewViewModel
                 }
                 thumb.SetImage(image);
                 filled++;
+
+                // Viewer open: the rail's clicks are the interactive path, so the fill yields
+                // between tiles instead of holding the pdfium channel back-to-back.
+                if (_viewerOpen) await Task.Delay(200, _cancellationToken);
             }
             catch (OperationCanceledException)
             {

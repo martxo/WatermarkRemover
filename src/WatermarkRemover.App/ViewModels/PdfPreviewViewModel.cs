@@ -95,6 +95,13 @@ public sealed partial class PdfPreviewViewModel : ObservableObject
     /// a folded strip cannot keep decoding images in the background.</summary>
     private int _thumbnailLoadGeneration;
 
+    /// <summary>True while the screen-level viewer is open; set by the host through
+    /// <see cref="SetViewerOpen"/>. Page switches then own the render channel.</summary>
+    private bool _viewerOpen;
+
+    /// <summary>Pending neighbour prefetch; cancelled by a newer click or the viewer closing.</summary>
+    private CancellationTokenSource? _prefetch;
+
     private int _pageCount;
     private int _pageIndex;
     private int _displayedPageIndex = -1;
@@ -522,11 +529,17 @@ public sealed partial class PdfPreviewViewModel : ObservableObject
             byte[] bytes = await _cache.GetPageBytesAsync(pageIndex, PreviewDpi, priority: true);
             if (IsCancelled || generation != _loadGeneration) return;
 
-            CurrentImage = Decode(bytes);
+            // Decoding a 700–900 KB PNG on the dispatcher froze the viewer for tens of
+            // milliseconds on every page click; a frozen BitmapImage can be built on any thread.
+            ImageSource image = await Task.Run(() => Decode(bytes));
+            if (IsCancelled || generation != _loadGeneration) return;
+
+            CurrentImage = image;
             _displayedPageIndex = pageIndex;
             StatusText = string.Empty;
             AppLog.Debug($"预览渲染完成：第 {pageIndex + 1} 页，{PreviewDpi}dpi，" +
                          $"{(long)Stopwatch.GetElapsedTime(startTicks).TotalMilliseconds} ms");
+            if (_viewerOpen) PrefetchNeighbors(pageIndex);
         }
         catch (OperationCanceledException)
         {
@@ -560,10 +573,10 @@ public sealed partial class PdfPreviewViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Drops this strip's rendered-page byte cache. The bytes are only a speed cache — a miss
-    /// re-renders the page on demand — while each full-page PNG is multi-megabyte LOH. The host
-    /// calls this for strips that are folded or off screen, so a session that previewed many
-    /// documents no longer keeps every page of every one of them resident.
+    /// Hands back this strip's rendered-page bytes, keeping the pages used most recently (the
+    /// cache's own trim policy). The host calls this for strips that are folded or off screen, so
+    /// a session that previewed many documents no longer keeps every page of every one of them —
+    /// while the pages the user was just looking at survive, so reopening paints immediately.
     /// </summary>
     public void TrimRenderCache() => _cache.Trim();
 
@@ -596,6 +609,58 @@ public sealed partial class PdfPreviewViewModel : ObservableObject
 
         _thumbnailLoadGeneration++;
         _ = LoadThumbnailsAsync(Thumbnails.ToList(), _thumbnailLoadGeneration);
+    }
+
+    /// <summary>
+    /// The screen-level viewer opened or closed (called by the host window). While it is open a
+    /// click on the rail is the interactive path: the neighbouring pages are prefetched so the
+    /// next click is a cache hit, and the tile fill yields between pages instead of competing.
+    /// The fill is throttled rather than stopped on purpose — the rail IS the navigation, so
+    /// leaving the remaining tiles blank would be worse than the small extra wait.
+    /// </summary>
+    public void SetViewerOpen(bool open)
+    {
+        if (_viewerOpen == open) return;
+        _viewerOpen = open;
+        if (open) PrefetchNeighbors(_pageIndex);
+        else _prefetch?.Cancel();
+    }
+
+    /// <summary>Warms ±1 page at screen DPI in the background; a newer request supersedes one
+    /// still waiting out its debounce.</summary>
+    private void PrefetchNeighbors(int pageIndex)
+    {
+        _prefetch?.Cancel();
+        var cts = new CancellationTokenSource();
+        _prefetch = cts;
+        _ = PrefetchAsync(pageIndex, cts.Token);
+    }
+
+    private async Task PrefetchAsync(int pageIndex, CancellationToken token)
+    {
+        try
+        {
+            // Let a burst of rail clicks settle first: prefetching between them would only put
+            // two extra renders in front of the page the user is about to ask for.
+            await Task.Delay(300, token).ConfigureAwait(false);
+
+            foreach (int offset in new[] { 1, -1 })
+            {
+                int target = pageIndex + offset;
+                if (token.IsCancellationRequested) return;
+                if (target < 0 || target >= _pageCount) continue;
+
+                await _cache.GetPageBytesAsync(target, PreviewDpi).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Superseded by a newer click or the viewer closed.
+        }
+        catch (Exception ex)
+        {
+            AppLog.Debug($"相邻页预取失败（第 {pageIndex + 1} 页附近）：{ex.Message}");
+        }
     }
 
     /// <summary>PDFium hands back PNG bytes; WPF wants a frozen bitmap it can bind from any thread.</summary>
