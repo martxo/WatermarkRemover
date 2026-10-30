@@ -76,6 +76,10 @@ public partial class FullscreenViewerWindow : System.Windows.Window
             WindowState = System.Windows.WindowState.Maximized;
         }
 
-        Activate();
+        // A rail click inside the open viewer targets the window that already has the
+        // foreground; re-activating a maximised AllowsTransparency window only recomposes the
+        // whole-screen layered surface for nothing. Take it back solely when it was minimised
+        // or another window really holds the foreground.
+        if (!IsActive) Activate();
     }
 }
