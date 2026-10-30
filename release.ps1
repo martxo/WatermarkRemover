@@ -1,7 +1,8 @@
-﻿# Release pipeline for WatermarkRemover — three parameterised stages.
+﻿# Release pipeline for WatermarkRemover — four parameterised stages.
 #
 #   powershell -ExecutionPolicy Bypass -File d:\code\release.ps1 -Version 1.16.51 -Stage local
 #   powershell -ExecutionPolicy Bypass -File d:\code\release.ps1 -Version 1.16.51 -Stage cloud
+#   powershell -ExecutionPolicy Bypass -File d:\code\release.ps1 -Version 1.16.51 -Stage portable
 #   powershell -ExecutionPolicy Bypass -File d:\code\release.ps1 -Version 1.16.51 -Stage github
 #   powershell -ExecutionPolicy Bypass -File d:\code\release.ps1 -Version 1.16.51        # = -Stage all
 #
@@ -13,6 +14,10 @@
 #   cloud  — incremental publish to 阿里云盘. If the repository API download times out (seen
 #            repeatedly on this network), the manifests are prefetched with the local aliyunpan
 #            CLI and the publisher is retried with --latest-file/--versions-file --no-gc.
+#   portable — zip the published payload into the green (unzip-and-run) build and upload it to
+#            阿里云盘 /WatermarkRemover/portable/. A green copy carries no Update.exe, so the
+#            app stores settings/journal beside the exe instead of %APPDATA% — testers can run
+#            a new build next to an installed release without either touching the other.
 #   github — upload to GitHub Releases, verify the remote current-only feed, commit the version
 #            stamp and push.
 #
@@ -24,8 +29,8 @@
 param(
     [Parameter(Mandatory = $true)]
     [string]$Version,
-    # local | cloud | github | all — all runs local → cloud → github.
-    [ValidateSet('local', 'cloud', 'github', 'all')]
+    # local | cloud | portable | github | all — all runs local → cloud → portable → github.
+    [ValidateSet('local', 'cloud', 'portable', 'github', 'all')]
     [string]$Stage = 'all',
     # Release note shown in the 云更新版本列表 (defaults to the version tag).
     [string]$Note = '',
@@ -50,6 +55,9 @@ param(
 $ErrorActionPreference = 'Stop'
 $Repo = 'martxo/WatermarkRemover'
 $ReleasesDir = 'd:\code\Releases'
+# Kept outside Releases on purpose: `vpk upload github` ships that folder's assets, and the
+# green zip is 200+ MB that has no business in every GitHub release (it lives on 阿里云盘).
+$PortableDir = 'd:\code\dist\portable'
 $Gh = 'd:\code\.tools\gh\bin\gh.exe'
 $Dotnet = 'C:\Users\dx\.dotnet\dotnet.exe'
 $Tag = "v$Version"
@@ -214,6 +222,72 @@ function Invoke-CloudStage {
     Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
 }
 
+function Invoke-PortableStage {
+    $zip = Join-Path $PortableDir "WatermarkRemover-$Version-Portable.zip"
+    if (-not (Test-Path -LiteralPath $Staging)) {
+        throw "缺少发布目录 $Staging — 请先运行 -Stage local（绿色版直接复用 publish 产物，不重新编译）"
+    }
+    New-Item -ItemType Directory -Path $PortableDir -Force | Out-Null
+
+    Write-Host "== [portable 1/3] zip $Version 绿色版 =="
+    # Green copy = the published payload verbatim, in a folder named after the version. No
+    # Update.exe and no .portable marker on purpose: AppFolders then keeps settings, journal
+    # and reports beside the exe, so a test build never touches the installed release's data.
+    $folderName = "WatermarkRemover-$Version"
+    $root = Join-Path $env:TEMP "wm-portable-$Version"
+    if (Test-Path -LiteralPath $root) { Remove-Item -LiteralPath $root -Recurse -Force }
+    $folder = Join-Path $root $folderName
+    New-Item -ItemType Directory -Path $folder -Force | Out-Null
+    Copy-Item -Path (Join-Path $Staging '*') -Destination $folder -Recurse -Force
+    # vpk strips .pdb from every package; the green copy ships the same payload, not debug symbols.
+    Get-ChildItem -LiteralPath $folder -Recurse -File -Filter '*.pdb' | Remove-Item -Force
+    if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force }
+    Compress-Archive -Path $folder -DestinationPath $zip -CompressionLevel Optimal
+
+    Write-Host "== [portable 2/3] verify zip entries =="
+    # A truncated archive only shows up later, on the tester's machine, as a missing model
+    # file — so every entry's size is compared against the source before the upload runs.
+    $source = @(Get-ChildItem -LiteralPath $folder -Recurse -File)
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $archive = [IO.Compression.ZipFile]::OpenRead($zip)
+    try {
+        $entries = @{}
+        foreach ($entry in $archive.Entries) {
+            $entries[($entry.FullName -replace '/', '\')] = $entry.Length
+        }
+        foreach ($file in $source) {
+            $relative = $file.FullName.Substring($folder.Length + 1)
+            $key = "$folderName\$relative"
+            if (-not $entries.ContainsKey($key)) { throw "zip 缺少 $relative" }
+            if ($entries[$key] -ne $file.Length) {
+                throw ("zip 内 {0} 大小不符：期望 {1:N0} 字节，实际 {2:N0} 字节" -f $relative, $file.Length, $entries[$key])
+            }
+        }
+        Write-Host ("  {0} 个文件，{1:N0} MB，全部与发布目录一致" -f
+            $source.Count, ((Get-Item -LiteralPath $zip).Length / 1MB))
+    }
+    finally {
+        $archive.Dispose()
+    }
+
+    Write-Host '== [portable 3/3] upload 阿里云盘 /WatermarkRemover/portable =='
+    $cli = Find-AliyunpanCli
+    if (-not $cli) {
+        throw '未找到 aliyunpan CLI（设置 WATERMARKREMOVER_ALIYUNPAN_CLI，或安装到 %USERPROFILE%\tools\aliyunpan-*）'
+    }
+    $env:ALIYUNPAN_CONFIG_DIR = Join-Path $env:APPDATA 'WatermarkRemover\aliyunpan'
+    # mkdir fails when the folder already exists; the upload below is the real check.
+    & $cli mkdir /WatermarkRemover/portable | Out-Null
+    # -ow overwrites the same-named zip (old copy goes to the netdisk recycle bin). Without it
+    # every rerun would be stored as "WatermarkRemover-1.16.50-Portable(1).zip" and the tester
+    # could not tell which file is current.
+    & $cli upload -ow $zip /WatermarkRemover/portable | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw "绿色版上传失败（$LASTEXITCODE）" }
+
+    Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+    Write-Host "  已上传 $zip → /WatermarkRemover/portable/"
+}
+
 function Get-GitHubToken {
     $token = (& $Gh auth token) -join ''
     if ($token) { return $token }
@@ -302,10 +376,12 @@ function Invoke-GitHubStage {
 switch ($Stage) {
     'local' { Invoke-LocalStage }
     'cloud' { Invoke-CloudStage }
+    'portable' { Invoke-PortableStage }
     'github' { Invoke-GitHubStage }
     'all' {
         Invoke-LocalStage
         Invoke-CloudStage
+        Invoke-PortableStage
         Invoke-GitHubStage
     }
 }
