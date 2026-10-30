@@ -314,30 +314,49 @@ public sealed class AliyunDriveSession : INetdiskSession
             : result;
     }
 
+    /// <summary>
+    /// How long the body may go without delivering a single byte before the download is treated
+    /// as stalled. A total deadline is deliberately NOT used: the old 90 s cap killed every
+    /// download that simply took longer than that (a large file at a few hundred KB/s stopped
+    /// mid-transfer and left a truncated file under the user's chosen name).
+    /// </summary>
+    private static readonly TimeSpan DownloadStallTimeout = TimeSpan.FromSeconds(30);
+
     public async Task DownloadAsync(
         string fileId,
         string localPath,
         IProgress<NetdiskTransferProgress>? progress = null,
         CancellationToken cancellationToken = default)
     {
-        // A CDN that sends headers and then stalls would otherwise hang the caller forever:
-        // bound the whole download and surface a timeout the cloud fallback can act on.
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(TimeSpan.FromSeconds(90));
+        // The link request keeps a hard bound (a stalled token/CDN lookup must not hang the UI);
+        // the body copy below is bounded by plateaus instead of total elapsed time.
+        string url;
+        using (var linkTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+        {
+            linkTimeout.CancelAfter(TimeSpan.FromSeconds(90));
+            try
+            {
+                var link = await SendAsync(
+                    HttpMethod.Post,
+                    AlipanApi.DownloadUrlPath,
+                    new Dictionary<string, object?> { ["drive_id"] = _driveId, ["file_id"] = fileId, ["expire_sec"] = 900 },
+                    linkTimeout.Token).ConfigureAwait(false);
+                url = AlipanJson.TryGetString(link, "url")
+                    ?? throw new NetdiskException("getDownloadUrl 响应缺少 url。", "MalformedDownloadUrlResponse");
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                throw new TimeoutException("获取下载地址超时（90 秒），网络可能不稳定。");
+            }
+        }
+
+        var writeStarted = false;
         try
         {
-            var link = await SendAsync(
-                HttpMethod.Post,
-                AlipanApi.DownloadUrlPath,
-                new Dictionary<string, object?> { ["drive_id"] = _driveId, ["file_id"] = fileId, ["expire_sec"] = 900 },
-                timeout.Token).ConfigureAwait(false);
-            var url = AlipanJson.TryGetString(link, "url")
-                ?? throw new NetdiskException("getDownloadUrl 响应缺少 url。", "MalformedDownloadUrlResponse");
-
-            using var response = await SendDownloadRequestAsync(url, timeout.Token).ConfigureAwait(false);
+            using var response = await SendDownloadRequestAsync(url, cancellationToken).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
             {
-                var text = await response.Content.ReadAsStringAsync(timeout.Token).ConfigureAwait(false);
+                var text = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
                 string detail = string.IsNullOrWhiteSpace(text) ? "无响应内容"
                     : text.Length <= 300 ? text : text[..300];
                 throw AlipanJson.MapError((int)response.StatusCode, text,
@@ -346,20 +365,48 @@ public sealed class AliyunDriveSession : INetdiskSession
 
             var totalBytes = response.Content.Headers.ContentLength;
             await using var output = File.Create(localPath);
-            await using var input = await response.Content.ReadAsStreamAsync(timeout.Token).ConfigureAwait(false);
+            writeStarted = true;
+            await using var input = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
             var buffer = new byte[81920];
             long transferred = 0;
             int read;
-            while ((read = await input.ReadAsync(buffer.AsMemory(), timeout.Token).ConfigureAwait(false)) > 0)
+            while ((read = await ReadWithStallGuardAsync(input, buffer, cancellationToken).ConfigureAwait(false)) > 0)
             {
-                await output.WriteAsync(buffer.AsMemory(0, read), timeout.Token).ConfigureAwait(false);
+                await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
                 transferred += read;
                 progress?.Report(new NetdiskTransferProgress(transferred, totalBytes));
             }
         }
+        catch
+        {
+            // A half-written file looks complete in Explorer and only fails later when opened,
+            // so drop it — but never touch the target when nothing was written yet (an HTTP
+            // error must not delete a file the user picked to overwrite).
+            if (writeStarted)
+            {
+                try { File.Delete(localPath); } catch { /* the original error is what matters */ }
+            }
+
+            throw;
+        }
+    }
+
+    /// <summary>Reads one buffer, failing only when the stream goes quiet for too long.</summary>
+    private static async Task<int> ReadWithStallGuardAsync(
+        Stream input,
+        byte[] buffer,
+        CancellationToken cancellationToken)
+    {
+        using var stall = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        stall.CancelAfter(DownloadStallTimeout);
+        try
+        {
+            return await input.ReadAsync(buffer.AsMemory(), stall.Token).ConfigureAwait(false);
+        }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            throw new TimeoutException("下载文件超时（90 秒），网络可能不稳定。");
+            throw new TimeoutException(
+                $"下载中断：{DownloadStallTimeout.TotalSeconds:0} 秒内没有收到新数据，网络可能不稳定。");
         }
     }
 
