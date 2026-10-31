@@ -752,12 +752,59 @@
             </ScrollViewer>
         </DataTemplate>
 
+        <DataTemplate x:Key="Page.Screenshot">
+            <Grid DataContext="{Binding DataContext, RelativeSource={RelativeSource AncestorType=Window}}">
+        <!-- Screenshot panel (截图): a launcher plus the global shortcut; the capture itself runs
+             in the full-screen overlay, and its PNGs join the record list below like scans do. -->
+        <Border Margin="0,0,0,16" Style="{StaticResource CardBorder}">
+            <StackPanel Margin="20,16">
+                <TextBlock Text="区域截图"
+                           FontSize="14" FontWeight="SemiBold"
+                           Foreground="{StaticResource TextPrimaryBrush}"/>
+                <TextBlock Text="按快捷键或点下面的按钮，全屏框选后可直接画矩形、箭头、画笔、文字和马赛克；完成后自动复制到剪贴板并保存 PNG。"
+                           FontSize="12"
+                           Foreground="{StaticResource TextSecondaryBrush}"
+                           TextWrapping="Wrap"
+                           Margin="0,4,0,0"/>
+                <StackPanel Orientation="Horizontal" Margin="0,14,0,0">
+                    <Button Content="开始截图"
+                            Style="{StaticResource PrimaryButton}"
+                            Command="{Binding CaptureScreenshotCommand}"
+                            MinWidth="120"/>
+                    <Border Background="{StaticResource SurfaceAltBrush}" CornerRadius="6"
+                            Padding="12,8" Margin="12,0,0,0" VerticalAlignment="Center">
+                        <TextBlock Text="{Binding ScreenshotHotkeyText}"
+                                   FontSize="13" FontWeight="SemiBold"
+                                   Foreground="{StaticResource TextPrimaryBrush}"
+                                   ToolTip="在「设置 → 截图设置」中修改快捷键"/>
+                    </Border>
+                    <Button Content="打开截图文件夹"
+                            Style="{StaticResource SmallButton}"
+                            Command="{Binding OpenScreenshotFolderCommand}"
+                            Margin="12,0,0,0" VerticalAlignment="Center"/>
+                </StackPanel>
+                <TextBlock Text="{Binding ScreenshotStatusText}"
+                           FontSize="11"
+                           Foreground="{StaticResource TextSecondaryBrush}"
+                           TextWrapping="Wrap"
+                           Margin="0,10,0,0"/>
+                <TextBlock Text="{Binding ScreenshotDirectoryText, StringFormat='保存目录：{0}'}"
+                           FontSize="11"
+                           Foreground="{StaticResource TextSecondaryBrush}"
+                           TextTrimming="CharacterEllipsis"
+                           Margin="0,3,0,0"/>
+            </StackPanel>
+        </Border>
+            </Grid>
+        </DataTemplate>
+
         <presentation:FeaturePageTemplateSelector x:Key="FeaturePageSelector"
             FilesTemplate="{StaticResource Page.Files}"
             ScanTemplate="{StaticResource Page.Scan}"
             SearchTemplate="{StaticResource Page.Search}"
             NetdiskTemplate="{StaticResource Page.Netdisk}"
-            TransferTemplate="{StaticResource Page.Transfer}"/>
+            TransferTemplate="{StaticResource Page.Transfer}"
+            ScreenshotTemplate="{StaticResource Page.Screenshot}"/>
         <presentation:FeaturePageKindConverter x:Key="FeaturePageKind"/>
 
         <!-- Shared chip template: used by the inline row and by the expanded wrap row below the name -->
@@ -1099,7 +1146,7 @@
 
                 <TextBlock Grid.Row="0"
                            x:Name="EmptyStateText"
-                           Text="暂无文件 · 拖入或点击「选择文件」开始"
+                           Text="{Binding EmptyJobsText}"
                            FontSize="13"
                            Foreground="{StaticResource TextSecondaryBrush}"
                            HorizontalAlignment="Center"

@@ -102,6 +102,14 @@ public sealed class AppSettings
     /// Desktop itself, the pre-setting default — no 「手机传文件」 subfolder is created.</summary>
     public string TransferOutputDirectory { get; set; } = string.Empty;
 
+    /// <summary>Global shortcut that opens the screenshot overlay (截图设置). Stored as the
+    /// canonical text form, e.g. <c>Ctrl+Alt+A</c>; a malformed value falls back to the default.</summary>
+    public string ScreenshotHotkey { get; set; } =
+        WatermarkRemover.Core.Features.Screenshot.ScreenshotHotkey.Default.ToString();
+
+    /// <summary>Where screenshots are saved (截图设置). Empty = 图片\Screenshots.</summary>
+    public string ScreenshotOutputDirectory { get; set; } = string.Empty;
+
     /// <summary>Configured 网盘 accounts (网盘设置); secret values carry the <c>dpapi:</c> prefix
     /// at rest — see <see cref="NetdiskAccountPersistence"/>.</summary>
     public List<PersistedNetdiskAccount> NetdiskAccounts { get; set; } = new();
@@ -137,6 +145,8 @@ public sealed class AppSettings
         ScanColor = ScanColor,
         ScanOutputDirectory = ScanOutputDirectory,
         TransferOutputDirectory = TransferOutputDirectory,
+        ScreenshotHotkey = ScreenshotHotkey,
+        ScreenshotOutputDirectory = ScreenshotOutputDirectory,
         NetdiskAccounts = NetdiskAccounts.ToList(),
         NetdiskUploadDrive = NetdiskUploadDrive,
         NetdiskUploadDirectory = NetdiskUploadDirectory,

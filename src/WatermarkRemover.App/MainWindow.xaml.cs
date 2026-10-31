@@ -4,8 +4,10 @@ using System.Windows.Controls;
 using System.Runtime.InteropServices;
 using Microsoft.Win32;
 using WatermarkRemover.App.Logging;
+using WatermarkRemover.App.Services;
 using WatermarkRemover.App.Updates;
 using WatermarkRemover.App.ViewModels;
+using WatermarkRemover.Core.Features.Screenshot;
 
 namespace WatermarkRemover.App;
 
@@ -23,6 +25,9 @@ public partial class MainWindow : Window
     private readonly MainViewModel _viewModel = new();
     private readonly Services.IDialogService _dialogs = new Services.DialogService();
 
+    /// <summary>System-wide shortcut that opens the screenshot overlay while the app is in the background.</summary>
+    private GlobalHotkeyService? _hotkeys;
+
     /// <summary>
     /// Drag-exit watchdog. DragLeave is unreliable in WPF: it bubbles from every child element,
     /// and the leave caused by dragging out of the window is often swallowed entirely. Instead
@@ -38,6 +43,11 @@ public partial class MainWindow : Window
         // Tile clicks open the screen-level viewer (dark veil over the whole screen, film rail
         // on the left) — a real window, so the host wires it here, outside the view model.
         _viewModel.PreviewViewerOpener = strip => FullscreenViewerWindow.ShowFor(strip);
+        // The screenshot overlay is a set of full-screen windows, so the host supplies it; the
+        // view model only turns the result into a record and user-visible status.
+        _viewModel.ScreenshotCaptureHandler =
+            () => ScreenshotOverlaySession.RunAsync(this, _viewModel.Settings);
+        _viewModel.ScreenshotHotkeyChanged += (_, _) => RegisterScreenshotHotkey(notifyFailure: true);
         _dragWatchdog = new System.Windows.Threading.DispatcherTimer
         {
             Interval = TimeSpan.FromMilliseconds(180),
@@ -127,6 +137,43 @@ public partial class MainWindow : Window
         IntPtr hwnd = new System.Windows.Interop.WindowInteropHelper(this).Handle;
         int preference = DwmwcpRound;
         _ = DwmSetWindowAttribute(hwnd, DwmwaWindowCornerPreference, ref preference, sizeof(int));
+
+        // The message loop exists now, so WM_HOTKEY has somewhere to land.
+        _hotkeys = new GlobalHotkeyService(hwnd, OnScreenshotHotkey);
+        RegisterScreenshotHotkey();
+    }
+
+    /// <summary>
+    /// Hotkey / settings: re-point the global shortcut and tell the screenshot page. A failed
+    /// registration after the user changed the gesture is also reported in a dialog — silently
+    /// saving a shortcut that does nothing is exactly the confusing case this avoids.
+    /// </summary>
+    private void RegisterScreenshotHotkey(bool notifyFailure = false)
+    {
+        if (_hotkeys is null) return;
+
+        ScreenshotHotkey hotkey = ScreenshotHotkey.ParseOrDefault(_viewModel.Settings.ScreenshotHotkey);
+        bool registered = _hotkeys.Register(hotkey, out string? error);
+        _viewModel.ReportScreenshotHotkey(registered, error);
+
+        if (!registered && notifyFailure)
+        {
+            _dialogs.Warn(
+                $"截图快捷键 {hotkey} 未能注册：{error ?? "未知原因"}。\n\n" +
+                "请换一个组合键，或先关闭占用该快捷键的程序；截图页面上的「开始截图」按钮始终可用。",
+                "截图快捷键");
+        }
+    }
+
+    /// <summary>
+    /// WM_HOTKEY: the view model guards against overlapping captures, so a double press (or a
+    /// press while the page button already started one) simply does nothing. The settings page
+    /// is ignored on purpose: recording a gesture there must not launch a capture over it.
+    /// </summary>
+    private void OnScreenshotHotkey()
+    {
+        if (_viewModel.IsSettingsOpen) return;
+        _ = _viewModel.CaptureScreenshotAsync();
     }
 
     /// <summary>
@@ -150,6 +197,8 @@ public partial class MainWindow : Window
     /// </summary>
     protected override void OnClosed(EventArgs e)
     {
+        _hotkeys?.Dispose();
+        _hotkeys = null;
         _viewModel.Shutdown();
         base.OnClosed(e);
     }

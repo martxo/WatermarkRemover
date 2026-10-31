@@ -499,6 +499,77 @@
                         </Border>
                     </StackPanel>
 
+                    <!-- ============ 截图设置 ============ -->
+                    <StackPanel>
+                        <StackPanel.Style>
+                            <Style TargetType="StackPanel">
+                                <Setter Property="Visibility" Value="Collapsed"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding SelectedNav.Id}" Value="screenshot">
+                                        <Setter Property="Visibility" Value="Visible"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </StackPanel.Style>
+
+                        <TextBlock Text="全局快捷键" Style="{StaticResource SectionTitle}" Margin="0,0,0,8"/>
+                        <Border Style="{StaticResource InsetCard}">
+                            <StackPanel>
+                                <TextBlock Text="软件在后台（包括最小化时）也能用这个组合键开始截图。点击下面的输入框后直接按下组合键即可修改，至少需要包含 Ctrl / Alt / Shift / Win 中的一个。"
+                                           Style="{StaticResource RowCaption}"
+                                           Margin="0,0,0,10"/>
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBox x:Name="ScreenshotHotkeyBox"
+                                             Width="200"
+                                             Style="{StaticResource InputBox}"
+                                             IsReadOnly="True"
+                                             Cursor="Hand"
+                                             Text="{Binding Settings.ScreenshotHotkey, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                             PreviewKeyDown="OnScreenshotHotkeyPreviewKeyDown"
+                                             ToolTip="点击后按下组合键"/>
+                                    <Button Content="恢复默认"
+                                            Style="{StaticResource SmallButton}"
+                                            Margin="8,0,0,0"
+                                            VerticalAlignment="Center"
+                                            Click="OnResetScreenshotHotkey"/>
+                                </StackPanel>
+                                <TextBlock Text="改动随「返回应用」保存生效；若组合键已被其他程序占用，页面会明确提示且仍可点页面上的「开始截图」。"
+                                           Style="{StaticResource RowCaption}"
+                                           Margin="0,8,0,0"/>
+                            </StackPanel>
+                        </Border>
+
+                        <TextBlock Text="保存位置" Style="{StaticResource SectionTitle}" Margin="0,16,0,0"/>
+                        <Border Style="{StaticResource InsetCard}">
+                            <StackPanel>
+                                <TextBlock Text="截图会自动复制到剪贴板，同时保存一份 PNG 到这里；留空则保存到系统「图片」文件夹下的 Screenshots 子目录。改动随「返回应用」保存生效。"
+                                           Style="{StaticResource RowCaption}"
+                                           Margin="0,0,0,10"/>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBox x:Name="ScreenshotDirBox" Grid.Column="0"
+                                             Style="{StaticResource InputBox}"
+                                             Text="{Binding Settings.ScreenshotOutputDirectory, UpdateSourceTrigger=PropertyChanged, TargetNullValue=''}"/>
+                                    <Button Grid.Column="1" Content="浏览…"
+                                            Margin="8,0,0,0"
+                                            VerticalAlignment="Center"
+                                            Style="{StaticResource SmallButton}"
+                                            Click="OnBrowseScreenshotDirectory"/>
+                                    <Button Grid.Column="2" Content="恢复默认"
+                                            Margin="8,0,0,0"
+                                            VerticalAlignment="Center"
+                                            Style="{StaticResource SmallButton}"
+                                            ToolTip="清空目录，恢复保存到「图片\Screenshots」"
+                                            Click="OnResetScreenshotDirectory"/>
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+
                     <!-- ============ 网盘设置 ============ -->
                     <StackPanel>
                         <StackPanel.Style>

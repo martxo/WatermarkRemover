@@ -20,6 +20,9 @@ public enum FeaturePageKind
 
     /// <summary>Phone receiver panel + job list.</summary>
     Transfer,
+
+    /// <summary>Screenshot launcher + job list.</summary>
+    Screenshot,
 }
 
 /// <summary>How one feature looks in the shell: icon, one-line caption, page kind, busy text.</summary>
@@ -53,6 +56,8 @@ public static class FeaturePresentationCatalog
             "正在分析并去除水印…"),
         ["ocr.text"] = new("\uE7C3", "拖入 PDF 或图片 → 识别文字 → 生成同名 txt", FeaturePageKind.Files,
             "正在渲染页面并识别文字…"),
+        ["screenshot.page"] = new("\uE722", "区域截图 · 标注 · 自动复制并保存 PNG", FeaturePageKind.Screenshot,
+            "正在截图…"),
         ["netdisk.page"] = new("\uE753", "网盘账号管理 · 上传下载 · 快捷传", FeaturePageKind.Netdisk, "正在传输…"),
         ["transfer.page"] = new("\uE8EA", "手机扫码 → 浏览器选文件 → 传到电脑", FeaturePageKind.Transfer,
             "正在接收…"),

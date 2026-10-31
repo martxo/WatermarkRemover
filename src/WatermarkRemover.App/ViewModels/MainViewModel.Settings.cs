@@ -16,6 +16,7 @@ using WatermarkRemover.Core.Features.Naming;
 using WatermarkRemover.Core.Features.Netdisk;
 using WatermarkRemover.Core.Features.Ocr;
 using WatermarkRemover.Core.Features.Scan;
+using WatermarkRemover.Core.Features.Screenshot;
 using WatermarkRemover.Core.Features.Search;
 using WatermarkRemover.Core.Features.Transfer;
 using WatermarkRemover.Core.Logging;
@@ -112,6 +113,31 @@ public sealed partial class MainViewModel
             page.Settings.OutputDirectory = directory;
         }
 
+        // Screenshot settings: a malformed gesture would silently register nothing, and a
+        // folder that cannot be created would lose every capture. Both are caught here.
+        if (!ScreenshotHotkey.TryParse(page.Settings.ScreenshotHotkey, out ScreenshotHotkey hotkey))
+        {
+            _dialogs.Warn("截图快捷键格式不正确，请填入类似 Ctrl+Alt+A 的组合（至少包含一个修饰键）。", "提示");
+            return false;
+        }
+
+        page.Settings.ScreenshotHotkey = hotkey.ToString();
+        string screenshotDirectory = page.Settings.ScreenshotOutputDirectory?.Trim() ?? string.Empty;
+        if (screenshotDirectory.Length != 0)
+        {
+            try
+            {
+                Directory.CreateDirectory(screenshotDirectory);
+            }
+            catch (Exception ex)
+            {
+                _dialogs.Warn($"截图保存目录不可用：{ex.Message}", "提示");
+                return false;
+            }
+        }
+
+        page.Settings.ScreenshotOutputDirectory = screenshotDirectory;
+
         page.Commit();
         if (!SaveSettings())
         {
@@ -150,6 +176,9 @@ public sealed partial class MainViewModel
             AppLog.Info("设置已保存");
             // Quick suffixes may have changed: refresh the chips of every existing job.
             Board.RefreshSuffixChips(Settings.QuickSuffixes);
+            // The gesture / save folder are bound on the screenshot page and the hotkey must be
+            // re-registered with the system.
+            NotifyScreenshotSettingsChanged();
             return true;
         }
 

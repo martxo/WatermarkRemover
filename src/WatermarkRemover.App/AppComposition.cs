@@ -4,6 +4,7 @@ using WatermarkRemover.Core.Features;
 using WatermarkRemover.Core.Features.Netdisk;
 using WatermarkRemover.Core.Features.Ocr;
 using WatermarkRemover.Core.Features.Scan;
+using WatermarkRemover.Core.Features.Screenshot;
 using WatermarkRemover.Core.Features.Search;
 using WatermarkRemover.Core.Features.Transfer;
 using WatermarkRemover.Core.Watermarks;
@@ -79,6 +80,9 @@ public sealed class AppComposition
             trace: AppLog.Trace),
         new OcrFeature(renderer, ocrEngine, trace: AppLog.Trace,
             imageLoader: ImageOcrInput.LoadAsOcrPng),
+        // 截图 is a tool page like 快速搜索: it produces its own PNG from the desktop, so it
+        // never takes part in drop-file routing.
+        new ScreenshotFeature(),
         new NetdiskFeature(),
         new LanTransferFeature(),
     };

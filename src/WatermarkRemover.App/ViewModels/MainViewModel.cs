@@ -134,6 +134,12 @@ public sealed partial class MainViewModel : ObservableObject
             p => p is FileJobViewModel);
         UploadVisibleCommand = new RelayCommand(() => _ = UploadVisibleAsync(), () => CanUploadBatch);
 
+        // --- 截图 ---
+        // The overlay lives in the shell; this page keeps the launcher, hotkey state and records.
+        CaptureScreenshotCommand = new RelayCommand(
+            () => _ = CaptureScreenshotAsync(), () => !_screenshotBusy);
+        OpenScreenshotFolderCommand = new RelayCommand(OpenScreenshotFolder);
+
         // --- 手机传文件 ---
         // The LAN receiver lives as long as the app; landed files become finished job rows in
         // the 手机传文件 section (rename / chips / delete / open-folder all work unchanged).
@@ -289,6 +295,7 @@ public sealed partial class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(DropHint));
         OnPropertyChanged(nameof(FilePickerFilter));
         OnPropertyChanged(nameof(FilePickerTitle));
+        OnPropertyChanged(nameof(EmptyJobsText));
         // Each section owns its own upload batch: the footer button follows the page.
         OnPropertyChanged(nameof(CanUploadBatch));
         OnPropertyChanged(nameof(UploadBatchHint));

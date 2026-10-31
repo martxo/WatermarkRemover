@@ -5,6 +5,7 @@ using System.Windows.Input;
 using Microsoft.Win32;
 using WatermarkRemover.App.Updates;
 using WatermarkRemover.App.ViewModels;
+using WatermarkRemover.Core.Features.Screenshot;
 
 namespace WatermarkRemover.App;
 
@@ -115,6 +116,79 @@ public partial class SettingsPage : UserControl
 
     /// <summary>Phone-transfer directory: empty = the Desktop itself (the default).</summary>
     private void OnResetTransferDirectory(object sender, RoutedEventArgs e) => TransferDirBox.Text = string.Empty;
+
+    // --- 截图设置 --------------------------------------------------------------
+
+    /// <summary>
+    /// Records the gesture pressed inside the box. Alt combinations arrive as Key.System with
+    /// the real key in SystemKey; unsupported keys are ignored instead of writing junk that
+    /// the save-time validation would later reject.
+    /// </summary>
+    private void OnScreenshotHotkeyPreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (ViewModel is not { } vm) return;
+
+        Key key = e.Key == Key.System ? e.SystemKey : e.Key;
+        if (key == Key.Tab) return; // keep normal focus navigation
+        if (IsModifierKey(key)) return;
+
+        string? name = HotkeyKeyName(key);
+        if (name is null)
+        {
+            e.Handled = true;
+            return;
+        }
+
+        var parts = new List<string>(4);
+        ModifierKeys modifiers = Keyboard.Modifiers;
+        if (modifiers.HasFlag(ModifierKeys.Control)) parts.Add("Ctrl");
+        if (modifiers.HasFlag(ModifierKeys.Alt)) parts.Add("Alt");
+        if (modifiers.HasFlag(ModifierKeys.Shift)) parts.Add("Shift");
+        if (modifiers.HasFlag(ModifierKeys.Windows)) parts.Add("Win");
+
+        if (parts.Count > 0 &&
+            ScreenshotHotkey.TryParse($"{string.Join('+', parts)}+{name}", out ScreenshotHotkey gesture))
+        {
+            vm.Settings.ScreenshotHotkey = gesture.ToString();
+        }
+
+        e.Handled = true;
+    }
+
+    private static bool IsModifierKey(Key key) => key
+        is Key.LeftCtrl or Key.RightCtrl
+        or Key.LeftAlt or Key.RightAlt
+        or Key.LeftShift or Key.RightShift
+        or Key.LWin or Key.RWin;
+
+    private static string? HotkeyKeyName(Key key)
+    {
+        if (key is >= Key.A and <= Key.Z) return key.ToString();
+        if (key is >= Key.D0 and <= Key.D9) return ((int)key - (int)Key.D0).ToString();
+        if (key >= Key.F1 && key <= Key.F24) return key.ToString();
+        if (key == Key.PrintScreen) return "PrintScreen";
+        return null;
+    }
+
+    private void OnResetScreenshotHotkey(object sender, RoutedEventArgs e)
+    {
+        if (ViewModel is { } vm) vm.Settings.ScreenshotHotkey = ScreenshotHotkey.Default.ToString();
+    }
+
+    private void OnBrowseScreenshotDirectory(object sender, RoutedEventArgs e)
+    {
+        var dialog = new OpenFolderDialog { Title = "选择截图保存目录" };
+
+        if (!string.IsNullOrWhiteSpace(ScreenshotDirBox.Text) && Directory.Exists(ScreenshotDirBox.Text))
+            dialog.InitialDirectory = ScreenshotDirBox.Text;
+
+        if (Window.GetWindow(this) is not { } window || dialog.ShowDialog(window) != true) return;
+
+        ScreenshotDirBox.Text = dialog.FolderName;
+    }
+
+    private void OnResetScreenshotDirectory(object sender, RoutedEventArgs e) =>
+        ScreenshotDirBox.Text = string.Empty;
 
     /// <summary>Enter in the new-suffix box: replace the selection or add a new suffix.</summary>
     private void OnSuffixBoxKeyDown(object sender, KeyEventArgs e)

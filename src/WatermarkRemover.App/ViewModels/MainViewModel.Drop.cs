@@ -63,6 +63,14 @@ public sealed partial class MainViewModel
     public bool CanAcceptPath(string path) =>
         Directory.Exists(path) || SelectedFeature.CanHandle(path);
 
+    /// <summary>
+    /// Empty-state line of the record list. Tool pages (截图) have no drop zone at all, so the
+    /// generic 「拖入文件」 prompt would describe an interaction that does not exist on that page.
+    /// </summary>
+    public string EmptyJobsText => _selectedFeature.Id == "screenshot.page"
+        ? "还没有截图 · 点上方「开始截图」或按全局快捷键"
+        : "暂无文件 · 拖入或点击「选择文件」开始";
+
     /// <summary>Open-file dialog filter built from what the current feature accepts, so the
     /// picker never offers a format the page would reject (OCR takes photos, watermark does not).</summary>
     public string FilePickerFilter

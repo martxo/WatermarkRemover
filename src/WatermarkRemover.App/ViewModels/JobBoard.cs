@@ -72,9 +72,11 @@ public sealed class JobBoard : ObservableObject
         : VisibleJobCount == 0
             ? _sectionId == "transfer.page"
                 ? "手机扫码上传后，接收的文件会显示在这里"
-                : _sectionId == "search.page"
-                    ? "输入文件名搜索全盘文件，选中后可直接打开或定位"
-                    : $"拖入 PDF 文件即可开始「{_sectionName}」"
+                : _sectionId == "screenshot.page"
+                    ? "点「开始截图」或按全局快捷键，截图会自动复制并保存成 PNG"
+                    : _sectionId == "search.page"
+                        ? "输入文件名搜索全盘文件，选中后可直接打开或定位"
+                        : $"拖入 PDF 文件即可开始「{_sectionName}」"
             : $"已完成 {CompletedCount} 个文件";
 
     /// <summary>The host's busy state changed — recompose the status line and command gates.</summary>

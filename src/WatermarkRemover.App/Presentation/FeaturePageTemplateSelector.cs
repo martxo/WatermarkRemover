@@ -21,6 +21,8 @@ public sealed class FeaturePageTemplateSelector : DataTemplateSelector
 
     public DataTemplate? TransferTemplate { get; set; }
 
+    public DataTemplate? ScreenshotTemplate { get; set; }
+
     public override DataTemplate? SelectTemplate(object item, DependencyObject container) =>
         item is IFeature feature
             ? FeaturePresentationCatalog.For(feature).PageKind switch
@@ -29,6 +31,7 @@ public sealed class FeaturePageTemplateSelector : DataTemplateSelector
                 FeaturePageKind.Search => SearchTemplate,
                 FeaturePageKind.Netdisk => NetdiskTemplate,
                 FeaturePageKind.Transfer => TransferTemplate,
+                FeaturePageKind.Screenshot => ScreenshotTemplate,
                 _ => FilesTemplate,
             }
             : FilesTemplate;
