@@ -47,6 +47,7 @@ public sealed class ScreenshotOverlaySession
         new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly List<ScreenshotOverlayWindow> _windows = new();
     private readonly List<ScreenshotAnnotation> _annotations = new();
+    private readonly List<ScreenshotAnnotation> _redo = new();
 
     private ScreenshotRect? _selection;
     private Mode _mode;
@@ -55,6 +56,8 @@ public sealed class ScreenshotOverlaySession
     private ScreenshotHandle _dragHandle;
     private ScreenshotAnnotation? _draft;
     private ScreenshotTool _tool;
+    private uint _colorArgb = ScreenshotAnnotation.DefaultColorArgb;
+    private float _lineWidthDip = 2.5f;
     private Point? _textAnchor;
     private MonitorInfo? _toolbarMonitor;
     private SKBitmap? _preview;
@@ -112,6 +115,52 @@ public sealed class ScreenshotOverlaySession
         owner.Activate();
     }
 
+    /// <summary>
+    /// Captures the whole desktop without the selection overlay (PixPin-style full-screen
+    /// capture). A positive <paramref name="delaySeconds"/> gives the user time to arrange
+    /// windows before the app hides and the shutter fires.
+    /// </summary>
+    public static async Task<ScreenshotCaptureResult?> CaptureFullScreenAsync(
+        Window? owner, AppSettings settings, int delaySeconds)
+    {
+        bool hideOwner = owner is { IsVisible: true, WindowState: not WindowState.Minimized };
+        WindowState previousState = owner?.WindowState ?? WindowState.Normal;
+
+        DesktopCapture? capture = null;
+        try
+        {
+            if (delaySeconds > 0)
+                await Task.Delay(TimeSpan.FromSeconds(delaySeconds)).ConfigureAwait(true);
+            if (hideOwner) owner!.Hide();
+            await Task.Delay(200).ConfigureAwait(true);
+
+            capture = await Task.Run(ScreenCaptureService.Capture).ConfigureAwait(true);
+            using SKBitmap output = ScreenshotComposer.Compose(
+                capture.Bitmap,
+                new SKRectI(0, 0, capture.Bitmap.Width, capture.Bitmap.Height),
+                Array.Empty<ScreenshotAnnotation>());
+
+            ScreenshotCaptureResult result = SaveAndCopy(output, settings, output.Width, output.Height);
+            AppLog.Info($"全屏截图完成：{result.Width}×{result.Height}，复制{(result.Copied ? "成功" : "失败")}");
+            return result;
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("全屏截图失败", ex);
+            return new ScreenshotCaptureResult(null, 0, 0, false, $"全屏截图失败：{ex.Message}", false);
+        }
+        finally
+        {
+            capture?.Dispose();
+            if (hideOwner)
+            {
+                owner!.Show();
+                owner.WindowState = previousState;
+                owner.Activate();
+            }
+        }
+    }
+
     // --- Overlay lifecycle -----------------------------------------------------
 
     private void ShowOverlays()
@@ -163,6 +212,15 @@ public sealed class ScreenshotOverlaySession
     public bool IsSelecting => _mode == Mode.Creating;
 
     public ScreenshotTool Tool => _tool;
+
+    /// <summary>Mark colour chosen in the toolbar (ARGB).</summary>
+    public uint ColorArgb => _colorArgb;
+
+    /// <summary>Stroke width in device-independent pixels; converted to physical per monitor.</summary>
+    public float LineWidth => _lineWidthDip;
+
+    /// <summary>Whether an undone annotation can be restored (Ctrl+Y).</summary>
+    public bool CanRedo => _redo.Count > 0;
 
     /// <summary>The in-progress annotation, in global physical pixels (overlay-only preview).</summary>
     public ScreenshotAnnotation? Draft => _draft;
@@ -267,8 +325,8 @@ public sealed class ScreenshotOverlaySession
         switch (_mode)
         {
             case Mode.Creating:
-                _selection = ScreenshotRect
-                    .FromPoints(_dragStart.X, _dragStart.Y, global.X, global.Y)
+                _selection = SnapToScreenEdges(ScreenshotRect
+                    .FromPoints(_dragStart.X, _dragStart.Y, global.X, global.Y))
                     .ClampTo(_desktop.Bounds);
                 RaiseChanged();
                 break;
@@ -285,7 +343,9 @@ public sealed class ScreenshotOverlaySession
             }
 
             case Mode.Resizing:
-                _selection = ScreenshotGeometry.Resize(_dragOriginal, _dragHandle, global.X, global.Y, _desktop.Bounds);
+                _selection = SnapToScreenEdges(
+                        ScreenshotGeometry.Resize(_dragOriginal, _dragHandle, global.X, global.Y, _desktop.Bounds))
+                    .ClampTo(_desktop.Bounds);
                 _toolbarMonitor = MonitorAt(new Point(_selection.Value.CenterX, _selection.Value.CenterY));
                 RaiseChanged();
                 break;
@@ -295,6 +355,22 @@ public sealed class ScreenshotOverlaySession
                 RaiseChanged();
                 break;
         }
+    }
+
+    /// <summary>Snaps selection edges to desktop/monitor boundaries within a few pixels.</summary>
+    private ScreenshotRect SnapToScreenEdges(ScreenshotRect rect)
+    {
+        var vertical = new List<double> { _desktop.Bounds.Left, _desktop.Bounds.Right };
+        var horizontal = new List<double> { _desktop.Bounds.Top, _desktop.Bounds.Bottom };
+        foreach (MonitorInfo monitor in _desktop.Monitors)
+        {
+            vertical.Add(monitor.Left);
+            vertical.Add(monitor.Right);
+            horizontal.Add(monitor.Top);
+            horizontal.Add(monitor.Bottom);
+        }
+
+        return ScreenshotGeometry.SnapEdges(rect, vertical, horizontal);
     }
 
     /// <summary>Keeps a moved rect's size while stopping its edges at the desktop boundary.</summary>
@@ -360,6 +436,7 @@ public sealed class ScreenshotOverlaySession
 
     private void DiscardAnnotations()
     {
+        _redo.Clear();
         if (_annotations.Count == 0) return;
         _annotations.Clear();
         RebuildPreview();
@@ -375,10 +452,35 @@ public sealed class ScreenshotOverlaySession
         RaiseChanged();
     }
 
+    public void SetColor(uint colorArgb)
+    {
+        if (_colorArgb == colorArgb) return;
+        _colorArgb = colorArgb;
+        RaiseChanged();
+    }
+
+    public void SetLineWidth(float lineWidthDip)
+    {
+        if (Math.Abs(_lineWidthDip - lineWidthDip) < 0.01f) return;
+        _lineWidthDip = lineWidthDip;
+        RaiseChanged();
+    }
+
     public void Undo()
     {
         if (_annotations.Count == 0) return;
-        _annotations.RemoveAt(_annotations.Count - 1);
+        int last = _annotations.Count - 1;
+        _redo.Add(_annotations[last]);
+        _annotations.RemoveAt(last);
+        RebuildPreview();
+        RaiseChanged();
+    }
+
+    public void Redo()
+    {
+        if (_redo.Count == 0) return;
+        _annotations.Add(_redo[^1]);
+        _redo.RemoveAt(_redo.Count - 1);
         RebuildPreview();
         RaiseChanged();
     }
@@ -386,6 +488,7 @@ public sealed class ScreenshotOverlaySession
     public void ClearAnnotations()
     {
         if (_annotations.Count == 0) return;
+        _redo.Clear();
         _annotations.Clear();
         RebuildPreview();
         RaiseChanged();
@@ -408,8 +511,16 @@ public sealed class ScreenshotOverlaySession
             float scale = (float)ScaleAt(point);
             var local = new ScreenshotPointF((float)(point.X - selection.Left), (float)(point.Y - selection.Top));
             // 16 DIP matches the overlay's text box, converted to physical pixels.
-            _annotations.Add(ScreenshotAnnotation.TextAt(
-                local.X, local.Y, text.Trim(), Math.Max(12, 16f * scale)));
+            _annotations.Add(new ScreenshotAnnotation
+            {
+                Kind = ScreenshotAnnotationKind.Text,
+                Points = new[] { local },
+                Text = text.Trim(),
+                FontSize = Math.Max(12, 16f * scale),
+                ColorArgb = _colorArgb,
+                Thickness = 1f,
+            });
+            _redo.Clear();
             RebuildPreview();
         }
 
@@ -420,21 +531,29 @@ public sealed class ScreenshotOverlaySession
 
     private ScreenshotAnnotation NewDraft(Point start, Point end)
     {
-        float thickness = (float)Math.Max(2, 2.5 * ScaleAt(start));
+        float thickness = Math.Max(2, _lineWidthDip * (float)ScaleAt(start));
+        var first = new ScreenshotPointF((float)start.X, (float)start.Y);
+        var last = new ScreenshotPointF((float)end.X, (float)end.Y);
+
         return _tool switch
         {
-            ScreenshotTool.Rectangle => ScreenshotAnnotation.Rectangle(
-                (float)start.X, (float)start.Y, (float)end.X, (float)end.Y, thickness),
-            ScreenshotTool.Arrow => ScreenshotAnnotation.Arrow(
-                (float)start.X, (float)start.Y, (float)end.X, (float)end.Y, thickness),
-            ScreenshotTool.Pen => ScreenshotAnnotation.Pen(
-                new List<ScreenshotPointF> { new((float)start.X, (float)start.Y) }, thickness),
-            ScreenshotTool.Mosaic => ScreenshotAnnotation.Mosaic(
-                (float)start.X, (float)start.Y, (float)end.X, (float)end.Y, thickness),
-            _ => ScreenshotAnnotation.Rectangle(
-                (float)start.X, (float)start.Y, (float)end.X, (float)end.Y, thickness),
+            ScreenshotTool.Arrow => Styled(ScreenshotAnnotationKind.Arrow, new[] { first, last }, thickness),
+            ScreenshotTool.Pen => Styled(ScreenshotAnnotationKind.Pen, new List<ScreenshotPointF> { first }, thickness),
+            ScreenshotTool.Mosaic => Styled(ScreenshotAnnotationKind.Mosaic, new[] { first, last }, thickness),
+            _ => Styled(ScreenshotAnnotationKind.Rectangle, new[] { first, last }, thickness),
         };
     }
+
+    /// <summary>Builds an annotation carrying the colour/width chosen in the toolbar.</summary>
+    private ScreenshotAnnotation Styled(
+        ScreenshotAnnotationKind kind, IReadOnlyList<ScreenshotPointF> points, float thickness) =>
+        new()
+        {
+            Kind = kind,
+            Points = points,
+            ColorArgb = _colorArgb,
+            Thickness = Math.Max(1, thickness),
+        };
 
     private void UpdateDraft(Point end)
     {
@@ -450,16 +569,9 @@ public sealed class ScreenshotOverlaySession
             return;
         }
 
-        float thickness = _draft.Thickness;
-        _draft = _draft.Kind switch
-        {
-            ScreenshotAnnotationKind.Arrow => ScreenshotAnnotation.Arrow(
-                _draft.Points[0].X, _draft.Points[0].Y, (float)end.X, (float)end.Y, thickness),
-            ScreenshotAnnotationKind.Mosaic => ScreenshotAnnotation.Mosaic(
-                _draft.Points[0].X, _draft.Points[0].Y, (float)end.X, (float)end.Y, thickness),
-            _ => ScreenshotAnnotation.Rectangle(
-                _draft.Points[0].X, _draft.Points[0].Y, (float)end.X, (float)end.Y, thickness),
-        };
+        var endPoint = new ScreenshotPointF((float)end.X, (float)end.Y);
+        _draft = Styled(
+            _draft.Kind, new[] { _draft.Points[0], endPoint }, _draft.Thickness);
     }
 
     private static ScreenshotAnnotation RecreateDraft(ScreenshotAnnotation source, IReadOnlyList<ScreenshotPointF> points) =>
@@ -495,6 +607,8 @@ public sealed class ScreenshotOverlaySession
         }
 
         _annotations.Add(RecreateDraft(draft, local));
+        // A new mark invalidates the redo branch, standard editor behaviour.
+        _redo.Clear();
         RebuildPreview();
     }
 
@@ -539,6 +653,31 @@ public sealed class ScreenshotOverlaySession
         int height = Math.Max(1, (int)Math.Round(selection.Height));
 
         SKBitmap? output = null;
+        try
+        {
+            var crop = new SKRectI(
+                (int)Math.Round(selection.Left), (int)Math.Round(selection.Top),
+                (int)Math.Round(selection.Right), (int)Math.Round(selection.Bottom));
+            output = ScreenshotComposer.Compose(_desktop.Bitmap, crop, _annotations);
+            _completion.TrySetResult(SaveAndCopy(output, _settings, width, height));
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("截图处理失败", ex);
+            _completion.TrySetResult(new ScreenshotCaptureResult(
+                null, width, height, false, $"截图处理失败：{ex.Message}", false));
+        }
+        finally
+        {
+            output?.Dispose();
+        }
+    }
+
+    /// <summary>Saves one composed bitmap and copies it to the clipboard; shared by every
+    /// capture mode (region, full screen).</summary>
+    internal static ScreenshotCaptureResult SaveAndCopy(
+        SKBitmap output, AppSettings settings, int width, int height)
+    {
         string? savedPath = null;
         string? saveError = null;
         string? copyError = null;
@@ -546,51 +685,32 @@ public sealed class ScreenshotOverlaySession
 
         try
         {
-            var crop = new SKRectI(
-                (int)Math.Round(selection.Left), (int)Math.Round(selection.Top),
-                (int)Math.Round(selection.Right), (int)Math.Round(selection.Bottom));
-            output = ScreenshotComposer.Compose(_desktop.Bitmap, crop, _annotations);
+            string directory = ScreenshotNaming.ResolveDirectory(settings);
+            Directory.CreateDirectory(directory);
+            string fileName = ScreenshotNaming.EnsureUnique(
+                directory, ScreenshotNaming.BuildFileName(DateTime.Now));
+            savedPath = Path.Combine(directory, fileName);
 
-            try
-            {
-                string directory = ScreenshotNaming.ResolveDirectory(_settings);
-                Directory.CreateDirectory(directory);
-                string fileName = ScreenshotNaming.EnsureUnique(
-                    directory, ScreenshotNaming.BuildFileName(DateTime.Now));
-                savedPath = Path.Combine(directory, fileName);
-
-                using SKImage image = SKImage.FromBitmap(output);
-                using SKData? data = image.Encode(SKEncodedImageFormat.Png, 100);
-                if (data is null) throw new InvalidOperationException("PNG 编码失败");
-                File.WriteAllBytes(savedPath, data.ToArray());
-            }
-            catch (Exception ex)
-            {
-                saveError = $"保存失败：{ex.Message}";
-                savedPath = null;
-                AppLog.Error("截图保存失败", ex);
-            }
-
-            try
-            {
-                copied = TryCopyToClipboard(SkiaBitmapBridge.ToBitmapSource(output));
-            }
-            catch (Exception ex)
-            {
-                copyError = $"复制到剪贴板失败：{ex.Message}";
-                AppLog.Warn(copyError);
-            }
+            using SKImage image = SKImage.FromBitmap(output);
+            using SKData? data = image.Encode(SKEncodedImageFormat.Png, 100);
+            if (data is null) throw new InvalidOperationException("PNG 编码失败");
+            File.WriteAllBytes(savedPath, data.ToArray());
         }
         catch (Exception ex)
         {
-            AppLog.Error("截图处理失败", ex);
-            _completion.TrySetResult(new ScreenshotCaptureResult(
-                null, width, height, false, $"截图处理失败：{ex.Message}", false));
-            return;
+            saveError = $"保存失败：{ex.Message}";
+            savedPath = null;
+            AppLog.Error("截图保存失败", ex);
         }
-        finally
+
+        try
         {
-            output?.Dispose();
+            copied = TryCopyToClipboard(SkiaBitmapBridge.ToBitmapSource(output));
+        }
+        catch (Exception ex)
+        {
+            copyError = $"复制到剪贴板失败：{ex.Message}";
+            AppLog.Warn(copyError);
         }
 
         string? error = (saveError, copyError) switch
@@ -601,8 +721,7 @@ public sealed class ScreenshotOverlaySession
             _ => $"{saveError}；{copyError}",
         };
 
-        _completion.TrySetResult(new ScreenshotCaptureResult(
-            savedPath, width, height, copied, error, false));
+        return new ScreenshotCaptureResult(savedPath, width, height, copied, error, false);
     }
 
     /// <summary>Esc: nothing is written and the host window comes back.</summary>

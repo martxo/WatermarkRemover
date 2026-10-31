@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.IO;
 using System.Text;
 using System.Windows;
@@ -60,6 +61,7 @@ public sealed class FileJobViewModel : ObservableObject
     private PdfPreviewViewModel? _strip;
     private bool _stripOpen;
     private bool _canContinueScan;
+    private ImageSource? _thumbnail;
 
     /// <summary>Numbered-rename explanations expire by the app's shared transient rule.</summary>
     private readonly TransientStatus _transientNote;
@@ -85,6 +87,8 @@ public sealed class FileJobViewModel : ObservableObject
         UploadCommand = new RelayCommand(_ => UploadRequested?.Invoke(this, EventArgs.Empty), _ => ShowUploadButton);
         ContinueScanCommand = new RelayCommand(
             _ => ContinueScanRequested?.Invoke(this, EventArgs.Empty), _ => ShowContinueScan);
+        CopyImageCommand = new RelayCommand(_ => CopyImage(), _ => ShowScreenshotActions);
+        OpenImageCommand = new RelayCommand(_ => OpenImage(), _ => ShowScreenshotActions);
     }
 
     /// <summary>Raised when the user asks to run this failed scan again; the host owns the scanner.</summary>
@@ -134,6 +138,7 @@ public sealed class FileJobViewModel : ObservableObject
                 OnPropertyChanged(nameof(ShowLiveStrip));
                 OnPropertyChanged(nameof(ShowUploadChip));
                 OnPropertyChanged(nameof(ShowUploadButton));
+                OnPropertyChanged(nameof(ShowScreenshotActions));
                 OnPropertyChanged(nameof(StatusLine));
             }
         }
@@ -167,6 +172,112 @@ public sealed class FileJobViewModel : ObservableObject
     public bool ShowPreview =>
         OutputPath is { } path &&
         string.Equals(Path.GetExtension(path), ".pdf", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Screenshot rows behave like a light Tendedero shelf: a thumbnail, click-to-copy, drag the
+    /// file into another app, and open the original. Only image outputs get these actions.
+    /// </summary>
+    public bool ShowScreenshotActions =>
+        OwnerFeatureId == "screenshot.page" &&
+        State == JobState.Succeeded &&
+        IsImagePath(OutputPath);
+
+    /// <summary>Can this row's file be dragged out of the app (screenshot image only)?</summary>
+    public bool CanDragScreenshot => ShowScreenshotActions && OutputPath is not null;
+
+    /// <summary>Small decoded preview for screenshot rows (null for every other output type).</summary>
+    public ImageSource? Thumbnail
+    {
+        get => _thumbnail;
+        private set
+        {
+            if (SetProperty(ref _thumbnail, value))
+                OnPropertyChanged(nameof(HasThumbnail));
+        }
+    }
+
+    public bool HasThumbnail => _thumbnail is not null;
+
+    public RelayCommand CopyImageCommand { get; }
+
+    public RelayCommand OpenImageCommand { get; }
+
+    private static bool IsImagePath(string? path) => path is not null &&
+        Path.GetExtension(path) is ".png" or ".jpg" or ".jpeg" or ".bmp" or ".webp" or ".gif";
+
+    /// <summary>Builds a frozen 160px-wide thumbnail; a broken image never breaks the row.</summary>
+    private void LoadThumbnail(string? path)
+    {
+        if (!IsImagePath(path) || !File.Exists(path))
+        {
+            Thumbnail = null;
+            return;
+        }
+
+        try
+        {
+            var image = new BitmapImage();
+            image.BeginInit();
+            image.CacheOption = BitmapCacheOption.OnLoad;
+            image.DecodePixelWidth = 160;
+            image.UriSource = new Uri(path!);
+            image.EndInit();
+            image.Freeze();
+            Thumbnail = image;
+        }
+        catch (Exception ex)
+        {
+            Thumbnail = null;
+            AppLog.Trace("截图缩略图解码失败", ex);
+        }
+    }
+
+    private void CopyImage()
+    {
+        if (OutputPath is not { } path || !File.Exists(path))
+        {
+            ShowTransientNameNote("图片已不存在，无法复制");
+            return;
+        }
+
+        try
+        {
+            var image = new BitmapImage();
+            using (var stream = File.OpenRead(path))
+            {
+                image.BeginInit();
+                image.CacheOption = BitmapCacheOption.OnLoad;
+                image.StreamSource = stream;
+                image.EndInit();
+            }
+
+            image.Freeze();
+            Clipboard.SetImage(image);
+            ShowTransientNameNote("图片已复制到剪贴板");
+        }
+        catch (Exception ex)
+        {
+            ShowTransientNameNote($"复制图片失败：{ex.Message}");
+        }
+    }
+
+    private void OpenImage()
+    {
+        if (OutputPath is not { } path || !File.Exists(path))
+        {
+            ShowTransientNameNote("图片已不存在，无法打开");
+            return;
+        }
+
+        try
+        {
+            Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            ShowTransientNameNote($"打开图片失败：{ex.Message}");
+        }
+    }
 
     /// <summary>
     /// Every finished row — scans included — keeps a 预览/收起 button. The row that just finished
@@ -379,6 +490,10 @@ public sealed class FileJobViewModel : ObservableObject
                 OnPropertyChanged(nameof(ShowPreview));
                 OnPropertyChanged(nameof(ShowContinueScan));
                 OnPropertyChanged(nameof(PreviewButtonVisibility));
+                OnPropertyChanged(nameof(ShowScreenshotActions));
+                OnPropertyChanged(nameof(HasThumbnail));
+                CopyImageCommand.RaiseCanExecuteChanged();
+                OpenImageCommand.RaiseCanExecuteChanged();
             }
         }
     }
@@ -556,6 +671,7 @@ public sealed class FileJobViewModel : ObservableObject
                 _resultSummary = string.IsNullOrWhiteSpace(result.Summary) ? "已处理" : result.Summary;
                 DisplayName = Path.GetFileName(outputPath);
                 Detail = $"{_resultSummary} → {outputPath}";
+                LoadThumbnail(outputPath);
                 break;
 
             case FeatureStatus.NoChange:
@@ -633,6 +749,7 @@ public sealed class FileJobViewModel : ObservableObject
         _resultSummary = string.IsNullOrWhiteSpace(summary) ? "已处理" : summary;
         DisplayName = Path.GetFileName(outputPath);
         Detail = $"{_resultSummary} → {outputPath}";
+        LoadThumbnail(outputPath);
         RefreshChipStates();
     }
 
@@ -654,6 +771,7 @@ public sealed class FileJobViewModel : ObservableObject
         OutputPath = newPath;
         DisplayName = Path.GetFileName(newPath);
         Detail = $"{_resultSummary} → {newPath}";
+        LoadThumbnail(newPath);
         RefreshChipStates();
     }
 

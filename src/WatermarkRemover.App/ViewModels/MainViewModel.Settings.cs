@@ -121,6 +121,16 @@ public sealed partial class MainViewModel
             return false;
         }
 
+        // Preflight the gesture before committing: saving a shortcut another app owns would
+        // otherwise silently leave the screenshot feature without a working hotkey.
+        if (ScreenshotHotkeyValidator?.Invoke(hotkey) is { Length: > 0 } hotkeyConflict)
+        {
+            _dialogs.Warn(
+                $"截图快捷键 {hotkey} 不可用：{hotkeyConflict}。\n\n请换一个组合键后再保存。",
+                "截图快捷键");
+            return false;
+        }
+
         page.Settings.ScreenshotHotkey = hotkey.ToString();
         string screenshotDirectory = page.Settings.ScreenshotOutputDirectory?.Trim() ?? string.Empty;
         if (screenshotDirectory.Length != 0)
