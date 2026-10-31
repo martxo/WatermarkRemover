@@ -1,6 +1,8 @@
+using System.IO;
 using System.Windows;
 using System.ComponentModel;
 using System.Windows.Controls;
+using System.Windows.Media;
 using System.Runtime.InteropServices;
 using Microsoft.Win32;
 using WatermarkRemover.App.Logging;
@@ -28,6 +30,14 @@ public partial class MainWindow : Window
     /// <summary>System-wide shortcut that opens the screenshot overlay while the app is in the background.</summary>
     private GlobalHotkeyService? _hotkeys;
 
+    /// <summary>The gesture currently registered (null when none); restored if a new one fails.</summary>
+    private ScreenshotHotkey? _activeHotkey;
+
+    // Thumbnail gestures of a screenshot row: click copies, dragging hands the file to the target.
+    private FileJobViewModel? _thumbnailDragJob;
+    private Point _thumbnailDragStart;
+    private bool _thumbnailDragStarted;
+
     /// <summary>
     /// Drag-exit watchdog. DragLeave is unreliable in WPF: it bubbles from every child element,
     /// and the leave caused by dragging out of the window is often swallowed entirely. Instead
@@ -47,6 +57,16 @@ public partial class MainWindow : Window
         // view model only turns the result into a record and user-visible status.
         _viewModel.ScreenshotCaptureHandler =
             () => ScreenshotOverlaySession.RunAsync(this, _viewModel.Settings);
+        _viewModel.ScreenshotFullScreenHandler = delaySeconds =>
+            ScreenshotOverlaySession.CaptureFullScreenAsync(this, _viewModel.Settings, delaySeconds);
+        // The settings page asks before saving: an occupied gesture is rejected there, so the
+        // old shortcut and the saved settings both stay untouched.
+        _viewModel.ScreenshotHotkeyValidator = hotkey =>
+        {
+            if (_activeHotkey == hotkey) return null;
+            return _hotkeys is null ? null
+                : _hotkeys.CanRegister(hotkey, out string? error) ? null : error;
+        };
         _viewModel.ScreenshotHotkeyChanged += (_, _) => RegisterScreenshotHotkey(notifyFailure: true);
         _dragWatchdog = new System.Windows.Threading.DispatcherTimer
         {
@@ -152,14 +172,33 @@ public partial class MainWindow : Window
     {
         if (_hotkeys is null) return;
 
-        ScreenshotHotkey hotkey = ScreenshotHotkey.ParseOrDefault(_viewModel.Settings.ScreenshotHotkey);
-        bool registered = _hotkeys.Register(hotkey, out string? error);
-        _viewModel.ReportScreenshotHotkey(registered, error);
-
-        if (!registered && notifyFailure)
+        ScreenshotHotkey requested = ScreenshotHotkey.ParseOrDefault(_viewModel.Settings.ScreenshotHotkey);
+        if (_activeHotkey == requested)
         {
+            _viewModel.ReportScreenshotHotkey(requested, true, null);
+            return;
+        }
+
+        bool registered = _hotkeys.Register(requested, out string? error);
+        if (registered)
+        {
+            _activeHotkey = requested;
+            _viewModel.ReportScreenshotHotkey(requested, true, null);
+            return;
+        }
+
+        // Registration unregisters the old gesture first. Put it back so a failed change never
+        // leaves the user with no screenshot hotkey at all.
+        ScreenshotHotkey? fallback = _activeHotkey;
+        bool restored = fallback is { } previous && _hotkeys.Register(previous, out _);
+        _activeHotkey = restored ? fallback : null;
+        _viewModel.ReportScreenshotHotkey(requested, false, error, restored ? fallback : null);
+
+        if (notifyFailure)
+        {
+            string kept = restored ? $"\n\n仍继续使用原快捷键 {fallback}。" : string.Empty;
             _dialogs.Warn(
-                $"截图快捷键 {hotkey} 未能注册：{error ?? "未知原因"}。\n\n" +
+                $"截图快捷键 {requested} 未能注册：{error ?? "未知原因"}。{kept}\n\n" +
                 "请换一个组合键，或先关闭占用该快捷键的程序；截图页面上的「开始截图」按钮始终可用。",
                 "截图快捷键");
         }
@@ -199,6 +238,7 @@ public partial class MainWindow : Window
     {
         _hotkeys?.Dispose();
         _hotkeys = null;
+        _activeHotkey = null;
         _viewModel.Shutdown();
         base.OnClosed(e);
     }
@@ -418,5 +458,78 @@ public partial class MainWindow : Window
             job.CancelEditCommand.Execute(null);
             e.Handled = true;
         }
+    }
+
+    // --- Screenshot row gestures (Tendedero-style shelf) -----------------------
+
+    private void OnScreenshotThumbnailMouseDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        if (sender is not Image { DataContext: FileJobViewModel job } || !job.CanDragScreenshot) return;
+
+        _thumbnailDragJob = job;
+        _thumbnailDragStart = e.GetPosition(JobList);
+        _thumbnailDragStarted = false;
+        // Keep the press away from the inline-rename hit area underneath.
+        if (sender is UIElement element) element.CaptureMouse();
+        e.Handled = true;
+    }
+
+    private void OnScreenshotThumbnailMouseMove(object sender, System.Windows.Input.MouseEventArgs e)
+    {
+        if (_thumbnailDragJob is null) return;
+
+        if (e.LeftButton != System.Windows.Input.MouseButtonState.Pressed)
+        {
+            _thumbnailDragJob = null;
+            if (sender is UIElement released) released.ReleaseMouseCapture();
+            return;
+        }
+
+        Point position = e.GetPosition(JobList);
+        bool moved = Math.Abs(position.X - _thumbnailDragStart.X) >= SystemParameters.MinimumHorizontalDragDistance ||
+                     Math.Abs(position.Y - _thumbnailDragStart.Y) >= SystemParameters.MinimumVerticalDragDistance;
+        if (!moved) return;
+
+        FileJobViewModel job = _thumbnailDragJob;
+        string? path = job.OutputPath;
+        _thumbnailDragJob = null;
+        _thumbnailDragStarted = true;
+        if (sender is UIElement element) element.ReleaseMouseCapture();
+
+        if (path is null || !File.Exists(path))
+        {
+            _thumbnailDragStarted = false;
+            return;
+        }
+
+        try
+        {
+            var data = new DataObject(DataFormats.FileDrop, new[] { path });
+            DragDrop.DoDragDrop((DependencyObject)sender, data, DragDropEffects.Copy);
+        }
+        catch (Exception ex)
+        {
+            Logging.AppLog.Warn($"拖出截图失败：{ex.Message}");
+        }
+        finally
+        {
+            _thumbnailDragStarted = false;
+        }
+
+        e.Handled = true;
+    }
+
+    private void OnScreenshotThumbnailMouseUp(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        if (sender is UIElement element) element.ReleaseMouseCapture();
+
+        FileJobViewModel? job = _thumbnailDragJob;
+        _thumbnailDragJob = null;
+        bool dragged = _thumbnailDragStarted;
+        _thumbnailDragStarted = false;
+        if (job is null || dragged) return;
+
+        job.CopyImageCommand.Execute(null);
+        e.Handled = true;
     }
 }

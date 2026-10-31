@@ -85,6 +85,28 @@
                 </Trigger>
             </Style.Triggers>
         </Style>
+
+        <!-- Round colour swatch: the selected one stays fully opaque, others dim. -->
+        <Style x:Key="ColorSwatch" TargetType="Button">
+            <Setter Property="Width" Value="20"/>
+            <Setter Property="Height" Value="20"/>
+            <Setter Property="Margin" Value="3,0,0,0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Swatch" CornerRadius="4"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="#66FFFFFF" BorderThickness="1"/>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Swatch" Property="BorderBrush" Value="White"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
     </Window.Resources>
 
     <Canvas x:Name="RootCanvas" Background="#FF000000" ClipToBounds="True" Focusable="True">
@@ -121,6 +143,13 @@
         <Border x:Name="SizeLabel" Background="#CC1E1E1E" CornerRadius="3" Padding="6,2"
                 IsHitTestVisible="False" Visibility="Collapsed">
             <TextBlock x:Name="SizeText" Foreground="#FFEDEDED" FontSize="11"/>
+        </Border>
+
+        <!-- First-run hint strip: only while no selection exists, so it never blocks the work. -->
+        <Border x:Name="HintBar" Background="#E61E1E1E" CornerRadius="6" Padding="12,6"
+                IsHitTestVisible="False">
+            <TextBlock Text="拖动框选区域 · R 矩形  A 箭头  P 画笔  T 文字  M 马赛克 · Enter 复制并保存 · Esc 取消"
+                       Foreground="#FFEDEDED" FontSize="12"/>
         </Border>
 
         <!-- Crosshair + magnifier while the user is still choosing the region. -->
@@ -161,8 +190,32 @@
 
                 <Rectangle Width="1" Fill="#33FFFFFF" Margin="6,2"/>
 
+                <Button x:Name="ColorRed" Style="{StaticResource ColorSwatch}"
+                        Background="#FFE53935" ToolTip="红色标注"/>
+                <Button x:Name="ColorYellow" Style="{StaticResource ColorSwatch}"
+                        Background="#FFFBC02D" ToolTip="黄色标注"/>
+                <Button x:Name="ColorBlue" Style="{StaticResource ColorSwatch}"
+                        Background="#FF1E88E5" ToolTip="蓝色标注"/>
+                <Button x:Name="ColorGreen" Style="{StaticResource ColorSwatch}"
+                        Background="#FF43A047" ToolTip="绿色标注"/>
+                <Button x:Name="ColorBlack" Style="{StaticResource ColorSwatch}"
+                        Background="#FF111111" ToolTip="黑色标注"/>
+
+                <Rectangle Width="1" Fill="#33FFFFFF" Margin="6,2"/>
+
+                <ToggleButton x:Name="ThinWidth" Content="细" Style="{StaticResource ToolToggle}"
+                              ToolTip="细线条"/>
+                <ToggleButton x:Name="MediumWidth" Content="中" Style="{StaticResource ToolToggle}"
+                              ToolTip="中等线条"/>
+                <ToggleButton x:Name="ThickWidth" Content="粗" Style="{StaticResource ToolToggle}"
+                              ToolTip="粗线条"/>
+
+                <Rectangle Width="1" Fill="#33FFFFFF" Margin="6,2"/>
+
                 <Button x:Name="UndoButton" Content="撤销" Style="{StaticResource ToolButton}"
                         ToolTip="撤销上一步标注（Ctrl+Z）"/>
+                <Button x:Name="RedoButton" Content="重做" Style="{StaticResource ToolButton}"
+                        ToolTip="恢复刚才撤销的标注（Ctrl+Y）"/>
                 <Button x:Name="ClearButton" Content="清空" Style="{StaticResource ToolButton}"
                         ToolTip="清除全部标注"/>
                 <Button x:Name="CancelButton" Content="取消" Style="{StaticResource ToolButton}"

@@ -533,7 +533,7 @@
                                             VerticalAlignment="Center"
                                             Click="OnResetScreenshotHotkey"/>
                                 </StackPanel>
-                                <TextBlock Text="改动随「返回应用」保存生效；若组合键已被其他程序占用，页面会明确提示且仍可点页面上的「开始截图」。"
+                                <TextBlock Text="改动随「返回应用」保存生效；保存前会自动检测组合键是否被其他程序占用，冲突时留在设置页并提示换键，不会丢掉原来的快捷键。"
                                            Style="{StaticResource RowCaption}"
                                            Margin="0,8,0,0"/>
                             </StackPanel>

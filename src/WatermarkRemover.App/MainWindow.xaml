@@ -761,7 +761,7 @@
                 <TextBlock Text="区域截图"
                            FontSize="14" FontWeight="SemiBold"
                            Foreground="{StaticResource TextPrimaryBrush}"/>
-                <TextBlock Text="按快捷键或点下面的按钮，全屏框选后可直接画矩形、箭头、画笔、文字和马赛克；完成后自动复制到剪贴板并保存 PNG。"
+                <TextBlock Text="按快捷键或点下面的按钮，全屏框选后可直接标注；完成后自动复制到剪贴板并保存 PNG。框选后可选颜色、线宽，R 矩形 / A 箭头 / P 画笔 / T 文字 / M 马赛克，Ctrl+Z 撤销、Ctrl+Y 重做。"
                            FontSize="12"
                            Foreground="{StaticResource TextSecondaryBrush}"
                            TextWrapping="Wrap"
@@ -771,6 +771,15 @@
                             Style="{StaticResource PrimaryButton}"
                             Command="{Binding CaptureScreenshotCommand}"
                             MinWidth="120"/>
+                    <Button Content="全屏截图"
+                            Style="{StaticResource SmallButton}"
+                            Command="{Binding CaptureFullScreenCommand}"
+                            Margin="10,0,0,0" VerticalAlignment="Center"/>
+                    <Button Content="3 秒后全屏"
+                            Style="{StaticResource SmallButton}"
+                            Command="{Binding CaptureDelayedFullScreenCommand}"
+                            Margin="8,0,0,0" VerticalAlignment="Center"
+                            ToolTip="3 秒后隐藏软件并截取整个桌面，方便先摆好窗口"/>
                     <Border Background="{StaticResource SurfaceAltBrush}" CornerRadius="6"
                             Padding="12,8" Margin="12,0,0,0" VerticalAlignment="Center">
                         <TextBlock Text="{Binding ScreenshotHotkeyText}"
@@ -793,6 +802,11 @@
                            Foreground="{StaticResource TextSecondaryBrush}"
                            TextTrimming="CharacterEllipsis"
                            Margin="0,3,0,0"/>
+                <TextBlock Text="最近的截图在下方列表里：单击缩略图复制图片，拖到其他程序或文件夹即可直接使用；也可点「打开图片」查看原图。"
+                           FontSize="11"
+                           Foreground="{StaticResource TextSecondaryBrush}"
+                           TextWrapping="Wrap"
+                           Margin="0,8,0,0"/>
             </StackPanel>
         </Border>
             </Grid>
@@ -1194,6 +1208,22 @@
                                     </Grid.ColumnDefinitions>
 
                                     <StackPanel Grid.Column="0">
+                                        <!-- Tendedero-style quick shelf: a screenshot row shows its own
+                                             thumbnail. Single click copies it, dragging out hands the file
+                                             to any app/folder. -->
+                                        <Image Source="{Binding Thumbnail}"
+                                               Height="54" MaxWidth="110"
+                                               HorizontalAlignment="Left"
+                                               Stretch="Uniform"
+                                               Margin="0,0,0,8"
+                                               RenderOptions.BitmapScalingMode="HighQuality"
+                                               Cursor="Hand"
+                                               ToolTip="单击复制图片；按住拖到其他程序或文件夹即可发送"
+                                               MouseLeftButtonDown="OnScreenshotThumbnailMouseDown"
+                                               MouseMove="OnScreenshotThumbnailMouseMove"
+                                               MouseLeftButtonUp="OnScreenshotThumbnailMouseUp"
+                                               Visibility="{Binding HasThumbnail, Converter={StaticResource BoolToVis}}"/>
+
                                         <!-- Name row: the file name takes the remaining width, quick-suffix chips
                                              sit to its right. -->
                                         <Grid>
@@ -1421,6 +1451,22 @@
                                                 Visibility="{Binding ShowCopyError, Converter={StaticResource BoolToVis}}"
                                                 Command="{Binding CopyErrorCommand}"
                                                 ToolTip="复制完整报错信息（含系统环境与异常堆栈）用于反馈问题"/>
+
+                                        <!-- screenshot rows: click to copy, or open the PNG in the default viewer -->
+                                        <Button Style="{StaticResource SmallButton}"
+                                                Content="复制图片"
+                                                Padding="10,3"
+                                                Margin="0,0,8,0"
+                                                Visibility="{Binding ShowScreenshotActions, Converter={StaticResource BoolToVis}}"
+                                                Command="{Binding CopyImageCommand}"
+                                                ToolTip="把这张截图复制到剪贴板"/>
+                                        <Button Style="{StaticResource SmallButton}"
+                                                Content="打开图片"
+                                                Padding="10,3"
+                                                Margin="0,0,8,0"
+                                                Visibility="{Binding ShowScreenshotActions, Converter={StaticResource BoolToVis}}"
+                                                Command="{Binding OpenImageCommand}"
+                                                ToolTip="用系统默认看图程序打开这张截图"/>
 
                                         <!-- finished rows: expand the inline thumbnail strip (again = fold).
                                              The row that just finished unfolds on its own, so its button

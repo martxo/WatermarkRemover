@@ -24,7 +24,7 @@ public partial class ScreenshotOverlayWindow : Window
 {
     private const int SwpNoActivate = 0x0010;
     private static readonly IntPtr HwndTopmost = new(-1);
-    private static readonly Brush MarkBrush = new SolidColorBrush(Color.FromRgb(229, 57, 53));
+    private readonly SolidColorBrush _markBrush = new(Color.FromRgb(229, 57, 53));
 
     private readonly ScreenshotOverlaySession _session;
     private readonly MonitorInfo _monitor;
@@ -51,7 +51,6 @@ public partial class ScreenshotOverlayWindow : Window
         Width = monitor.Width / monitor.Scale;
         Height = monitor.Height / monitor.Scale;
 
-        MarkBrush.Freeze();
         CreateDraftShapes();
         WireToolbar();
 
@@ -105,7 +104,16 @@ public partial class ScreenshotOverlayWindow : Window
         PenTool.Click += (_, _) => _session.SelectTool(ScreenshotTool.Pen);
         TextTool.Click += (_, _) => _session.SelectTool(ScreenshotTool.Text);
         MosaicTool.Click += (_, _) => _session.SelectTool(ScreenshotTool.Mosaic);
+        ColorRed.Click += (_, _) => _session.SetColor(0xFFE53935);
+        ColorYellow.Click += (_, _) => _session.SetColor(0xFFFBC02D);
+        ColorBlue.Click += (_, _) => _session.SetColor(0xFF1E88E5);
+        ColorGreen.Click += (_, _) => _session.SetColor(0xFF43A047);
+        ColorBlack.Click += (_, _) => _session.SetColor(0xFF111111);
+        ThinWidth.Click += (_, _) => _session.SetLineWidth(1.5f);
+        MediumWidth.Click += (_, _) => _session.SetLineWidth(3f);
+        ThickWidth.Click += (_, _) => _session.SetLineWidth(5f);
         UndoButton.Click += (_, _) => _session.Undo();
+        RedoButton.Click += (_, _) => _session.Redo();
         ClearButton.Click += (_, _) => _session.ClearAnnotations();
         CancelButton.Click += (_, _) => _session.Cancel();
         ConfirmButton.Click += (_, _) => _session.Confirm();
@@ -115,24 +123,24 @@ public partial class ScreenshotOverlayWindow : Window
     {
         _draftRect = new Rectangle
         {
-            Stroke = MarkBrush,
+            Stroke = _markBrush,
             StrokeThickness = 2,
             Visibility = Visibility.Collapsed,
         };
         _draftLine = new Line
         {
-            Stroke = MarkBrush,
+            Stroke = _markBrush,
             StrokeThickness = 2,
             Visibility = Visibility.Collapsed,
         };
         _draftHead = new Polygon
         {
-            Fill = MarkBrush,
+            Fill = _markBrush,
             Visibility = Visibility.Collapsed,
         };
         _draftPen = new Polyline
         {
-            Stroke = MarkBrush,
+            Stroke = _markBrush,
             StrokeThickness = 2,
             Visibility = Visibility.Collapsed,
         };
@@ -229,6 +237,7 @@ public partial class ScreenshotOverlayWindow : Window
         DrawPreview(hasSelection, selection, localSelection);
         DrawSelection(hasSelection, localSelection);
         DrawSizeLabel(width, height, hasSelection, selection, localSelection);
+        DrawHint(width, hasSelection);
         DrawDraft();
         DrawToolbar(width, height, hasSelection, localSelection);
         ShowTextEditor();
@@ -395,6 +404,20 @@ public partial class ScreenshotOverlayWindow : Window
         Canvas.SetTop(SizeLabel, y);
     }
 
+    private void DrawHint(double width, bool hasSelection)
+    {
+        if (hasSelection)
+        {
+            Hide(HintBar);
+            return;
+        }
+
+        HintBar.Visibility = Visibility.Visible;
+        HintBar.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        Canvas.SetLeft(HintBar, Math.Max(4, (width - HintBar.DesiredSize.Width) / 2));
+        Canvas.SetTop(HintBar, 24);
+    }
+
     private void DrawDraft()
     {
         _draftRect!.Visibility = Visibility.Collapsed;
@@ -405,6 +428,14 @@ public partial class ScreenshotOverlayWindow : Window
 
         ScreenshotAnnotation? draft = _session.Draft;
         if (draft is null || draft.Points.Count < 2) return;
+
+        // Live preview uses the toolbar's colour and width, exactly what the PNG will get.
+        _markBrush.Color = MarkColor(_session.ColorArgb);
+        double stroke = _session.LineWidth;
+        _draftRect!.StrokeThickness = stroke;
+        _draftLine!.StrokeThickness = stroke;
+        _draftPen!.StrokeThickness = stroke;
+        _draftHead!.Fill = _markBrush;
 
         Point first = LocalFromGlobal(new Point(draft.Points[0].X, draft.Points[0].Y));
         Point last = LocalFromGlobal(new Point(draft.Points[^1].X, draft.Points[^1].Y));
@@ -444,10 +475,14 @@ public partial class ScreenshotOverlayWindow : Window
         }
     }
 
+    /// <summary>ARGB (0xAARRGGBB) from the session to a WPF colour.</summary>
+    private static Color MarkColor(uint argb) => Color.FromArgb(
+        (byte)(argb >> 24), (byte)(argb >> 16), (byte)(argb >> 8), (byte)argb);
+
     private void DrawArrowHead(Point start, Point end)
     {
         double angle = Math.Atan2(end.Y - start.Y, end.X - start.X);
-        double head = 12;
+        double head = Math.Max(10, _session.LineWidth * 3.2);
         double spread = Math.PI / 7;
         var points = new PointCollection
         {
@@ -475,7 +510,17 @@ public partial class ScreenshotOverlayWindow : Window
         TextTool.IsChecked = _session.Tool == ScreenshotTool.Text;
         MosaicTool.IsChecked = _session.Tool == ScreenshotTool.Mosaic;
         UndoButton.IsEnabled = _session.HasAnnotations;
+        RedoButton.IsEnabled = _session.CanRedo;
         ClearButton.IsEnabled = _session.HasAnnotations;
+
+        SetSwatch(ColorRed, 0xFFE53935);
+        SetSwatch(ColorYellow, 0xFFFBC02D);
+        SetSwatch(ColorBlue, 0xFF1E88E5);
+        SetSwatch(ColorGreen, 0xFF43A047);
+        SetSwatch(ColorBlack, 0xFF111111);
+        ThinWidth.IsChecked = Math.Abs(_session.LineWidth - 1.5f) < 0.01f;
+        MediumWidth.IsChecked = Math.Abs(_session.LineWidth - 3f) < 0.01f;
+        ThickWidth.IsChecked = Math.Abs(_session.LineWidth - 5f) < 0.01f;
 
         ToolbarHost.Visibility = Visibility.Visible;
         ToolbarHost.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
@@ -489,6 +534,9 @@ public partial class ScreenshotOverlayWindow : Window
         Canvas.SetLeft(ToolbarHost, x);
         Canvas.SetTop(ToolbarHost, y);
     }
+
+    private void SetSwatch(Button swatch, uint argb) =>
+        swatch.Opacity = _session.ColorArgb == argb ? 1.0 : 0.45;
 
     // --- Text annotation -------------------------------------------------------
 
@@ -698,6 +746,13 @@ public partial class ScreenshotOverlayWindow : Window
         if (key == Key.Z && Keyboard.Modifiers.HasFlag(ModifierKeys.Control))
         {
             _session.Undo();
+            e.Handled = true;
+            return;
+        }
+
+        if (key == Key.Y && Keyboard.Modifiers.HasFlag(ModifierKeys.Control))
+        {
+            _session.Redo();
             e.Handled = true;
             return;
         }

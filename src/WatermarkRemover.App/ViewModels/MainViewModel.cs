@@ -138,6 +138,10 @@ public sealed partial class MainViewModel : ObservableObject
         // The overlay lives in the shell; this page keeps the launcher, hotkey state and records.
         CaptureScreenshotCommand = new RelayCommand(
             () => _ = CaptureScreenshotAsync(), () => !_screenshotBusy);
+        CaptureFullScreenCommand = new RelayCommand(
+            () => _ = CaptureFullScreenAsync(0), () => !_screenshotBusy);
+        CaptureDelayedFullScreenCommand = new RelayCommand(
+            () => _ = CaptureFullScreenAsync(3), () => !_screenshotBusy);
         OpenScreenshotFolderCommand = new RelayCommand(OpenScreenshotFolder);
 
         // --- 手机传文件 ---

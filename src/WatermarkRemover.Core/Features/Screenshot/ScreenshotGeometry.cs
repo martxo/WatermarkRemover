@@ -105,6 +105,34 @@ public static class ScreenshotGeometry
         return selection.Contains(x, y) ? ScreenshotHandle.Inside : ScreenshotHandle.None;
     }
 
+    /// <summary>
+    /// Pulls each edge to a nearby screen/monitor boundary (PixPin-style snapping). Only edges
+    /// move, so a small selection about to end at a monitor border becomes exact without
+    /// changing the other side.
+    /// </summary>
+    public static ScreenshotRect SnapEdges(
+        ScreenshotRect rect,
+        IReadOnlyList<double> verticalEdges,
+        IReadOnlyList<double> horizontalEdges,
+        double tolerance = 6)
+    {
+        double left = rect.Left, top = rect.Top, right = rect.Right, bottom = rect.Bottom;
+
+        foreach (double edge in verticalEdges)
+        {
+            if (Math.Abs(left - edge) <= tolerance) left = edge;
+            if (Math.Abs(right - edge) <= tolerance) right = edge;
+        }
+
+        foreach (double edge in horizontalEdges)
+        {
+            if (Math.Abs(top - edge) <= tolerance) top = edge;
+            if (Math.Abs(bottom - edge) <= tolerance) bottom = edge;
+        }
+
+        return ScreenshotRect.FromPoints(left, top, right, bottom);
+    }
+
     /// <summary>Applies a handle drag to the selection and keeps it inside <paramref name="bounds"/>.</summary>
     public static ScreenshotRect Resize(
         ScreenshotRect original, ScreenshotHandle handle, double x, double y, ScreenshotRect bounds)

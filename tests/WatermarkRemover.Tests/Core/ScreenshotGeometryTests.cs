@@ -52,6 +52,20 @@ public sealed class ScreenshotGeometryTests
     }
 
     [Fact]
+    public void Edges_snap_to_nearby_screen_boundaries()
+    {
+        var rect = new ScreenshotRect(4, 100, 400, 300); // left is 4px from the screen's 0
+        var vertical = new[] { 0.0, 1920.0 };
+        var horizontal = new[] { 0.0, 1080.0 };
+
+        var snapped = ScreenshotGeometry.SnapEdges(rect, vertical, horizontal);
+
+        Assert.Equal(0, snapped.Left);   // left follows the screen edge
+        Assert.Equal(404, snapped.Right); // the opposite edge stays where it was
+        Assert.Equal(100, snapped.Top);
+    }
+
+    [Fact]
     public void Resize_moves_only_the_dragged_edge_and_respects_bounds()
     {
         var original = new ScreenshotRect(100, 100, 200, 100);

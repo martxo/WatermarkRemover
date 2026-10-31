@@ -13,6 +13,8 @@ public sealed class GlobalHotkeyService : IDisposable
 {
     private const int WmHotkey = 0x0312;
     private const int HotkeyId = 0x5348; // "SH"
+    /// <summary>Id used only for the settings-page conflict probe; never left registered.</summary>
+    private const int ProbeHotkeyId = 0x5349;
     private const int ErrorHotkeyAlreadyRegistered = 1409;
 
     private const uint ModAlt = 0x0001;
@@ -39,26 +41,12 @@ public sealed class GlobalHotkeyService : IDisposable
         error = null;
         Unregister();
 
-        uint virtualKey = VirtualKeyFor(hotkey.Key);
-        if (virtualKey == 0)
-        {
-            error = $"不支持的按键「{hotkey.Key}」";
-            return false;
-        }
-
-        uint modifiers = 0;
-        if (hotkey.Control) modifiers |= ModControl;
-        if (hotkey.Alt) modifiers |= ModAlt;
-        if (hotkey.Shift) modifiers |= ModShift;
-        if (hotkey.Windows) modifiers |= ModWin;
+        if (!TryMap(hotkey, out uint modifiers, out uint virtualKey, out error)) return false;
 
         _registered = RegisterHotKey(_hwnd, HotkeyId, modifiers, virtualKey);
         if (!_registered)
         {
-            int code = Marshal.GetLastWin32Error();
-            error = code == ErrorHotkeyAlreadyRegistered
-                ? "该组合键已被其他程序占用"
-                : $"注册失败（错误码 {code}）";
+            error = DescribeFailure(Marshal.GetLastWin32Error());
             AppLog.Warn($"注册截图快捷键 {hotkey} 失败：{error}");
         }
         else
@@ -68,6 +56,49 @@ public sealed class GlobalHotkeyService : IDisposable
 
         return _registered;
     }
+
+    /// <summary>
+    /// Tests a gesture without touching the live shortcut, so the settings page can reject a
+    /// conflicting combination BEFORE saving it (and before the old shortcut is given up).
+    /// </summary>
+    public bool CanRegister(ScreenshotHotkey hotkey, out string? error)
+    {
+        error = null;
+        if (!TryMap(hotkey, out uint modifiers, out uint virtualKey, out error)) return false;
+
+        bool ok = RegisterHotKey(_hwnd, ProbeHotkeyId, modifiers, virtualKey);
+        if (ok)
+        {
+            UnregisterHotKey(_hwnd, ProbeHotkeyId);
+            return true;
+        }
+
+        error = DescribeFailure(Marshal.GetLastWin32Error());
+        return false;
+    }
+
+    private static bool TryMap(ScreenshotHotkey hotkey, out uint modifiers, out uint virtualKey, out string? error)
+    {
+        modifiers = 0;
+        error = null;
+
+        virtualKey = VirtualKeyFor(hotkey.Key);
+        if (virtualKey == 0)
+        {
+            error = $"不支持的按键「{hotkey.Key}」";
+            return false;
+        }
+
+        if (hotkey.Control) modifiers |= ModControl;
+        if (hotkey.Alt) modifiers |= ModAlt;
+        if (hotkey.Shift) modifiers |= ModShift;
+        if (hotkey.Windows) modifiers |= ModWin;
+        return true;
+    }
+
+    private static string DescribeFailure(int code) => code == ErrorHotkeyAlreadyRegistered
+        ? "该组合键已被其他程序占用"
+        : $"注册失败（错误码 {code}）";
 
     private void Unregister()
     {
