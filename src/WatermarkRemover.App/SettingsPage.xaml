@@ -376,6 +376,13 @@
                                         <ComboBoxItem Content="4"/>
                                     </ComboBox>
                                 </StackPanel>
+                                <Border Style="{StaticResource CardSeparator}"/>
+                                <CheckBox Content="关闭主窗口时最小化到托盘（截图快捷键和晾衣绳继续可用）"
+                                          IsChecked="{Binding Settings.MinimizeToTrayOnClose}"
+                                          FontSize="13"/>
+                                <TextBlock Text="开启后点窗口关闭按钮不会退出程序，而是隐藏到系统托盘；右键托盘图标选择「退出程序」才会真正结束。Windows 关机/注销不受影响。"
+                                           Style="{StaticResource RowCaption}"
+                                           Margin="22,4,0,0"/>
                             </StackPanel>
                         </Border>
                     </StackPanel>
@@ -566,6 +573,16 @@
                                             ToolTip="清空目录，恢复保存到「图片\Screenshots」"
                                             Click="OnResetScreenshotDirectory"/>
                                 </Grid>
+                                <Border Style="{StaticResource CardSeparator}"/>
+                                <CheckBox Content="完成后自动复制到剪贴板"
+                                          IsChecked="{Binding Settings.ScreenshotAutoCopy}"
+                                          FontSize="13"/>
+                                <CheckBox Content="完成后自动保存 PNG 文件"
+                                          IsChecked="{Binding Settings.ScreenshotAutoSave}"
+                                          FontSize="13" Margin="0,8,0,0"/>
+                                <TextBlock Text="两项至少开启一项；只复制不保存适合临时粘贴，只保存不复制适合批量留档。"
+                                           Style="{StaticResource RowCaption}"
+                                           Margin="22,6,0,0"/>
                             </StackPanel>
                         </Border>
                     </StackPanel>

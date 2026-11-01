@@ -149,8 +149,14 @@ public static class ScreenshotComposer
 
         paint.Style = SKPaintStyle.Fill;
         var anchor = annotation.Points[0];
-        // The anchor is the text box's top-left; Skia draws from the baseline.
-        canvas.DrawText(annotation.Text, anchor.X, anchor.Y + font.Size, font, paint);
+        // The anchor is the text box's top-left; Skia draws from the baseline. Shift+Enter in
+        // the editor produces multiple lines, so each one is drawn with the same line height.
+        string[] lines = annotation.Text.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
+        float lineHeight = font.Size * 1.25f;
+        for (int i = 0; i < lines.Length; i++)
+        {
+            canvas.DrawText(lines[i], anchor.X, anchor.Y + font.Size + i * lineHeight, font, paint);
+        }
     }
 
     /// <summary>

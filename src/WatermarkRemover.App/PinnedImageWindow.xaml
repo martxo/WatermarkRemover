@@ -1,0 +1,22 @@
+<Window x:Class="WatermarkRemover.App.PinnedImageWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="贴图"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        Topmost="True"
+        ShowInTaskbar="False"
+        ResizeMode="NoResize"
+        WindowStartupLocation="Manual"
+        UseLayoutRounding="True"
+        KeyDown="OnWindowKeyDown"
+        MouseWheel="OnWindowMouseWheel">
+    <Border x:Name="Frame" Background="White"
+            BorderBrush="#FF3B82F6" BorderThickness="1" CornerRadius="2"
+            MouseLeftButtonDown="OnFrameMouseDown"
+            MouseRightButtonUp="OnFrameRightClick">
+        <Image x:Name="Preview" Stretch="Uniform"
+               RenderOptions.BitmapScalingMode="HighQuality"/>
+    </Border>
+</Window>

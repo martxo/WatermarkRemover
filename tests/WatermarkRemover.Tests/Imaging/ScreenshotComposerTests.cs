@@ -72,6 +72,42 @@ public sealed class ScreenshotComposerTests
     }
 
     [Fact]
+    public void Multi_line_text_paints_every_line()
+    {
+        using var desktop = Solid(240, 120, SKColors.White);
+        var text = new[]
+        {
+            new ScreenshotAnnotation
+            {
+                Kind = ScreenshotAnnotationKind.Text,
+                Points = new[] { new ScreenshotPointF(10, 5) },
+                Text = "AA\nBB",
+                FontSize = 24,
+                ColorArgb = 0xFFE53935,
+            },
+        };
+
+        using var output = ScreenshotComposer.Compose(desktop, new SKRectI(0, 0, 240, 120), text);
+
+        Assert.True(HasMarkInBand(output, 20, 42), "first line was not painted");
+        Assert.True(HasMarkInBand(output, 50, 78), "second line was not painted");
+    }
+
+    private static bool HasMarkInBand(SKBitmap bitmap, int top, int bottom)
+    {
+        for (int y = top; y <= bottom; y++)
+        {
+            for (int x = 5; x < 200; x++)
+            {
+                SKColor pixel = bitmap.GetPixel(x, y);
+                if (pixel.Red > 150 && pixel.Green < 150) return true;
+            }
+        }
+
+        return false;
+    }
+
+    [Fact]
     public void Arrow_line_contains_the_mark_colour()
     {
         using var desktop = Solid(120, 120, SKColors.White);

@@ -16,6 +16,14 @@ public sealed class ScreenshotHotkeyTests
         Assert.Equal(ScreenshotHotkey.Default, parsed);
     }
 
+    [Fact]
+    public void The_shelf_shortcut_is_a_fixed_ctrl_alt_t()
+    {
+        Assert.Equal("Ctrl+Alt+T", ScreenshotHotkey.ShelfDefault.ToString());
+        Assert.True(ScreenshotHotkey.TryParse("Ctrl+Alt+T", out ScreenshotHotkey parsed));
+        Assert.Equal(ScreenshotHotkey.ShelfDefault, parsed);
+    }
+
     [Theory]
     [InlineData("ctrl+alt+a")]
     [InlineData("CONTROL+ALT+A")]
