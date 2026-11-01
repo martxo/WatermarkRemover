@@ -1200,8 +1200,8 @@
                                    FontSize="12" VerticalAlignment="Center"
                                    Foreground="{StaticResource TextPrimaryBrush}"/>
                         <Button Grid.Column="1" Content="停止" Style="{StaticResource SmallButton}"
-                                Padding="14,3" Command="{Binding StopBatchCommand}"
-                                ToolTip="已开始处理的那一个文件会跑完，尚未开始的会标记为已停止并保留为未完成任务"/>
+                                Padding="14,3" Command="{Binding StopCurrentCommand}"
+                                ToolTip="扫描会立即停止（已扫页面保留为部分 PDF）；批处理中已开始的文件会跑完，未开始的标记为已停止并保留为未完成任务"/>
                     </Grid>
                 </Border>
 

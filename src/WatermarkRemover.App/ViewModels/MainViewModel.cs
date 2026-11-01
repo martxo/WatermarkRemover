@@ -141,8 +141,9 @@ public sealed partial class MainViewModel : ObservableObject
             p => p is FileJobViewModel);
         UploadVisibleCommand = new RelayCommand(() => _ = UploadVisibleAsync(), () => CanUploadBatch);
 
-        // 任务中心：停止当前批次，以及重启后继续上次没跑完的文件。
+        // 任务中心：一个停止按钮同时管扫描和批处理；继续处理会区分"本地处理"和"上传"。
         StopBatchCommand = new RelayCommand(StopBatch, () => IsBusy && !_isStopping);
+        StopCurrentCommand = new RelayCommand(StopCurrent, () => IsBusy);
         ResumePendingCommand = new RelayCommand(
             () => _ = ResumePendingAsync(), () => HasPendingTasks && IsIdle);
         DiscardPendingCommand = new RelayCommand(DiscardPending, () => HasPendingTasks);
@@ -179,6 +180,9 @@ public sealed partial class MainViewModel : ObservableObject
 
     /// <summary>Stops the running batch: files that have not started are marked 已停止.</summary>
     public RelayCommand StopBatchCommand { get; }
+
+    /// <summary>One stop button for every long task: a running scan or a running batch.</summary>
+    public RelayCommand StopCurrentCommand { get; }
 
     /// <summary>Re-queues the files an interrupted run left behind.</summary>
     public RelayCommand ResumePendingCommand { get; }
@@ -321,6 +325,7 @@ public sealed partial class MainViewModel : ObservableObject
                 Board.IsBusy = value;
                 ScanCommand.RaiseCanExecuteChanged();
                 StopBatchCommand?.RaiseCanExecuteChanged();
+                StopCurrentCommand?.RaiseCanExecuteChanged();
                 ResumePendingCommand?.RaiseCanExecuteChanged();
                 Netdisk.RefreshCommandState();
             }

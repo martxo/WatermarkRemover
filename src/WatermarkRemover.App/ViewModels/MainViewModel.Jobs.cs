@@ -189,6 +189,7 @@ public sealed partial class MainViewModel
         }
 
         job.SetUploadState(UploadState.Uploading);
+        RecordUploadPending(new[] { job.OutputPath! });
         var failures = await Netdisk.UploadFilesAsync(new[] { job.OutputPath });
         ApplyUploadResult(new[] { job }, failures);
     }
@@ -206,6 +207,7 @@ public sealed partial class MainViewModel
         if (targets.Count == 0) return;
 
         foreach (var job in targets) job.SetUploadState(UploadState.Uploading);
+        RecordUploadPending(targets.Select(j => j.OutputPath!).ToList());
 
         IReadOnlyList<(string Path, string Error)> failures;
         try
@@ -245,6 +247,7 @@ public sealed partial class MainViewModel
             {
                 job.SetUploadState(UploadState.Uploaded, $"已上传到「{Netdisk.PrimaryAccountName}」");
                 AppLog.Info($"网盘上传成功：{job.OutputPath}");
+                if (job.OutputPath is { } uploaded) ClearPending(uploaded);
             }
         }
 
@@ -274,31 +277,46 @@ public sealed partial class MainViewModel
     }
 
     /// <summary>Snapshots the batch into the pending file before the first job starts.</summary>
-    private void RecordPending(IEnumerable<FileJobViewModel> jobs)
+    private void RecordPending(IEnumerable<FileJobViewModel> jobs, string kind = "process")
     {
         var batch = jobs.ToList();
         var paths = batch.Select(j => j.InputPath).ToHashSet(StringComparer.OrdinalIgnoreCase);
         _pending.RemoveAll(e => paths.Contains(e.InputPath));
-        _pending.AddRange(batch.Select(j =>
-            new PendingTaskEntry(j.OwnerFeatureId ?? SelectedFeature.Id, j.InputPath, DateTime.Now)));
+        _pending.AddRange(batch.Select(j => new PendingTaskEntry(
+            j.OwnerFeatureId ?? SelectedFeature.Id, j.InputPath, DateTime.Now) { Kind = kind }));
+
+        _pendingJournal?.Save(_pending);
+        RaisePendingChanged();
+    }
+
+    /// <summary>Marks the files of an upload batch, so an interrupted upload can be continued.</summary>
+    private void RecordUploadPending(IEnumerable<string> paths)
+    {
+        var list = paths.Where(p => !string.IsNullOrWhiteSpace(p)).ToList();
+        if (list.Count == 0) return;
+
+        var set = list.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        _pending.RemoveAll(e => set.Contains(e.InputPath));
+        _pending.AddRange(list.Select(p => new PendingTaskEntry(
+            SelectedFeature.Id, p, DateTime.Now) { Kind = "upload" }));
 
         _pendingJournal?.Save(_pending);
         RaisePendingChanged();
     }
 
     /// <summary>One file finished (or was stopped): it no longer belongs to the unfinished set.</summary>
-    private void ClearPending(FileJobViewModel job)
+    private void ClearPending(string path)
     {
         // Called from the queue's worker threads: the list and the banner are UI state.
         var dispatcher = Application.Current?.Dispatcher;
         if (dispatcher is not null && !dispatcher.CheckAccess())
         {
-            dispatcher.BeginInvoke(() => ClearPending(job));
+            dispatcher.BeginInvoke(() => ClearPending(path));
             return;
         }
 
         if (_pending.RemoveAll(e => string.Equals(
-                e.InputPath, job.InputPath, StringComparison.OrdinalIgnoreCase)) == 0)
+                e.InputPath, path, StringComparison.OrdinalIgnoreCase)) == 0)
         {
             return;
         }
@@ -318,6 +336,18 @@ public sealed partial class MainViewModel
         _batchCancellation.Cancel();
     }
 
+    /// <summary>The single stop button: a running scan first, then a running batch.</summary>
+    private void StopCurrent()
+    {
+        if (IsScanning)
+        {
+            _scanLoopStopped = true;
+            _scan.CancelScan();
+        }
+
+        if (_batchCancellation is not null) StopBatch();
+    }
+
     /// <summary>Drops the interrupted-run record without touching the files.</summary>
     private void DiscardPending()
     {
@@ -334,7 +364,9 @@ public sealed partial class MainViewModel
     {
         if (IsBusy || _pending.Count == 0) return;
 
-        foreach (var group in _pending.GroupBy(e => e.SectionId).ToList())
+        await ResumeUploadsAsync(_pending.Where(e => e.Kind == "upload").ToList()).ConfigureAwait(true);
+
+        foreach (var group in _pending.Where(e => e.Kind != "upload").GroupBy(e => e.SectionId).ToList())
         {
             IFeature? feature = _composition.Registry.Features.FirstOrDefault(f => f.Id == group.Key);
             if (feature is null) continue;
@@ -361,6 +393,43 @@ public sealed partial class MainViewModel
         _pending.RemoveAll(e => !File.Exists(e.InputPath));
         _pendingJournal?.Save(_pending);
         RaisePendingChanged();
+    }
+
+    /// <summary>Continues the uploads an interrupted run left behind; failures stay pending.</summary>
+    private async Task ResumeUploadsAsync(IReadOnlyList<PendingTaskEntry> entries)
+    {
+        var paths = entries.Select(e => e.InputPath).Where(File.Exists).ToList();
+        if (paths.Count == 0) return;
+
+        if (!Netdisk.HasAccounts)
+        {
+            _dialogs.Warn(
+                "上次还有文件没有上传完成，但当前没有配置网盘账号。请在「设置 → 网盘设置」添加账号后再继续。",
+                "继续上传");
+            return;
+        }
+
+        IsBusy = true;
+        try
+        {
+            var failures = await Netdisk.UploadFilesAsync(paths).ConfigureAwait(true);
+            foreach (string path in paths)
+            {
+                bool failed = failures.Any(f =>
+                    string.Equals(f.Path, path, StringComparison.OrdinalIgnoreCase));
+                if (!failed) ClearPending(path);
+            }
+
+            AppLog.Info($"任务中心：继续上传 {paths.Count} 个文件，失败 {failures.Count} 个");
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("任务中心：继续上传失败", ex);
+        }
+        finally
+        {
+            IsBusy = false;
+        }
     }
 
     private void RaisePendingChanged()

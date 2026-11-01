@@ -242,7 +242,7 @@ public sealed partial class MainViewModel
             await _queue.RunAsync(jobs, feature, context, maxConcurrency, job =>
             {
                 Board.MarkCompleted(job);
-                ClearPending(job);
+                ClearPending(job.InputPath);
                 if (Interlocked.Decrement(ref pendingRows) == 0) _preview.OpenWhenFinished(job);
             }, cancellation).ConfigureAwait(true);
 
