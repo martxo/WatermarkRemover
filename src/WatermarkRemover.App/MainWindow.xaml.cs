@@ -85,6 +85,7 @@ public partial class MainWindow : Window
         _viewModel.ScreenshotShelfRequested += (_, _) => ToggleScreenshotShelf();
         _viewModel.ScreenshotPinRequested += (_, path) => PinnedImageWindow.ShowFor(path);
         _viewModel.ScreenshotOcrRequested += (_, path) => _ = ShowScreenshotOcrAsync(path);
+        _viewModel.ScreenshotViewRequested += (_, path) => ImageViewerWindow.ShowFor(path);
         _dragWatchdog = new System.Windows.Threading.DispatcherTimer
         {
             Interval = TimeSpan.FromMilliseconds(180),

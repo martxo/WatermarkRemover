@@ -101,6 +101,10 @@ public sealed class FileJobViewModel : ObservableObject
     /// <summary>Raised when the user asks to OCR this screenshot; the host runs the engine.</summary>
     public event EventHandler? OcrRequested;
 
+    /// <summary>Raised when the user wants to view this image in the built-in viewer; the host
+    /// owns the window. Without a subscriber the command falls back to the shell handler.</summary>
+    public event EventHandler? ViewRequested;
+
     /// <summary>Raised when the user asks to run this failed scan again; the host owns the scanner.</summary>
     public event EventHandler? RetryRequested;
 
@@ -280,6 +284,16 @@ public sealed class FileJobViewModel : ObservableObject
         if (OutputPath is not { } path || !File.Exists(path))
         {
             ShowTransientNameNote("图片已不存在，无法打开");
+            return;
+        }
+
+        // The built-in viewer (zoom / pan / rotate / folder walk) is the primary path; the shell
+        // handler stays as the fallback for hosts that never wire ViewRequested (or for formats
+        // the viewer cannot decode, where the OS may still have a codec installed).
+        EventHandler? viewer = ViewRequested;
+        if (viewer is not null)
+        {
+            viewer(this, EventArgs.Empty);
             return;
         }
 

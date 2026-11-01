@@ -59,6 +59,7 @@ public sealed partial class MainViewModel
         job.ContinueScanRequested += OnJobContinueScanRequested;
         job.PinRequested += (_, _) => OnScreenshotPinRequested(job);
         job.OcrRequested += (_, _) => OnScreenshotOcrRequested(job);
+        job.ViewRequested += (_, _) => OnScreenshotViewRequested(job);
         job.PropertyChanged += OnJobPropertyChanged;
     }
 

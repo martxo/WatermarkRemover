@@ -55,6 +55,9 @@ public sealed partial class MainViewModel
     /// <summary>Runs OCR on one screenshot; the shell owns the engine and result window.</summary>
     public event EventHandler<string>? ScreenshotOcrRequested;
 
+    /// <summary>Opens one image in the built-in viewer; payload is the file path.</summary>
+    public event EventHandler<string>? ScreenshotViewRequested;
+
     /// <summary>A new screenshot was saved and should hang on the clothesline.</summary>
     public event EventHandler<FileJobViewModel>? ScreenshotSaved;
 
@@ -183,6 +186,12 @@ public sealed partial class MainViewModel
     {
         if (job.OutputPath is { } path && System.IO.File.Exists(path))
             ScreenshotOcrRequested?.Invoke(this, path);
+    }
+
+    private void OnScreenshotViewRequested(FileJobViewModel job)
+    {
+        if (job.OutputPath is { } path && System.IO.File.Exists(path))
+            ScreenshotViewRequested?.Invoke(this, path);
     }
 
     private void AddScreenshotJob(string path, ScreenshotCaptureResult result)
