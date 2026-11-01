@@ -44,6 +44,28 @@ public sealed partial class MainViewModel
 
     public RelayCommand OpenScreenshotFolderCommand { get; }
 
+    /// <summary>Opens the Tendedero-style recent-screenshot shelf (host supplies the window).</summary>
+    public RelayCommand ShowScreenshotShelfCommand { get; }
+
+    public event EventHandler? ScreenshotShelfRequested;
+
+    /// <summary>Pins one screenshot above other windows (PixPin-style); payload is the file path.</summary>
+    public event EventHandler<string>? ScreenshotPinRequested;
+
+    /// <summary>Runs OCR on one screenshot; the shell owns the engine and result window.</summary>
+    public event EventHandler<string>? ScreenshotOcrRequested;
+
+    /// <summary>Newest screenshot records that actually have a file and a thumbnail.</summary>
+    public IReadOnlyList<FileJobViewModel> ScreenshotShelfItems => Board.Jobs
+        .Where(j => j.OwnerFeatureId == "screenshot.page" &&
+                    j.State == JobState.Succeeded &&
+                    j.CanDragScreenshot)
+        .OrderByDescending(j => j.ProcessedAt)
+        .Take(15)
+        .ToList();
+
+    public void ShowScreenshotShelf() => ScreenshotShelfRequested?.Invoke(this, EventArgs.Empty);
+
     /// <summary>Canonical gesture text (saved value, or the default when it is malformed).</summary>
     public string ScreenshotHotkeyText => ScreenshotHotkey.ParseOrDefault(Settings.ScreenshotHotkey).ToString();
 
@@ -148,6 +170,18 @@ public sealed partial class MainViewModel
 
     /// <summary>A saved screenshot joins the page's history like any other finished file, so
     /// rename / open-folder / delete / upload all work without a second code path.</summary>
+    private void OnScreenshotPinRequested(FileJobViewModel job)
+    {
+        if (job.OutputPath is { } path && System.IO.File.Exists(path))
+            ScreenshotPinRequested?.Invoke(this, path);
+    }
+
+    private void OnScreenshotOcrRequested(FileJobViewModel job)
+    {
+        if (job.OutputPath is { } path && System.IO.File.Exists(path))
+            ScreenshotOcrRequested?.Invoke(this, path);
+    }
+
     private void AddScreenshotJob(string path, ScreenshotCaptureResult result)
     {
         var job = new FileJobViewModel(path, Settings.QuickSuffixes)
@@ -164,7 +198,7 @@ public sealed partial class MainViewModel
         Board.MarkCompleted(job);
     }
 
-    private void OpenScreenshotFolder()
+    internal void OpenScreenshotFolder()
     {
         string directory = ScreenshotNaming.ResolveDirectory(Settings);
         try

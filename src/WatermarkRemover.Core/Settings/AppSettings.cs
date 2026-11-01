@@ -110,6 +110,18 @@ public sealed class AppSettings
     /// <summary>Where screenshots are saved (截图设置). Empty = 图片\Screenshots.</summary>
     public string ScreenshotOutputDirectory { get; set; } = string.Empty;
 
+    /// <summary>Copy every finished screenshot to the clipboard (截图设置).</summary>
+    public bool ScreenshotAutoCopy { get; set; } = true;
+
+    /// <summary>Save every finished screenshot as a PNG file (截图设置).</summary>
+    public bool ScreenshotAutoSave { get; set; } = true;
+
+    /// <summary>
+    /// Closing the main window hides it to the tray instead of exiting, so the global screenshot
+    /// shortcut and the shelf stay available. The tray menu's 退出 is the explicit exit path.
+    /// </summary>
+    public bool MinimizeToTrayOnClose { get; set; } = true;
+
     /// <summary>Configured 网盘 accounts (网盘设置); secret values carry the <c>dpapi:</c> prefix
     /// at rest — see <see cref="NetdiskAccountPersistence"/>.</summary>
     public List<PersistedNetdiskAccount> NetdiskAccounts { get; set; } = new();
@@ -147,6 +159,9 @@ public sealed class AppSettings
         TransferOutputDirectory = TransferOutputDirectory,
         ScreenshotHotkey = ScreenshotHotkey,
         ScreenshotOutputDirectory = ScreenshotOutputDirectory,
+        ScreenshotAutoCopy = ScreenshotAutoCopy,
+        ScreenshotAutoSave = ScreenshotAutoSave,
+        MinimizeToTrayOnClose = MinimizeToTrayOnClose,
         NetdiskAccounts = NetdiskAccounts.ToList(),
         NetdiskUploadDrive = NetdiskUploadDrive,
         NetdiskUploadDirectory = NetdiskUploadDirectory,

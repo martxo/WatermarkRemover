@@ -706,6 +706,9 @@ public sealed class SettingsViewModel : ObservableObject
         _target.TransferOutputDirectory = Settings.TransferOutputDirectory?.Trim() ?? string.Empty;
         _target.ScreenshotHotkey = Settings.ScreenshotHotkey;
         _target.ScreenshotOutputDirectory = Settings.ScreenshotOutputDirectory?.Trim() ?? string.Empty;
+        _target.ScreenshotAutoCopy = Settings.ScreenshotAutoCopy;
+        _target.ScreenshotAutoSave = Settings.ScreenshotAutoSave;
+        _target.MinimizeToTrayOnClose = Settings.MinimizeToTrayOnClose;
         _target.NetdiskUploadDrive = Settings.NetdiskUploadDrive?.Trim() ?? string.Empty;
         _target.NetdiskUploadDirectory = Settings.NetdiskUploadDirectory?.Trim() ?? string.Empty;
     }

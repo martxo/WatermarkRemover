@@ -89,6 +89,12 @@ public partial class App : Application
         DispatcherUnhandledException += OnDispatcherUnhandledException;
         AppDomain.CurrentDomain.UnhandledException += OnDomainUnhandledException;
         TaskScheduler.UnobservedTaskException += OnUnobservedTaskException;
+
+        // Closing to tray must never swallow a Windows shutdown/logoff.
+        SessionEnding += (_, _) =>
+        {
+            if (MainWindow is MainWindow window) window.AllowExitOnSystemShutdown();
+        };
     }
 
     protected override void OnExit(ExitEventArgs e)

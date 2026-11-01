@@ -12,7 +12,6 @@ namespace WatermarkRemover.App.Services;
 public sealed class GlobalHotkeyService : IDisposable
 {
     private const int WmHotkey = 0x0312;
-    private const int HotkeyId = 0x5348; // "SH"
     /// <summary>Id used only for the settings-page conflict probe; never left registered.</summary>
     private const int ProbeHotkeyId = 0x5349;
     private const int ErrorHotkeyAlreadyRegistered = 1409;
@@ -23,13 +22,16 @@ public sealed class GlobalHotkeyService : IDisposable
     private const uint ModWin = 0x0008;
 
     private readonly IntPtr _hwnd;
+    private readonly int _id;
     private readonly Action _onPressed;
     private readonly HwndSource? _source;
     private bool _registered;
 
-    public GlobalHotkeyService(IntPtr hwnd, Action onPressed)
+    /// <param name="id">WM_HOTKEY id; two services on one window must use different ids.</param>
+    public GlobalHotkeyService(IntPtr hwnd, int id, Action onPressed)
     {
         _hwnd = hwnd;
+        _id = id;
         _onPressed = onPressed ?? throw new ArgumentNullException(nameof(onPressed));
         _source = HwndSource.FromHwnd(hwnd);
         _source?.AddHook(WndProc);
@@ -43,7 +45,7 @@ public sealed class GlobalHotkeyService : IDisposable
 
         if (!TryMap(hotkey, out uint modifiers, out uint virtualKey, out error)) return false;
 
-        _registered = RegisterHotKey(_hwnd, HotkeyId, modifiers, virtualKey);
+        _registered = RegisterHotKey(_hwnd, _id, modifiers, virtualKey);
         if (!_registered)
         {
             error = DescribeFailure(Marshal.GetLastWin32Error());
@@ -103,13 +105,13 @@ public sealed class GlobalHotkeyService : IDisposable
     private void Unregister()
     {
         if (!_registered) return;
-        UnregisterHotKey(_hwnd, HotkeyId);
+        UnregisterHotKey(_hwnd, _id);
         _registered = false;
     }
 
     private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
-        if (msg != WmHotkey || wParam.ToInt32() != HotkeyId) return IntPtr.Zero;
+        if (msg != WmHotkey || wParam.ToInt32() != _id) return IntPtr.Zero;
 
         handled = true;
         try

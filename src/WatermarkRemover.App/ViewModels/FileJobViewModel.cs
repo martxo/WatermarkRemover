@@ -89,7 +89,17 @@ public sealed class FileJobViewModel : ObservableObject
             _ => ContinueScanRequested?.Invoke(this, EventArgs.Empty), _ => ShowContinueScan);
         CopyImageCommand = new RelayCommand(_ => CopyImage(), _ => ShowScreenshotActions);
         OpenImageCommand = new RelayCommand(_ => OpenImage(), _ => ShowScreenshotActions);
+        PinImageCommand = new RelayCommand(
+            _ => PinRequested?.Invoke(this, EventArgs.Empty), _ => ShowScreenshotActions);
+        RecognizeTextCommand = new RelayCommand(
+            _ => OcrRequested?.Invoke(this, EventArgs.Empty), _ => ShowScreenshotActions);
     }
+
+    /// <summary>Raised when the user wants this screenshot pinned on top of the screen.</summary>
+    public event EventHandler? PinRequested;
+
+    /// <summary>Raised when the user asks to OCR this screenshot; the host runs the engine.</summary>
+    public event EventHandler? OcrRequested;
 
     /// <summary>Raised when the user asks to run this failed scan again; the host owns the scanner.</summary>
     public event EventHandler? RetryRequested;
@@ -201,6 +211,10 @@ public sealed class FileJobViewModel : ObservableObject
     public RelayCommand CopyImageCommand { get; }
 
     public RelayCommand OpenImageCommand { get; }
+
+    public RelayCommand PinImageCommand { get; }
+
+    public RelayCommand RecognizeTextCommand { get; }
 
     private static bool IsImagePath(string? path) => path is not null &&
         Path.GetExtension(path) is ".png" or ".jpg" or ".jpeg" or ".bmp" or ".webp" or ".gif";
@@ -494,6 +508,8 @@ public sealed class FileJobViewModel : ObservableObject
                 OnPropertyChanged(nameof(HasThumbnail));
                 CopyImageCommand.RaiseCanExecuteChanged();
                 OpenImageCommand.RaiseCanExecuteChanged();
+                PinImageCommand.RaiseCanExecuteChanged();
+                RecognizeTextCommand.RaiseCanExecuteChanged();
             }
         }
     }

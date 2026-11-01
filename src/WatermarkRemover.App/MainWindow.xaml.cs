@@ -29,9 +29,15 @@ public partial class MainWindow : Window
 
     /// <summary>System-wide shortcut that opens the screenshot overlay while the app is in the background.</summary>
     private GlobalHotkeyService? _hotkeys;
+    private GlobalHotkeyService? _shelfHotkeys;
 
     /// <summary>The gesture currently registered (null when none); restored if a new one fails.</summary>
     private ScreenshotHotkey? _activeHotkey;
+
+    private ScreenshotShelfWindow? _shelf;
+    private TrayIconService? _tray;
+    private bool _forceExit;
+    private WindowState _hiddenWindowState = WindowState.Normal;
 
     // Thumbnail gestures of a screenshot row: click copies, dragging hands the file to the target.
     private FileJobViewModel? _thumbnailDragJob;
@@ -68,6 +74,9 @@ public partial class MainWindow : Window
                 : _hotkeys.CanRegister(hotkey, out string? error) ? null : error;
         };
         _viewModel.ScreenshotHotkeyChanged += (_, _) => RegisterScreenshotHotkey(notifyFailure: true);
+        _viewModel.ScreenshotShelfRequested += (_, _) => ToggleScreenshotShelf();
+        _viewModel.ScreenshotPinRequested += (_, path) => PinnedImageWindow.ShowFor(path);
+        _viewModel.ScreenshotOcrRequested += (_, path) => _ = ShowScreenshotOcrAsync(path);
         _dragWatchdog = new System.Windows.Threading.DispatcherTimer
         {
             Interval = TimeSpan.FromMilliseconds(180),
@@ -159,8 +168,72 @@ public partial class MainWindow : Window
         _ = DwmSetWindowAttribute(hwnd, DwmwaWindowCornerPreference, ref preference, sizeof(int));
 
         // The message loop exists now, so WM_HOTKEY has somewhere to land.
-        _hotkeys = new GlobalHotkeyService(hwnd, OnScreenshotHotkey);
+        _hotkeys = new GlobalHotkeyService(hwnd, 0x5348, OnScreenshotHotkey);
         RegisterScreenshotHotkey();
+
+        _shelfHotkeys = new GlobalHotkeyService(hwnd, 0x534A, ToggleScreenshotShelf);
+        if (!_shelfHotkeys.Register(ScreenshotHotkey.ShelfDefault, out string? shelfError))
+            AppLog.Warn($"注册晾衣绳快捷键 {ScreenshotHotkey.ShelfDefault} 失败：{shelfError}");
+
+        _tray = new TrayIconService(hwnd, ShowFromTray, () => _ = _viewModel.CaptureScreenshotAsync(),
+            ToggleScreenshotShelf, ExitFromTray);
+    }
+
+    /// <summary>Restores the main window after it was hidden to the tray.</summary>
+    private void ShowFromTray()
+    {
+        Show();
+        WindowState = _hiddenWindowState == WindowState.Minimized
+            ? WindowState.Normal
+            : _hiddenWindowState;
+        Activate();
+        Topmost = true;
+        Topmost = false;
+        Focus();
+    }
+
+    /// <summary>Tray menu exit: the only path that actually ends the process.</summary>
+    private void ExitFromTray()
+    {
+        _forceExit = true;
+        Close();
+    }
+
+    /// <summary>Windows shutdown/logoff must be allowed through, not turned into a tray hide.</summary>
+    internal void AllowExitOnSystemShutdown() => _forceExit = true;
+
+    /// <summary>Runs the app-wide OCR engine on one screenshot and shows a copyable result.</summary>
+    private async Task ShowScreenshotOcrAsync(string path)
+    {
+        try
+        {
+            byte[] bytes = await File.ReadAllBytesAsync(path).ConfigureAwait(true);
+            var engine = AppComposition.Shared.OcrEngine;
+            IReadOnlyList<string> lines = await engine.RecognizeAsync(bytes).ConfigureAwait(true);
+            string text = string.Join(Environment.NewLine, lines);
+            new ScreenshotOcrWindow(text, engine.DisplayName).Show();
+            AppLog.Info($"截图 OCR 完成：{path}，识别 {lines.Count} 行");
+        }
+        catch (Exception ex)
+        {
+            AppLog.Warn($"截图 OCR 失败：{path}（{ex.Message}）");
+            _dialogs.Warn($"文字识别失败：{ex.Message}", "截图文字识别");
+        }
+    }
+
+    /// <summary>Shows or hides the recent-screenshot shelf (hotkey and page button share it).</summary>
+    private void ToggleScreenshotShelf()
+    {
+        if (_shelf is { IsVisible: true })
+        {
+            _shelf.Close();
+            return;
+        }
+
+        _shelf = new ScreenshotShelfWindow(
+            _viewModel.ScreenshotShelfItems, _viewModel.OpenScreenshotFolder);
+        _shelf.Closed += (_, _) => _shelf = null;
+        _shelf.Show();
     }
 
     /// <summary>
@@ -221,6 +294,21 @@ public partial class MainWindow : Window
     /// </summary>
     protected override void OnClosing(CancelEventArgs e)
     {
+        // Normal close hides to the tray so the global shortcuts and the shelf keep working.
+        // The tray's 退出 (and a Windows shutdown) take the real exit path below.
+        // Only hide when a real tray icon exists: hiding without one would leave the app
+        // running invisibly with no way to bring it back.
+        if (!_forceExit && !Environment.HasShutdownStarted &&
+            _viewModel.Settings.MinimizeToTrayOnClose && _tray is { IsAdded: true })
+        {
+            _hiddenWindowState = WindowState;
+            Hide();
+            _tray?.ShowBackgroundHint();
+            AppLog.Info("主窗口关闭请求已转为托盘后台运行");
+            e.Cancel = true;
+            return;
+        }
+
         if (!_viewModel.ConfirmExit())
         {
             e.Cancel = true;
@@ -238,7 +326,13 @@ public partial class MainWindow : Window
     {
         _hotkeys?.Dispose();
         _hotkeys = null;
+        _shelfHotkeys?.Dispose();
+        _shelfHotkeys = null;
         _activeHotkey = null;
+        _shelf?.Close();
+        _shelf = null;
+        _tray?.Dispose();
+        _tray = null;
         _viewModel.Shutdown();
         base.OnClosed(e);
     }

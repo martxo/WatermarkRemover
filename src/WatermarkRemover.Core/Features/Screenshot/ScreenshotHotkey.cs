@@ -12,6 +12,9 @@ public readonly record struct ScreenshotHotkey(bool Control, bool Alt, bool Shif
     /// <summary>The gesture every new installation starts with (the Snipaste/PixPin habit).</summary>
     public static readonly ScreenshotHotkey Default = new(true, true, false, false, "A");
 
+    /// <summary>Fixed gesture that opens the recent-screenshot shelf (Tendedero's Ctrl+Option+T).</summary>
+    public static readonly ScreenshotHotkey ShelfDefault = new(true, true, false, false, "T");
+
     public bool HasModifier => Control || Alt || Shift || Windows;
 
     /// <summary>Canonical, stable text form saved to settings and shown in the UI.</summary>

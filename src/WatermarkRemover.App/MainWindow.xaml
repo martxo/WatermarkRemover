@@ -787,10 +787,15 @@
                                    Foreground="{StaticResource TextPrimaryBrush}"
                                    ToolTip="在「设置 → 截图设置」中修改快捷键"/>
                     </Border>
+                    <Button Content="截图晾衣绳"
+                            Style="{StaticResource SmallButton}"
+                            Command="{Binding ShowScreenshotShelfCommand}"
+                            Margin="12,0,0,0" VerticalAlignment="Center"
+                            ToolTip="Ctrl+Alt+T：顶部滑出最近截图，单击复制、拖出使用、双击打开"/>
                     <Button Content="打开截图文件夹"
                             Style="{StaticResource SmallButton}"
                             Command="{Binding OpenScreenshotFolderCommand}"
-                            Margin="12,0,0,0" VerticalAlignment="Center"/>
+                            Margin="8,0,0,0" VerticalAlignment="Center"/>
                 </StackPanel>
                 <TextBlock Text="{Binding ScreenshotStatusText}"
                            FontSize="11"
@@ -802,7 +807,7 @@
                            Foreground="{StaticResource TextSecondaryBrush}"
                            TextTrimming="CharacterEllipsis"
                            Margin="0,3,0,0"/>
-                <TextBlock Text="最近的截图在下方列表里：单击缩略图复制图片，拖到其他程序或文件夹即可直接使用；也可点「打开图片」查看原图。"
+                <TextBlock Text="Ctrl+Alt+T 或点「截图晾衣绳」可呼出最近截图：单击复制、拖到其他程序、双击打开；记录里的「贴图」会把截图置顶显示。"
                            FontSize="11"
                            Foreground="{StaticResource TextSecondaryBrush}"
                            TextWrapping="Wrap"
@@ -1460,6 +1465,20 @@
                                                 Visibility="{Binding ShowScreenshotActions, Converter={StaticResource BoolToVis}}"
                                                 Command="{Binding CopyImageCommand}"
                                                 ToolTip="把这张截图复制到剪贴板"/>
+                                        <Button Style="{StaticResource SmallButton}"
+                                                Content="贴图"
+                                                Padding="10,3"
+                                                Margin="0,0,8,0"
+                                                Visibility="{Binding ShowScreenshotActions, Converter={StaticResource BoolToVis}}"
+                                                Command="{Binding PinImageCommand}"
+                                                ToolTip="把这张截图置顶显示，可拖动/滚轮缩放"/>
+                                        <Button Style="{StaticResource SmallButton}"
+                                                Content="识别文字"
+                                                Padding="10,3"
+                                                Margin="0,0,8,0"
+                                                Visibility="{Binding ShowScreenshotActions, Converter={StaticResource BoolToVis}}"
+                                                Command="{Binding RecognizeTextCommand}"
+                                                ToolTip="用 OCR 提取截图中的文字"/>
                                         <Button Style="{StaticResource SmallButton}"
                                                 Content="打开图片"
                                                 Padding="10,3"

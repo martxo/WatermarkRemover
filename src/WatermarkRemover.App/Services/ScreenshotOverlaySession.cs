@@ -58,10 +58,14 @@ public sealed class ScreenshotOverlaySession
     private ScreenshotTool _tool;
     private uint _colorArgb = ScreenshotAnnotation.DefaultColorArgb;
     private float _lineWidthDip = 2.5f;
+    private float _textFontSizeDip = 16f;
+    private ScreenshotRect? _hoverWindow;
+    private Point _hoverProbePoint = new(double.NaN, double.NaN);
     private Point? _textAnchor;
     private MonitorInfo? _toolbarMonitor;
     private SKBitmap? _preview;
     private int _previewVersion;
+    private LongScreenshotWindow? _longWindow;
     private bool _closed;
 
     private ScreenshotOverlaySession(AppSettings settings, DesktopCapture desktop)
@@ -219,8 +223,14 @@ public sealed class ScreenshotOverlaySession
     /// <summary>Stroke width in device-independent pixels; converted to physical per monitor.</summary>
     public float LineWidth => _lineWidthDip;
 
+    /// <summary>Text annotation font size in device-independent pixels (12 / 16 / 20).</summary>
+    public float TextFontSize => _textFontSizeDip;
+
     /// <summary>Whether an undone annotation can be restored (Ctrl+Y).</summary>
     public bool CanRedo => _redo.Count > 0;
+
+    /// <summary>Window under the pointer before a selection exists (PixPin-style hover highlight).</summary>
+    public ScreenshotRect? HoverWindow => _hoverWindow;
 
     /// <summary>The in-progress annotation, in global physical pixels (overlay-only preview).</summary>
     public ScreenshotAnnotation? Draft => _draft;
@@ -267,6 +277,9 @@ public sealed class ScreenshotOverlaySession
 
         if (_selection is not ScreenshotRect existing || existing.IsEmpty)
         {
+            // A click without a drag selects the whole window under the pointer; probing here
+            // also makes a click work when the mouse has not moved since the overlay opened.
+            UpdateHover(global);
             BeginSelection(global);
             return;
         }
@@ -322,6 +335,9 @@ public sealed class ScreenshotOverlaySession
 
     public void Move(Point global)
     {
+        if (_mode == Mode.None && (_selection is not { } current || current.IsEmpty))
+            UpdateHover(global);
+
         switch (_mode)
         {
             case Mode.Creating:
@@ -388,18 +404,32 @@ public sealed class ScreenshotOverlaySession
             {
                 _mode = Mode.None;
                 var selection = _selection?.Normalized().ClampTo(_desktop.Bounds);
-                if (selection is not { } rect ||
-                    rect.Width < ScreenshotGeometry.MinimumSelectionSide ||
-                    rect.Height < ScreenshotGeometry.MinimumSelectionSide)
+                bool tooSmall = selection is not { } candidate ||
+                    candidate.Width < ScreenshotGeometry.MinimumSelectionSide ||
+                    candidate.Height < ScreenshotGeometry.MinimumSelectionSide;
+                if (tooSmall)
                 {
-                    _selection = null;
-                    _toolbarMonitor = null;
+                    // A simple click (not a drag) adopts the window under the pointer.
+                    if (_hoverWindow is { } hover &&
+                        hover.Width >= ScreenshotGeometry.MinimumSelectionSide &&
+                        hover.Height >= ScreenshotGeometry.MinimumSelectionSide)
+                    {
+                        _selection = hover.ClampTo(_desktop.Bounds);
+                        _toolbarMonitor = MonitorAt(new Point(_selection.Value.CenterX, _selection.Value.CenterY));
+                    }
+                    else
+                    {
+                        _selection = null;
+                        _toolbarMonitor = null;
+                    }
                 }
                 else
                 {
-                    _selection = rect;
-                    _toolbarMonitor = MonitorAt(new Point(rect.CenterX, rect.CenterY));
+                    _selection = selection;
+                    _toolbarMonitor = MonitorAt(new Point(selection!.Value.CenterX, selection.Value.CenterY));
                 }
+
+                if (_selection is not null) ClearHover();
 
                 RaiseChanged();
                 break;
@@ -421,6 +451,33 @@ public sealed class ScreenshotOverlaySession
                 RaiseChanged();
                 break;
         }
+    }
+
+    /// <summary>Throttled window probe so hovering stays cheap even at 120 Hz pointer moves.</summary>
+    private void UpdateHover(Point global)
+    {
+        if (!double.IsNaN(_hoverProbePoint.X) &&
+            Math.Abs(global.X - _hoverProbePoint.X) < 3 &&
+            Math.Abs(global.Y - _hoverProbePoint.Y) < 3)
+        {
+            return;
+        }
+
+        _hoverProbePoint = global;
+        ScreenshotRect? hover = ScreenshotWindowDetector.FindAt(global.X, global.Y);
+        if (hover is { } candidate) hover = candidate.ClampTo(_desktop.Bounds);
+        if (hover == _hoverWindow) return;
+
+        _hoverWindow = hover;
+        RaiseChanged();
+    }
+
+    private void ClearHover()
+    {
+        if (_hoverWindow is null) return;
+        _hoverWindow = null;
+        _hoverProbePoint = new Point(double.NaN, double.NaN);
+        RaiseChanged();
     }
 
     private void BeginSelection(Point global)
@@ -466,6 +523,68 @@ public sealed class ScreenshotOverlaySession
         RaiseChanged();
     }
 
+    public void SetTextFontSize(float fontSizeDip)
+    {
+        if (Math.Abs(_textFontSizeDip - fontSizeDip) < 0.01f) return;
+        _textFontSizeDip = fontSizeDip;
+        RaiseChanged();
+    }
+
+    /// <summary>
+    /// Leaves normal capture mode and opens the manual long-screenshot stitcher. Annotations are
+    /// not carried into long mode: each appended frame is raw desktop content.
+    /// </summary>
+    public void StartLongCapture()
+    {
+        if (_completion.Task.IsCompleted || _longWindow is not null) return;
+        if (_selection is not { } selection || selection.IsEmpty || HasAnnotations) return;
+
+        SKBitmap first;
+        try
+        {
+            first = ScreenshotComposer.Compose(
+                _desktop.Bitmap,
+                new SKRectI(
+                    (int)Math.Round(selection.Left), (int)Math.Round(selection.Top),
+                    (int)Math.Round(selection.Right), (int)Math.Round(selection.Bottom)),
+                Array.Empty<ScreenshotAnnotation>());
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("长截图首屏处理失败", ex);
+            return;
+        }
+
+        foreach (ScreenshotOverlayWindow window in _windows)
+            window.Hide();
+
+        try
+        {
+            _longWindow = new LongScreenshotWindow(first, selection, _settings, FinishLongCapture, CancelLongCapture);
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("打开长截图面板失败", ex);
+            first.Dispose();
+            foreach (ScreenshotOverlayWindow window in _windows)
+                window.ShowForCapture();
+            return;
+        }
+
+        _longWindow.Closed += (_, _) => _longWindow = null;
+        _longWindow.Show();
+        _longWindow.Activate();
+    }
+
+    private void FinishLongCapture(ScreenshotCaptureResult result)
+    {
+        _completion.TrySetResult(result);
+        Close();
+    }
+
+    private void CancelLongCapture() => FinishLongCapture(
+        new ScreenshotCaptureResult(null, 0, 0, false, null, true));
+
     public void Undo()
     {
         if (_annotations.Count == 0) return;
@@ -510,13 +629,13 @@ public sealed class ScreenshotOverlaySession
         {
             float scale = (float)ScaleAt(point);
             var local = new ScreenshotPointF((float)(point.X - selection.Left), (float)(point.Y - selection.Top));
-            // 16 DIP matches the overlay's text box, converted to physical pixels.
+            // The toolbar's text size, converted to physical pixels for this monitor.
             _annotations.Add(new ScreenshotAnnotation
             {
                 Kind = ScreenshotAnnotationKind.Text,
                 Points = new[] { local },
                 Text = text.Trim(),
-                FontSize = Math.Max(12, 16f * scale),
+                FontSize = Math.Max(10, _textFontSizeDip * scale),
                 ColorArgb = _colorArgb,
                 Thickness = 1f,
             });
@@ -683,35 +802,44 @@ public sealed class ScreenshotOverlaySession
         string? copyError = null;
         bool copied = false;
 
-        try
+        if (settings.ScreenshotAutoSave)
         {
-            string directory = ScreenshotNaming.ResolveDirectory(settings);
-            Directory.CreateDirectory(directory);
-            string fileName = ScreenshotNaming.EnsureUnique(
-                directory, ScreenshotNaming.BuildFileName(DateTime.Now));
-            savedPath = Path.Combine(directory, fileName);
+            try
+            {
+                string directory = ScreenshotNaming.ResolveDirectory(settings);
+                Directory.CreateDirectory(directory);
+                string fileName = ScreenshotNaming.EnsureUnique(
+                    directory, ScreenshotNaming.BuildFileName(DateTime.Now));
+                savedPath = Path.Combine(directory, fileName);
 
-            using SKImage image = SKImage.FromBitmap(output);
-            using SKData? data = image.Encode(SKEncodedImageFormat.Png, 100);
-            if (data is null) throw new InvalidOperationException("PNG 编码失败");
-            File.WriteAllBytes(savedPath, data.ToArray());
-        }
-        catch (Exception ex)
-        {
-            saveError = $"保存失败：{ex.Message}";
-            savedPath = null;
-            AppLog.Error("截图保存失败", ex);
+                using SKImage image = SKImage.FromBitmap(output);
+                using SKData? data = image.Encode(SKEncodedImageFormat.Png, 100);
+                if (data is null) throw new InvalidOperationException("PNG 编码失败");
+                File.WriteAllBytes(savedPath, data.ToArray());
+            }
+            catch (Exception ex)
+            {
+                saveError = $"保存失败：{ex.Message}";
+                savedPath = null;
+                AppLog.Error("截图保存失败", ex);
+            }
         }
 
-        try
+        if (settings.ScreenshotAutoCopy)
         {
-            copied = TryCopyToClipboard(SkiaBitmapBridge.ToBitmapSource(output));
+            try
+            {
+                copied = TryCopyToClipboard(SkiaBitmapBridge.ToBitmapSource(output));
+            }
+            catch (Exception ex)
+            {
+                copyError = $"复制到剪贴板失败：{ex.Message}";
+                AppLog.Warn(copyError);
+            }
         }
-        catch (Exception ex)
-        {
-            copyError = $"复制到剪贴板失败：{ex.Message}";
-            AppLog.Warn(copyError);
-        }
+
+        if (!settings.ScreenshotAutoSave && !settings.ScreenshotAutoCopy)
+            saveError = "已关闭自动复制和自动保存，本次截图没有输出";
 
         string? error = (saveError, copyError) switch
         {

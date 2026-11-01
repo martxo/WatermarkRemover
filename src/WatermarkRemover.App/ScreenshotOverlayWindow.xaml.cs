@@ -112,6 +112,17 @@ public partial class ScreenshotOverlayWindow : Window
         ThinWidth.Click += (_, _) => _session.SetLineWidth(1.5f);
         MediumWidth.Click += (_, _) => _session.SetLineWidth(3f);
         ThickWidth.Click += (_, _) => _session.SetLineWidth(5f);
+        TextSizeBox.SelectionChanged += (_, _) =>
+        {
+            float size = TextSizeBox.SelectedIndex switch
+            {
+                0 => 12f,
+                2 => 20f,
+                _ => 16f,
+            };
+            _session.SetTextFontSize(size);
+        };
+        LongCaptureButton.Click += (_, _) => _session.StartLongCapture();
         UndoButton.Click += (_, _) => _session.Undo();
         RedoButton.Click += (_, _) => _session.Redo();
         ClearButton.Click += (_, _) => _session.ClearAnnotations();
@@ -237,6 +248,7 @@ public partial class ScreenshotOverlayWindow : Window
         DrawPreview(hasSelection, selection, localSelection);
         DrawSelection(hasSelection, localSelection);
         DrawSizeLabel(width, height, hasSelection, selection, localSelection);
+        DrawWindowHint(hasSelection);
         DrawHint(width, hasSelection);
         DrawDraft();
         DrawToolbar(width, height, hasSelection, localSelection);
@@ -404,6 +416,33 @@ public partial class ScreenshotOverlayWindow : Window
         Canvas.SetTop(SizeLabel, y);
     }
 
+    /// <summary>Highlights the application window under the pointer across this monitor.</summary>
+    private void DrawWindowHint(bool hasSelection)
+    {
+        if (hasSelection || _session.HoverWindow is not { } hover)
+        {
+            Hide(WindowHintBorder);
+            return;
+        }
+
+        double left = Math.Max(hover.Left, _monitor.Left);
+        double top = Math.Max(hover.Top, _monitor.Top);
+        double right = Math.Min(hover.Right, _monitor.Right);
+        double bottom = Math.Min(hover.Bottom, _monitor.Bottom);
+        if (right <= left || bottom <= top)
+        {
+            Hide(WindowHintBorder);
+            return;
+        }
+
+        WindowHintBorder.Visibility = Visibility.Visible;
+        Place(WindowHintBorder,
+            (left - _monitor.Left) / _monitor.Scale,
+            (top - _monitor.Top) / _monitor.Scale,
+            (right - left) / _monitor.Scale,
+            (bottom - top) / _monitor.Scale);
+    }
+
     private void DrawHint(double width, bool hasSelection)
     {
         if (hasSelection)
@@ -512,6 +551,7 @@ public partial class ScreenshotOverlayWindow : Window
         UndoButton.IsEnabled = _session.HasAnnotations;
         RedoButton.IsEnabled = _session.CanRedo;
         ClearButton.IsEnabled = _session.HasAnnotations;
+        LongCaptureButton.IsEnabled = hasSelection && !_session.HasAnnotations;
 
         SetSwatch(ColorRed, 0xFFE53935);
         SetSwatch(ColorYellow, 0xFFFBC02D);
@@ -521,6 +561,12 @@ public partial class ScreenshotOverlayWindow : Window
         ThinWidth.IsChecked = Math.Abs(_session.LineWidth - 1.5f) < 0.01f;
         MediumWidth.IsChecked = Math.Abs(_session.LineWidth - 3f) < 0.01f;
         ThickWidth.IsChecked = Math.Abs(_session.LineWidth - 5f) < 0.01f;
+        TextSizeBox.SelectedIndex = _session.TextFontSize switch
+        {
+            <= 12f => 0,
+            >= 20f => 2,
+            _ => 1,
+        };
 
         ToolbarHost.Visibility = Visibility.Visible;
         ToolbarHost.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
@@ -567,6 +613,8 @@ public partial class ScreenshotOverlayWindow : Window
         Canvas.SetLeft(TextEditor, x);
         Canvas.SetTop(TextEditor, y);
         TextEditor.Text = string.Empty;
+        TextEditor.FontSize = _session.TextFontSize;
+        TextEditor.Foreground = new SolidColorBrush(MarkColor(_session.ColorArgb));
         TextEditor.Visibility = Visibility.Visible;
 
         Dispatcher.BeginInvoke(new Action(() =>
@@ -601,10 +649,15 @@ public partial class ScreenshotOverlayWindow : Window
     private void OnTextEditorKeyDown(object sender, KeyEventArgs e)
     {
         Key key = RealKey(e);
-        if (key == Key.Enter)
+        if (key == Key.Enter && !Keyboard.Modifiers.HasFlag(ModifierKeys.Shift))
         {
             CommitTextFromEditor();
             e.Handled = true;
+        }
+        else if (key == Key.Enter)
+        {
+            // Shift+Enter inserts a newline; the composer draws each line.
+            e.Handled = false;
         }
         else if (key == Key.Escape)
         {

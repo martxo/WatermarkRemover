@@ -148,6 +148,12 @@ public sealed partial class MainViewModel
 
         page.Settings.ScreenshotOutputDirectory = screenshotDirectory;
 
+        if (!page.Settings.ScreenshotAutoCopy && !page.Settings.ScreenshotAutoSave)
+        {
+            _dialogs.Warn("截图必须至少开启「自动复制到剪贴板」或「自动保存 PNG 文件」中的一项，否则截图会丢失。", "提示");
+            return false;
+        }
+
         page.Commit();
         if (!SaveSettings())
         {

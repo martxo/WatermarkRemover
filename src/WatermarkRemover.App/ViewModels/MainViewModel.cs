@@ -143,6 +143,7 @@ public sealed partial class MainViewModel : ObservableObject
         CaptureDelayedFullScreenCommand = new RelayCommand(
             () => _ = CaptureFullScreenAsync(3), () => !_screenshotBusy);
         OpenScreenshotFolderCommand = new RelayCommand(OpenScreenshotFolder);
+        ShowScreenshotShelfCommand = new RelayCommand(ShowScreenshotShelf);
 
         // --- 手机传文件 ---
         // The LAN receiver lives as long as the app; landed files become finished job rows in
