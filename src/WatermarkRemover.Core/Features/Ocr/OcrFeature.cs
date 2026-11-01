@@ -1,5 +1,6 @@
 using System.Text;
 using WatermarkRemover.Core.Logging;
+using WatermarkRemover.Core.Processing;
 using WatermarkRemover.Core.Settings;
 
 namespace WatermarkRemover.Core.Features.Ocr;
@@ -112,8 +113,11 @@ public sealed class OcrFeature : IFeature
             string outputPath = OutputNameGenerator.GetOutputPath(
                 inputPath, context.Settings, suffixOverride: OutputSuffix, extensionOverride: ".txt");
 
+            // 先写临时文件、成功后再改名：识别中途出错时输出目录里不会留下半截文本。
+            using var output = OutputTransaction.Begin(outputPath);
             // UTF-8 with BOM so Notepad and Excel detect the encoding reliably.
-            File.WriteAllText(outputPath, text, new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
+            File.WriteAllText(output.TempPath, text, new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
+            output.Commit();
             timer.Stage("写出文本", $"{new FileInfo(outputPath).Length} 字节");
             timer.Emit($"总计 {timer.ElapsedMs} ms（{(isImage ? "1 张图片" : $"{pages.Count} 页")}，" +
                        $"{_engine.DisplayName}）");

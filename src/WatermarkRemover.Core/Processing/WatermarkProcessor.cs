@@ -66,14 +66,19 @@ public sealed class WatermarkProcessor
                 if (SamePath(namedCopy, inputPath))
                     return ProcessingResult.NoWatermarkFound(inputPath);
 
-                File.Copy(inputPath, namedCopy, overwrite: false);
+                using var copy = OutputTransaction.Begin(namedCopy);
+                File.Copy(inputPath, copy.TempPath, overwrite: false);
+                copy.Commit();
                 return ProcessingResult.NoWatermarkFound(inputPath, namedCopy);
             }
 
             var edits = BuildEdits(raw, analysis, marks);
 
             string outputPath = ResolveOutputPath(inputPath);
-            _source.Apply(inputPath, outputPath, edits);
+            // 先写到临时目录、成功后再改名：失败的中途不会在输出目录留下半截文件。
+            using var output = OutputTransaction.Begin(outputPath);
+            _source.Apply(inputPath, output.TempPath, edits);
+            output.Commit();
 
             return ProcessingResult.Succeeded(inputPath, outputPath, marks);
         }

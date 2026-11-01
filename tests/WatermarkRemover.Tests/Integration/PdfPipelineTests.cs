@@ -1,4 +1,5 @@
 using System.Text;
+using WatermarkRemover.Core.Documents;
 using WatermarkRemover.Core.Features.Naming;
 using WatermarkRemover.Core.Processing;
 using WatermarkRemover.Core.Settings;
@@ -289,6 +290,37 @@ public class PdfPipelineTests : IDisposable
         Assert.Equal(ProcessingStatus.Succeeded, result.Status);
         Assert.Equal(Path.Combine(_dir, "林孝明执照 (2).pdf"), result.OutputPath);
         Assert.Equal("occupied", Encoding.Latin1.GetString(File.ReadAllBytes(Path.Combine(_dir, "林孝明执照.pdf"))));
+    }
+
+    [Fact]
+    public void A_failed_write_leaves_no_output_and_no_scratch_files()
+    {
+        string input = WriteInput(PdfFixture.CamScannerLike().Build());
+        var processor = new WatermarkProcessor(
+            new FailingApplySource(), new IWatermarkStrategy[] { new BottomRightBadgeStrategy() },
+            new AppSettings());
+
+        var result = processor.Process(input);
+
+        Assert.Equal(ProcessingStatus.Failed, result.Status);
+        Assert.Contains("模拟写盘失败", result.Error);
+        // 目录里只剩输入文件本身：既没有半截产物，也没有遗留的临时目录。
+        Assert.Empty(Directory.GetFiles(_dir)
+            .Where(f => !string.Equals(f, input, StringComparison.OrdinalIgnoreCase)));
+        Assert.Empty(Directory.GetDirectories(_dir, "*", SearchOption.AllDirectories));
+    }
+
+    /// <summary>写入永远失败：用来验证失败的任务不会在输出目录留下任何东西。</summary>
+    private sealed class FailingApplySource : IDocumentSource
+    {
+        private readonly PdfDocumentSource _inner = new();
+
+        public IReadOnlyCollection<string> SupportedExtensions => _inner.SupportedExtensions;
+
+        public RawDocument Extract(string inputPath) => _inner.Extract(inputPath);
+
+        public void Apply(string inputPath, string outputPath, IReadOnlyList<PageEdit> edits) =>
+            throw new IOException("模拟写盘失败");
     }
 
     private static string ContentRewriterToText(byte[] bytes) => Encoding.Latin1.GetString(bytes);
