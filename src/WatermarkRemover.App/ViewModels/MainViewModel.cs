@@ -190,14 +190,23 @@ public sealed partial class MainViewModel : ObservableObject
     /// <summary>Drops the interrupted-run record without processing anything.</summary>
     public RelayCommand DiscardPendingCommand { get; }
 
-    public bool HasPendingTasks => _pending.Count > 0;
+    public bool HasPendingTasks => UnfinishedTaskCount > 0;
 
-    public int PendingTaskCount => _pending.Count;
+    public int PendingTaskCount => UnfinishedTaskCount;
 
-    /// <summary>The task-center line shown above the list after an interrupted run.</summary>
-    public string PendingTasksText => _pending.Count == 0
-        ? string.Empty
-        : $"上次有 {_pending.Count} 个文件没处理完（{Path.GetFileName(_pending[0].InputPath)} 等），可以继续。";
+    /// <summary>The task-center line shown above the list after an interrupted run. 扫描中断的
+    /// 文档不在这里报数——它在「扫描」页里以一行「继续扫描」出现。</summary>
+    public string PendingTasksText
+    {
+        get
+        {
+            int count = UnfinishedTaskCount;
+            PendingTaskEntry? first = _pending.FirstOrDefault(e => !IsScanEntry(e));
+            return count == 0 || first is null
+                ? string.Empty
+                : $"上次有 {count} 个文件没处理完（{Path.GetFileName(first.InputPath)} 等），可以继续。";
+        }
+    }
 
     public bool ShowPendingBanner => HasPendingTasks && !IsBusy;
 

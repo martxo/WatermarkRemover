@@ -163,6 +163,8 @@ public sealed partial class MainViewModel
         if (outcome.Interruption is { Length: > 0 } interruption)
         {
             job.AllowContinueScan();
+            // 关掉应用也不丢这条线索：重启后同一份 PDF 仍然能接着扫。
+            RecordScanPending(path);
             job.ReportContinuation(
                 $"扫描中断（{interruption}），已保存 {outcome.PageCount} 页；点「继续扫描」接着扫");
             AppLog.Warn($"扫描中断但已保存 {outcome.PageCount} 页：{path}，原因：{interruption}");
@@ -171,6 +173,7 @@ public sealed partial class MainViewModel
         else if (outcome.Cancelled && outcome.PageCount > 0)
         {
             job.AllowContinueScan();
+            RecordScanPending(path);
         }
         Board.MoveToTop(job);
         op.Step("接收落盘", $"{Path.GetFileName(path)}，{outcome.PageCount} 页");
@@ -299,6 +302,9 @@ public sealed partial class MainViewModel
     {
         using var op = AppLog.BeginOperation(LogCategory.Scan, "继续扫描", Path.GetFileName(target));
 
+        // 记录点击时的路径：成功续扫后要把这条「中断」登记撤掉，失败时保持原样。
+        string pendingPath = target;
+
         IsScanning = true;
         try
         {
@@ -388,16 +394,23 @@ public sealed partial class MainViewModel
             Board.MoveToTop(job);
             ScheduleJournalSave();
 
+            // 这一轮扫描有结果了：旧的「中断」登记先撤掉（另存副本时新旧路径都撤），
+            // 如果这一轮又中断/取消，下面再重新登记。
+            ClearPending(pendingPath);
+            ClearPending(target);
+
             // The row is already finished, so Apply's State setter did not notify listeners; the
             // status line is this pass's own surface.
             if (outcome.Interruption is { Length: > 0 } interruption)
             {
+                RecordScanPending(target);
                 job.ReportContinuation(
                     $"又中断（{interruption}），已保存 {total} 页；可再点「继续扫描」");
                 op.Complete($"中断，共 {total} 页");
             }
             else if (outcome.Cancelled)
             {
+                RecordScanPending(target);
                 job.ReportContinuation($"已取消，已保存 {total} 页；可再点「继续扫描」接着扫");
                 op.Complete($"已取消，共 {total} 页");
             }

@@ -60,7 +60,36 @@ public sealed partial class MainViewModel
         job.PinRequested += (_, _) => OnScreenshotPinRequested(job);
         job.OcrRequested += (_, _) => OnScreenshotOcrRequested(job);
         job.ViewRequested += (_, _) => OnScreenshotViewRequested(job);
+        // 行里的文件被改名/改名后移动时，未完成记录也要跟着换路径；否则重启后它会指向一个
+        // 已经不存在的路径，扫描就白登记了。这里按行跟踪前后路径，覆盖命名、手动改名和
+        // 预览自己另存的副本三种改名来源。
+        string? trackedPath = job.OutputPath;
+        job.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName != nameof(FileJobViewModel.OutputPath)) return;
+            FollowPendingRename(trackedPath, job.OutputPath);
+            trackedPath = job.OutputPath;
+        };
         job.PropertyChanged += OnJobPropertyChanged;
+    }
+
+    /// <summary>Keeps the unfinished record on the same document after a rename or move.</summary>
+    private void FollowPendingRename(string? from, string? to)
+    {
+        if (string.IsNullOrWhiteSpace(from) || string.IsNullOrWhiteSpace(to)) return;
+        if (string.Equals(from, to, StringComparison.OrdinalIgnoreCase)) return;
+
+        bool changed = false;
+        for (int i = 0; i < _pending.Count; i++)
+        {
+            if (!string.Equals(_pending[i].InputPath, from, StringComparison.OrdinalIgnoreCase)) continue;
+            _pending[i] = _pending[i] with { InputPath = to };
+            changed = true;
+        }
+
+        if (!changed) return;
+        _pendingJournal?.Save(_pending);
+        RaisePendingChanged();
     }
 
     private void OnJobPropertyChanged(object? sender, PropertyChangedEventArgs e)
@@ -270,11 +299,70 @@ public sealed partial class MainViewModel
             _pending.Add(entry);
         }
 
+        // 扫描的中断记录不进横幅：它的承接方式是「扫描」页里那行记录上的「继续扫描」，
+        // 所以先把这些文档恢复成可继续的行，后续由行自己负责追加。
+        RestoreScanRows();
+
         _pendingJournal.Save(_pending);
         RaisePendingChanged();
-        if (_pending.Count > 0)
-            AppLog.Info($"任务中心：{_pending.Count} 个文件在退出时未处理完，可继续");
+        if (UnfinishedTaskCount > 0)
+            AppLog.Info($"任务中心：{UnfinishedTaskCount} 个文件在退出时未处理完，可继续");
     }
+
+    /// <summary>
+    /// 重启后把「扫描中断、还有原稿没扫完」的文档恢复成可继续的行：优先复用任务记录里已经恢复
+    /// 出来的那一行（同一份 PDF），记录被清过就地补一行。这样关掉应用再打开，「继续扫描」还在。
+    /// </summary>
+    private void RestoreScanRows()
+    {
+        foreach (var entry in _pending.Where(IsScanEntry).ToList())
+        {
+            FileJobViewModel? job = Board.Jobs.FirstOrDefault(j =>
+                j.OwnerFeatureId == entry.SectionId &&
+                j.OutputPath is { } output &&
+                string.Equals(output, entry.InputPath, StringComparison.OrdinalIgnoreCase));
+
+            if (job is null)
+            {
+                job = new FileJobViewModel(entry.InputPath, Settings.QuickSuffixes)
+                {
+                    OwnerFeatureId = entry.SectionId,
+                };
+                WireJob(job);
+                job.Restore(entry.InputPath, entry.InputPath, "扫描中断", 0, entry.QueuedAt);
+                Board.Add(job);
+                Board.MarkCompleted(job);
+            }
+
+            job.AllowContinueScan();
+            job.ReportContinuation(
+                $"上次扫描中断，已保存的页都在 {Path.GetFileName(entry.InputPath)} 里；" +
+                "点「继续扫描」把剩余原稿追加进来");
+            AppLog.Info($"任务中心：扫描文档可继续 → {entry.InputPath}");
+        }
+    }
+
+    /// <summary>
+    /// 扫描中断/取消但保留了页面：把这份半成品登记到未完成任务里，关掉应用再打开时
+    /// 「继续扫描」仍然可用。同一份文档只留一条最新记录。
+    /// </summary>
+    private void RecordScanPending(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return;
+
+        _pending.RemoveAll(e => IsScanEntry(e) &&
+            string.Equals(e.InputPath, path, StringComparison.OrdinalIgnoreCase));
+        _pending.Add(new PendingTaskEntry("scan.page", path, DateTime.Now) { Kind = "scan" });
+        _pendingJournal?.Save(_pending);
+        RaisePendingChanged();
+        AppLog.Info($"任务中心：扫描中断记录已保存，可跨重启继续 → {path}");
+    }
+
+    private static bool IsScanEntry(PendingTaskEntry entry) =>
+        string.Equals(entry.Kind, "scan", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>横幅负责的未完成文件数；扫描文档由它自己的记录行承接，不计入这里。</summary>
+    private int UnfinishedTaskCount => _pending.Count(e => !IsScanEntry(e));
 
     /// <summary>Snapshots the batch into the pending file before the first job starts.</summary>
     private void RecordPending(IEnumerable<FileJobViewModel> jobs, string kind = "process")
@@ -348,13 +436,15 @@ public sealed partial class MainViewModel
         if (_batchCancellation is not null) StopBatch();
     }
 
-    /// <summary>Drops the interrupted-run record without touching the files.</summary>
+    /// <summary>Drops the interrupted-run record without touching the files. 扫描文档的那条
+    /// 记录跟着它自己的行走，不在这里被一并丢掉。</summary>
     private void DiscardPending()
     {
-        if (_pending.Count == 0) return;
+        int count = UnfinishedTaskCount;
+        if (count == 0) return;
 
-        AppLog.Info($"任务中心：丢弃 {_pending.Count} 个未完成任务记录");
-        _pending.Clear();
+        AppLog.Info($"任务中心：丢弃 {count} 个未完成任务记录");
+        _pending.RemoveAll(e => !IsScanEntry(e));
         _pendingJournal?.Save(_pending);
         RaisePendingChanged();
     }
@@ -366,7 +456,10 @@ public sealed partial class MainViewModel
 
         await ResumeUploadsAsync(_pending.Where(e => e.Kind == "upload").ToList()).ConfigureAwait(true);
 
-        foreach (var group in _pending.Where(e => e.Kind != "upload").GroupBy(e => e.SectionId).ToList())
+        // 扫描文档不能被"重新处理"：它等的是一轮新扫描，承接入口在它自己的行上。
+        foreach (var group in _pending
+            .Where(e => e.Kind != "upload" && !IsScanEntry(e))
+            .GroupBy(e => e.SectionId).ToList())
         {
             IFeature? feature = _composition.Registry.Features.FirstOrDefault(f => f.Id == group.Key);
             if (feature is null) continue;

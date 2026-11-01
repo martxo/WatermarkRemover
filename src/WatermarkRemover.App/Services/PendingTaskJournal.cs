@@ -7,7 +7,8 @@ namespace WatermarkRemover.App.Services;
 /// <summary>One file that was queued but not finished when the app stopped.</summary>
 public sealed record PendingTaskEntry(string SectionId, string InputPath, DateTime QueuedAt)
 {
-    /// <summary>"process" = 本地处理；"upload" = 上传网盘。旧文件没有这个字段，按处理对待。</summary>
+    /// <summary>"process" = 本地处理；"upload" = 上传网盘；"scan" = 扫描中断、还有原稿没扫完。
+    /// 旧文件没有这个字段，按处理对待。</summary>
     public string Kind { get; init; } = "process";
 }
 
