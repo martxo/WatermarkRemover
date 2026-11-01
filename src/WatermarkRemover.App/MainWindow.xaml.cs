@@ -61,10 +61,18 @@ public partial class MainWindow : Window
         _viewModel.PreviewViewerOpener = strip => FullscreenViewerWindow.ShowFor(strip);
         // The screenshot overlay is a set of full-screen windows, so the host supplies it; the
         // view model only turns the result into a record and user-visible status.
-        _viewModel.ScreenshotCaptureHandler =
-            () => ScreenshotOverlaySession.RunAsync(this, _viewModel.Settings);
+        _viewModel.ScreenshotSaved += (_, job) => EnsureShelf().AddScreenshot(job);
+        _viewModel.ScreenshotCaptureHandler = () =>
+        {
+            // The line is topmost: hide it so it never appears inside the captured image.
+            _shelf?.SuppressForCapture();
+            return ScreenshotOverlaySession.RunAsync(this, _viewModel.Settings);
+        };
         _viewModel.ScreenshotFullScreenHandler = delaySeconds =>
-            ScreenshotOverlaySession.CaptureFullScreenAsync(this, _viewModel.Settings, delaySeconds);
+        {
+            _shelf?.SuppressForCapture();
+            return ScreenshotOverlaySession.CaptureFullScreenAsync(this, _viewModel.Settings, delaySeconds);
+        };
         // The settings page asks before saving: an occupied gesture is rejected there, so the
         // old shortcut and the saved settings both stay untouched.
         _viewModel.ScreenshotHotkeyValidator = hotkey =>
@@ -143,6 +151,9 @@ public partial class MainWindow : Window
         // Explorer/double-click launches are usually allowed to take the foreground; calling
         // Activate also covers a launch that started behind an already-open browser window.
         Activate();
+        // The line exists from startup: hovering the top edge must work even before the first
+        // screenshot; it stays above the screen until the pointer asks for it.
+        EnsureShelf();
         try
         {
             await UpdateCoordinator.RunCheckAsync(this, _viewModel.Settings, silent: true);
@@ -221,19 +232,45 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>Shows or hides the recent-screenshot shelf (hotkey and page button share it).</summary>
-    private void ToggleScreenshotShelf()
+    /// <summary>Long-press on the clothesline: edit a copy of the saved screenshot.</summary>
+    private void ShowImageMarkup(FileJobViewModel job)
     {
-        if (_shelf is { IsVisible: true })
-        {
-            _shelf.Close();
-            return;
-        }
+        if (job.OutputPath is not { } path || !File.Exists(path)) return;
 
-        _shelf = new ScreenshotShelfWindow(
+        try
+        {
+            var window = new ImageMarkupWindow(path, (target, width, height) =>
+                _viewModel.AddAnnotatedScreenshot(target, width, height));
+            window.Show();
+            window.Activate();
+        }
+        catch (Exception ex)
+        {
+            AppLog.Warn($"打开标注窗口失败：{path}（{ex.Message}）");
+            _dialogs.Warn($"无法打开标注窗口：{ex.Message}", "标注截图");
+        }
+    }
+
+    /// <summary>Shows or hides the clothesline (hotkey, page button and tray share it).</summary>
+    private void ToggleScreenshotShelf() => EnsureShelf().Toggle();
+
+    /// <summary>
+    /// Creates the clothesline once and keeps it alive above the screen; closing/creating it on
+    /// every toggle would lose the swing animation and the pointer-edge reveal.
+    /// </summary>
+    private ScreenshotShelfWindow EnsureShelf()
+    {
+        if (_shelf is { } existing) return existing;
+
+        var shelf = new ScreenshotShelfWindow(
             _viewModel.ScreenshotShelfItems, _viewModel.OpenScreenshotFolder);
-        _shelf.Closed += (_, _) => _shelf = null;
-        _shelf.Show();
+        shelf.MarkupRequested += (_, job) => ShowImageMarkup(job);
+        shelf.Closed += (_, _) => _shelf = null;
+        _shelf = shelf;
+        // ShowActivated=False in XAML: the line appears without stealing focus from the app
+        // the user is working in.
+        shelf.Show();
+        return shelf;
     }
 
     /// <summary>

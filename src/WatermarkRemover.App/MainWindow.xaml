@@ -807,7 +807,7 @@
                            Foreground="{StaticResource TextSecondaryBrush}"
                            TextTrimming="CharacterEllipsis"
                            Margin="0,3,0,0"/>
-                <TextBlock Text="Ctrl+Alt+T 或点「截图晾衣绳」可呼出最近截图：单击复制、拖到其他程序、双击打开；记录里的「贴图」会把截图置顶显示。"
+                <TextBlock Text="鼠标移到屏幕顶部、按 Ctrl+Alt+T 或点「截图晾衣绳」，晾衣绳会从屏幕上方滑下：单击复制、拖出使用、双击打开；记录里的「贴图」会把截图置顶显示。"
                            FontSize="11"
                            Foreground="{StaticResource TextSecondaryBrush}"
                            TextWrapping="Wrap"

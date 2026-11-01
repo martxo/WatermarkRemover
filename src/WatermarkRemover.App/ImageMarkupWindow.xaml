@@ -1,0 +1,145 @@
+<Window x:Class="WatermarkRemover.App.ImageMarkupWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="标注截图"
+        Width="1040" Height="720"
+        MinWidth="680" MinHeight="480"
+        WindowStartupLocation="CenterScreen"
+        ShowInTaskbar="False"
+        Background="#FFF3F3F3"
+        UseLayoutRounding="True"
+        KeyDown="OnWindowKeyDown"
+        Closing="OnWindowClosing">
+    <Window.Resources>
+        <Style x:Key="MarkTool" TargetType="ToggleButton">
+            <Setter Property="Foreground" Value="#FF333333"/>
+            <Setter Property="Background" Value="#FFFFFFFF"/>
+            <Setter Property="Padding" Value="9,5"/>
+            <Setter Property="Margin" Value="0,0,4,0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ToggleButton">
+                        <Border x:Name="Root" Background="{TemplateBinding Background}"
+                                CornerRadius="5" BorderBrush="#FFDDDDDD" BorderThickness="1"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Root" Property="Background" Value="#FFF0F0F0"/>
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Root" Property="Background" Value="#FFDBEAFE"/>
+                                <Setter TargetName="Root" Property="BorderBrush" Value="#FF3B82F6"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="MarkColor" TargetType="Button">
+            <Setter Property="Width" Value="20"/>
+            <Setter Property="Height" Value="20"/>
+            <Setter Property="Margin" Value="3,0,0,0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Root" CornerRadius="4"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="#FFBBBBBB" BorderThickness="1"/>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Root" Property="BorderBrush" Value="#FF333333"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <Border Grid.Row="0" Background="White" Padding="10,8"
+                BorderBrush="#FFE3E3E3" BorderThickness="0,0,0,1">
+            <DockPanel>
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <ToggleButton x:Name="RectTool" Content="矩形" Style="{StaticResource MarkTool}" ToolTip="R"/>
+                    <ToggleButton x:Name="ArrowTool" Content="箭头" Style="{StaticResource MarkTool}" ToolTip="A"/>
+                    <ToggleButton x:Name="PenTool" Content="画笔" Style="{StaticResource MarkTool}" ToolTip="P"/>
+                    <ToggleButton x:Name="TextTool" Content="文字" Style="{StaticResource MarkTool}" ToolTip="T"/>
+                    <ToggleButton x:Name="MosaicTool" Content="马赛克" Style="{StaticResource MarkTool}" ToolTip="M"/>
+
+                    <Rectangle Width="1" Fill="#FFE0E0E0" Margin="6,2"/>
+
+                    <Button x:Name="ColorRed" Background="#FFE53935" Style="{StaticResource MarkColor}"/>
+                    <Button x:Name="ColorYellow" Background="#FFFBC02D" Style="{StaticResource MarkColor}"/>
+                    <Button x:Name="ColorBlue" Background="#FF1E88E5" Style="{StaticResource MarkColor}"/>
+                    <Button x:Name="ColorGreen" Background="#FF43A047" Style="{StaticResource MarkColor}"/>
+                    <Button x:Name="ColorBlack" Background="#FF111111" Style="{StaticResource MarkColor}"/>
+
+                    <Rectangle Width="1" Fill="#FFE0E0E0" Margin="8,2"/>
+
+                    <ToggleButton x:Name="ThinWidth" Content="细" Style="{StaticResource MarkTool}"/>
+                    <ToggleButton x:Name="MediumWidth" Content="中" Style="{StaticResource MarkTool}"/>
+                    <ToggleButton x:Name="ThickWidth" Content="粗" Style="{StaticResource MarkTool}"/>
+
+                    <ComboBox x:Name="TextSizeBox" Width="66" Height="26" SelectedIndex="1"
+                              Margin="3,0,0,0" VerticalContentAlignment="Center" FontSize="12"
+                              ToolTip="文字字号">
+                        <ComboBoxItem Content="小 12"/>
+                        <ComboBoxItem Content="中 16"/>
+                        <ComboBoxItem Content="大 20"/>
+                    </ComboBox>
+
+                    <Rectangle Width="1" Fill="#FFE0E0E0" Margin="8,2"/>
+
+                    <Button x:Name="UndoButton" Content="撤销" Padding="9,5" Margin="0,0,4,0" Click="OnUndoClick"/>
+                    <Button x:Name="RedoButton" Content="重做" Padding="9,5" Margin="0,0,4,0" Click="OnRedoClick"/>
+                    <Button x:Name="ClearButton" Content="清空" Padding="9,5" Click="OnClearClick"/>
+                </StackPanel>
+
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                    <TextBlock x:Name="StatusText" Foreground="#FF777777" FontSize="11"
+                               VerticalAlignment="Center" Margin="0,0,12,0"/>
+                    <Button Content="取消" Padding="14,6" Margin="0,0,8,0" Click="OnCancelClick"/>
+                    <Button x:Name="SaveButton" Content="保存为副本" Padding="16,6" Background="#FF3B82F6"
+                            Foreground="White" BorderBrush="Transparent" FontWeight="SemiBold"
+                            Click="OnSaveClick"/>
+                </StackPanel>
+            </DockPanel>
+        </Border>
+
+        <Grid Grid.Row="1" x:Name="Viewport" Background="#FF202020">
+            <Grid x:Name="Stage" HorizontalAlignment="Center" VerticalAlignment="Center">
+                <Image x:Name="PreviewImage" Stretch="Fill" IsHitTestVisible="False"/>
+                <Canvas x:Name="DraftLayer" Background="Transparent"
+                        MouseLeftButtonDown="OnCanvasMouseDown"
+                        MouseMove="OnCanvasMouseMove"
+                        MouseLeftButtonUp="OnCanvasMouseUp"/>
+
+                <TextBox x:Name="TextEditor" Width="280" Height="62" Visibility="Collapsed"
+                         HorizontalAlignment="Left" VerticalAlignment="Top"
+                         Background="#F2FFFFFF" BorderBrush="#FF3B82F6" BorderThickness="1"
+                         Padding="4,2" AcceptsReturn="True" TextWrapping="Wrap"
+                         VerticalContentAlignment="Top"
+                         KeyDown="OnTextEditorKeyDown"
+                         LostFocus="OnTextEditorLostFocus"/>
+            </Grid>
+        </Grid>
+
+        <Border Grid.Row="2" Background="White" Padding="12,8"
+                BorderBrush="#FFE3E3E3" BorderThickness="0,1,0,0">
+            <TextBlock Text="按住 Shift+Enter 换行；矩形/箭头/画笔/马赛克拖拽绘制。保存会生成一个标注副本，原图保持不变。"
+                       Foreground="#FF777777" FontSize="11"/>
+        </Border>
+    </Grid>
+</Window>

@@ -55,6 +55,9 @@ public sealed partial class MainViewModel
     /// <summary>Runs OCR on one screenshot; the shell owns the engine and result window.</summary>
     public event EventHandler<string>? ScreenshotOcrRequested;
 
+    /// <summary>A new screenshot was saved and should hang on the clothesline.</summary>
+    public event EventHandler<FileJobViewModel>? ScreenshotSaved;
+
     /// <summary>Newest screenshot records that actually have a file and a thumbnail.</summary>
     public IReadOnlyList<FileJobViewModel> ScreenshotShelfItems => Board.Jobs
         .Where(j => j.OwnerFeatureId == "screenshot.page" &&
@@ -196,6 +199,21 @@ public sealed partial class MainViewModel
         Board.Add(job);
         // Screenshots have no queue behind them: one capture = one finished record.
         Board.MarkCompleted(job);
+        ScreenshotSaved?.Invoke(this, job);
+    }
+
+    /// <summary>Adds the annotated copy produced by the long-press markup editor as a new record.</summary>
+    internal void AddAnnotatedScreenshot(string path, int width, int height)
+    {
+        var job = new FileJobViewModel(path, Settings.QuickSuffixes)
+        {
+            OwnerFeatureId = "screenshot.page",
+        };
+        WireJob(job);
+        job.Apply(FeatureResult.Success(path, path, $"标注截图 {width}×{height}", 1));
+        Board.Add(job);
+        Board.MarkCompleted(job);
+        ScreenshotSaved?.Invoke(this, job);
     }
 
     internal void OpenScreenshotFolder()
