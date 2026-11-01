@@ -1,9 +1,12 @@
+using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.IO;
 using System.Threading;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using System.Windows.Threading;
 using SkiaSharp;
 using WatermarkRemover.App.Logging;
 using WatermarkRemover.App.Services;
@@ -12,9 +15,10 @@ namespace WatermarkRemover.App;
 
 /// <summary>
 /// Fullscreen screenshot viewer. It is the same shell as FullscreenViewerWindow (PDF pages):
-/// the whole screen covered by a dark veil, a caption bar with title/position/actions, and the
-/// shared <see cref="Controls.ImageSurface"/> in the middle — so a thumbnail click feels
-/// identical no matter which kind of record it belongs to.
+/// the whole screen covered by a dark veil, a film rail of the folder's images on the left,
+/// a caption bar with title/position/actions, paging arrows on the canvas edges, and the shared
+/// <see cref="Controls.ImageSurface"/> in the middle — so a thumbnail click feels identical no
+/// matter which kind of record it belongs to.
 /// Formats WPF cannot decode (WebP/AVIF/HEIC) fall back to SkiaSharp, and JPEG EXIF orientation
 /// is applied so portrait shots are upright. Wheel/drag/double-click live in the surface.
 /// </summary>
@@ -34,9 +38,14 @@ public partial class ImageViewerWindow : Window
     private readonly List<string> _siblings = new();
     private int _siblingIndex = -1;
 
+    private readonly ObservableCollection<RailItem> _rail = new();
+    private string? _railDirectory;
+    private int _railGeneration;
+
     private ImageViewerWindow()
     {
         InitializeComponent();
+        RailList.ItemsSource = _rail;
     }
 
     /// <summary>Opens <paramref name="path"/> in the single viewer window and brings it forward.</summary>
@@ -100,6 +109,7 @@ public partial class ImageViewerWindow : Window
         TitleText.Text = Path.GetFileName(path);
         Title = $"看图 · {Path.GetFileName(path)}";
         RefreshSiblings();
+        SyncRail();
         UpdateCaption();
     }
 
@@ -108,6 +118,9 @@ public partial class ImageViewerWindow : Window
         PositionText.Text = _siblings.Count > 1
             ? $"{Math.Max(1, _siblingIndex + 1)}/{_siblings.Count}"
             : string.Empty;
+        PrevButton.IsEnabled = _siblingIndex > 0;
+        NextButton.IsEnabled = _siblingIndex >= 0 && _siblingIndex < _siblings.Count - 1;
+
         if (_image is null)
         {
             InfoText.Text = string.Empty;
@@ -221,6 +234,99 @@ public partial class ImageViewerWindow : Window
     private static bool IsImageFile(string path) =>
         ImageExtensions.Contains(Path.GetExtension(path).ToLowerInvariant());
 
+    // --- Film rail ---------------------------------------------------------------
+
+    /// <summary>
+    /// Keeps the left rail in sync with the folder: it is rebuilt only when the directory
+    /// changes; paging inside one folder just moves the highlight, so no re-decoding.
+    /// </summary>
+    private void SyncRail()
+    {
+        string? directory = Path.GetDirectoryName(_path);
+        if (!string.Equals(directory, _railDirectory, StringComparison.OrdinalIgnoreCase))
+        {
+            _railDirectory = directory;
+            _railGeneration++;
+            _rail.Clear();
+            foreach (string file in _siblings)
+                _rail.Add(new RailItem(file));
+            DecodeRailThumbnails(_railGeneration);
+        }
+
+        for (int i = 0; i < _rail.Count; i++)
+            _rail[i].IsCurrent = i == _siblingIndex;
+
+        // The list is filled before it is measured, so scroll on the next layout pass.
+        Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(ScrollRailToCurrent));
+    }
+
+    private void ScrollRailToCurrent()
+    {
+        if (_siblingIndex < 0 || _siblingIndex >= _rail.Count) return;
+        RailList.UpdateLayout();
+        if (RailList.ItemContainerGenerator.ContainerFromIndex(_siblingIndex) is FrameworkElement container)
+            container.BringIntoView();
+    }
+
+    /// <summary>Thumbnails decode off the UI thread, one at a time, so big folders stay fluid.</summary>
+    private async void DecodeRailThumbnails(int generation)
+    {
+        foreach (RailItem item in _rail.ToList())
+        {
+            if (generation != _railGeneration) return;
+            ImageSource? thumb = await Task.Run(() => DecodeThumb(item.Path));
+            if (generation != _railGeneration) return;
+            item.Thumb = thumb;
+        }
+    }
+
+    /// <summary>Small frozen preview; formats WPF cannot read fall back to SkiaSharp.</summary>
+    private static ImageSource? DecodeThumb(string path)
+    {
+        try
+        {
+            var image = new BitmapImage();
+            image.BeginInit();
+            image.CacheOption = BitmapCacheOption.OnLoad;
+            image.DecodePixelWidth = 152;
+            image.UriSource = new Uri(path);
+            image.EndInit();
+            image.Freeze();
+            return image;
+        }
+        catch
+        {
+            // No WPF codec for this file; try SkiaSharp below.
+        }
+
+        try
+        {
+            using SKBitmap? bitmap = SKBitmap.Decode(path);
+            if (bitmap is null) return null;
+            const int width = 152;
+            int height = Math.Max(1, (int)Math.Round(bitmap.Height * (width / (double)bitmap.Width)));
+            using SKBitmap? resized = bitmap.Resize(new SKImageInfo(width, height), SKFilterQuality.Medium);
+            return resized is null ? null : SkiaBitmapBridge.ToBitmapSource(resized);
+        }
+        catch (Exception ex)
+        {
+            AppLog.Trace("看图缩略图解码失败", ex);
+            return null;
+        }
+    }
+
+    private void OnRailThumbClick(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not FrameworkElement { Tag: RailItem item }) return;
+        e.Handled = true;
+        if (!string.Equals(item.Path, _path, StringComparison.OrdinalIgnoreCase))
+            Load(item.Path);
+    }
+
+    private void OnPrevClick(object sender, RoutedEventArgs e) => StepImage(-1);
+
+    private void OnNextClick(object sender, RoutedEventArgs e) => StepImage(1);
+
     // --- Caption actions ----------------------------------------------------------
 
     private void OnRotateClick(object sender, RoutedEventArgs e) => Surface.Rotate(90);
@@ -325,5 +431,47 @@ public partial class ImageViewerWindow : Window
         int next = _siblingIndex + delta;
         if (next < 0 || next >= _siblings.Count) return;
         Load(_siblings[next]);
+    }
+
+    /// <summary>One tile in the left rail: the file behind it, its preview, and whether it is
+    /// the image currently on the canvas.</summary>
+    public sealed class RailItem : INotifyPropertyChanged
+    {
+        private ImageSource? _thumb;
+        private bool _isCurrent;
+
+        public RailItem(string path)
+        {
+            Path = path;
+            Name = System.IO.Path.GetFileName(path);
+        }
+
+        public string Path { get; }
+
+        public string Name { get; }
+
+        public ImageSource? Thumb
+        {
+            get => _thumb;
+            set
+            {
+                if (ReferenceEquals(_thumb, value)) return;
+                _thumb = value;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Thumb)));
+            }
+        }
+
+        public bool IsCurrent
+        {
+            get => _isCurrent;
+            set
+            {
+                if (_isCurrent == value) return;
+                _isCurrent = value;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsCurrent)));
+            }
+        }
+
+        public event PropertyChangedEventHandler? PropertyChanged;
     }
 }

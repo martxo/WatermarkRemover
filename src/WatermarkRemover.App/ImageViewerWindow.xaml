@@ -12,73 +12,140 @@
         TextOptions.TextFormattingMode="Display"
         UseLayoutRounding="True"
         PreviewKeyDown="OnWindowKeyDown">
-    <!-- Fullscreen screenshot viewer. Deliberately the same shell as FullscreenViewerWindow
-         (PDF pages): dark veil over the whole screen, caption bar top-left with title and
-         position, hint in the middle, actions on the right, close flush in the corner.
-         Only the content differs — here it is one image, there a PDF page. -->
-    <Grid>
-        <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="*"/>
-        </Grid.RowDefinitions>
 
-        <Grid Grid.Row="0" Margin="20,12,20,4">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="Auto"/>
-                <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="Auto"/>
-            </Grid.ColumnDefinitions>
-
-            <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
-                <TextBlock Text="&#xE8A5;" FontFamily="Segoe MDL2 Assets" FontSize="14"
-                           Foreground="#E6FFFFFF" VerticalAlignment="Center"/>
-                <TextBlock x:Name="TitleText" Text="看图" FontSize="14" FontWeight="SemiBold"
-                           Foreground="White" Margin="10,0,0,0"
-                           VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
-                           MaxWidth="360"/>
-                <TextBlock x:Name="PositionText" Text="" FontSize="12"
-                           Foreground="#99FFFFFF" Margin="12,0,0,0" VerticalAlignment="Center"/>
-                <TextBlock x:Name="InfoText" Text="" FontSize="11"
-                           Foreground="#80FFFFFF" Margin="12,0,0,0" VerticalAlignment="Center"/>
-            </StackPanel>
-
-            <TextBlock Grid.Column="1"
-                       Text="滚轮缩放 · 拖动平移 · 双击 100% · ← → 切换图片 · R 旋转"
-                       FontSize="11" Foreground="#66FFFFFF"
-                       VerticalAlignment="Center" HorizontalAlignment="Center"/>
-
-            <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center"
-                        Margin="0,0,54,0">
-                <Button Content="旋转" Style="{StaticResource SmallButton}"
-                        Click="OnRotateClick" Margin="0,0,8,0"
-                        ToolTip="顺时针旋转 90°（R，Shift+R 反向）"/>
-                <Button Content="复制" Style="{StaticResource SmallButton}"
-                        Click="OnCopyClick" Margin="0,0,8,0"
-                        ToolTip="复制图片到剪贴板（Ctrl+C）"/>
-                <Button Content="文件夹" Style="{StaticResource SmallButton}"
-                        Click="OnRevealClick"
-                        ToolTip="在资源管理器中定位"/>
-            </StackPanel>
-        </Grid>
-
-        <Grid Grid.Row="1">
-            <controls:ImageSurface x:Name="Surface" ShowCheckerboard="True"
-                                   ViewChanged="OnSurfaceChanged"/>
-
-            <Border x:Name="Toast" Visibility="Collapsed"
-                    HorizontalAlignment="Center" VerticalAlignment="Bottom"
-                    Margin="0,0,0,28" Padding="12,6" CornerRadius="8"
-                    Background="#E6202024">
-                <TextBlock x:Name="ToastText" FontSize="12" Foreground="#FFF0F0F4"/>
+    <Window.Resources>
+        <!-- Rail tile: one image from the current folder, framed like the PDF page tiles. -->
+        <DataTemplate x:Key="RailThumbTemplate">
+            <Border Margin="0,0,0,8" Padding="3" CornerRadius="8"
+                    BorderThickness="1" Cursor="Hand"
+                    Tag="{Binding}" ToolTip="{Binding Name}"
+                    MouseLeftButtonUp="OnRailThumbClick">
+                <Border.Style>
+                    <Style TargetType="Border">
+                        <Setter Property="Background" Value="#2E000000"/>
+                        <Setter Property="BorderBrush" Value="#33FFFFFF"/>
+                        <Style.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Background" Value="#40FFFFFF"/>
+                            </Trigger>
+                            <DataTrigger Binding="{Binding IsCurrent}" Value="True">
+                                <Setter Property="Background" Value="#55407BC0"/>
+                                <Setter Property="BorderBrush" Value="#B3407BC0"/>
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </Border.Style>
+                <Image Source="{Binding Thumb}" Width="76" Stretch="Uniform"
+                       RenderOptions.BitmapScalingMode="HighQuality"/>
             </Border>
-        </Grid>
+        </DataTemplate>
+    </Window.Resources>
 
-        <!-- Same corner target as the PDF viewer: pointer to the top-right, one click, gone. -->
-        <Button Grid.Row="0" Grid.RowSpan="2"
-                HorizontalAlignment="Right" VerticalAlignment="Top"
-                Style="{StaticResource VeilCloseButton}"
-                Content="&#xE711;"
-                Click="OnCloseClick"
-                ToolTip="关闭看图（Esc 同样生效）"/>
+    <!-- Fullscreen screenshot viewer. Same shell as FullscreenViewerWindow (PDF pages):
+         dark veil over the whole screen, film rail of the folder on the left, caption bar
+         top-left, paging arrows on the canvas edges, close flush in the corner. -->
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="Auto"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+
+        <!-- film rail: every image in the folder, click one to switch -->
+        <Border Grid.Column="0" Background="#66000000"
+                BorderBrush="#33FFFFFF" BorderThickness="0,0,1,0">
+            <Grid Margin="14,12">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+
+                <TextBlock Grid.Row="0" Text="图片" FontSize="12"
+                           Foreground="#99FFFFFF" Margin="2,0,0,10"/>
+
+                <ScrollViewer x:Name="RailScroller" Grid.Row="1"
+                              HorizontalScrollBarVisibility="Disabled"
+                              VerticalScrollBarVisibility="Auto"
+                              Focusable="False">
+                    <ItemsControl x:Name="RailList"
+                                  ItemTemplate="{StaticResource RailThumbTemplate}"/>
+                </ScrollViewer>
+            </Grid>
+        </Border>
+
+        <Grid Grid.Column="1">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+
+            <Grid Grid.Row="0" Margin="20,12,20,4">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock Text="&#xE8A5;" FontFamily="Segoe MDL2 Assets" FontSize="14"
+                               Foreground="#E6FFFFFF" VerticalAlignment="Center"/>
+                    <TextBlock x:Name="TitleText" Text="看图" FontSize="14" FontWeight="SemiBold"
+                               Foreground="White" Margin="10,0,0,0"
+                               VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
+                               MaxWidth="320"/>
+                    <TextBlock x:Name="PositionText" Text="" FontSize="12"
+                               Foreground="#99FFFFFF" Margin="12,0,0,0" VerticalAlignment="Center"/>
+                    <TextBlock x:Name="InfoText" Text="" FontSize="11"
+                               Foreground="#80FFFFFF" Margin="12,0,0,0" VerticalAlignment="Center"/>
+                </StackPanel>
+
+                <TextBlock Grid.Column="1"
+                           Text="滚轮缩放 · 拖动平移 · 双击 100% · ← → 切换图片 · R 旋转"
+                           FontSize="11" Foreground="#66FFFFFF"
+                           VerticalAlignment="Center" HorizontalAlignment="Center"/>
+
+                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center"
+                            Margin="0,0,54,0">
+                    <Button Content="旋转" Style="{StaticResource SmallButton}"
+                            Click="OnRotateClick" Margin="0,0,8,0"
+                            ToolTip="顺时针旋转 90°（R，Shift+R 反向）"/>
+                    <Button Content="复制" Style="{StaticResource SmallButton}"
+                            Click="OnCopyClick" Margin="0,0,8,0"
+                            ToolTip="复制图片到剪贴板（Ctrl+C）"/>
+                    <Button Content="文件夹" Style="{StaticResource SmallButton}"
+                            Click="OnRevealClick"
+                            ToolTip="在资源管理器中定位"/>
+                </StackPanel>
+            </Grid>
+
+            <Grid Grid.Row="1">
+                <controls:ImageSurface x:Name="Surface" ShowCheckerboard="True"
+                                       ViewChanged="OnSurfaceChanged"/>
+
+                <!-- paging arrows on the canvas edges, same discs as the PDF viewer -->
+                <Button x:Name="PrevButton" Style="{StaticResource CanvasNavButton}"
+                        HorizontalAlignment="Left" VerticalAlignment="Center"
+                        Margin="12,0,0,0" Content="&#xE76B;"
+                        Click="OnPrevClick" ToolTip="上一张（←）"/>
+                <Button x:Name="NextButton" Style="{StaticResource CanvasNavButton}"
+                        HorizontalAlignment="Right" VerticalAlignment="Center"
+                        Margin="0,0,12,0" Content="&#xE76C;"
+                        Click="OnNextClick" ToolTip="下一张（→）"/>
+
+                <Border x:Name="Toast" Visibility="Collapsed"
+                        HorizontalAlignment="Center" VerticalAlignment="Bottom"
+                        Margin="0,0,0,28" Padding="12,6" CornerRadius="8"
+                        Background="#E6202024">
+                    <TextBlock x:Name="ToastText" FontSize="12" Foreground="#FFF0F0F4"/>
+                </Border>
+            </Grid>
+
+            <!-- Same corner target as the PDF viewer: pointer to the top-right, one click, gone. -->
+            <Button Grid.Row="0" Grid.RowSpan="2"
+                    HorizontalAlignment="Right" VerticalAlignment="Top"
+                    Style="{StaticResource VeilCloseButton}"
+                    Content="&#xE711;"
+                    Click="OnCloseClick"
+                    ToolTip="关闭看图（Esc 同样生效）"/>
+        </Grid>
     </Grid>
 </Window>
