@@ -109,11 +109,10 @@
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
-                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="12,0,0,0">
-                    <TextBlock x:Name="TitleText" Text="看图" FontSize="12.5"
-                               Foreground="#FFF0F0F4" VerticalAlignment="Center"
-                               TextTrimming="CharacterEllipsis"/>
-                </StackPanel>
+                <TextBlock x:Name="TitleText" Text="看图" FontSize="12.5"
+                           Foreground="#FFF0F0F4" VerticalAlignment="Center"
+                           Margin="12,0,12,0"
+                           TextTrimming="CharacterEllipsis"/>
 
                 <StackPanel Grid.Column="1" Orientation="Horizontal"
                             VerticalAlignment="Center" Margin="8,0,6,0">

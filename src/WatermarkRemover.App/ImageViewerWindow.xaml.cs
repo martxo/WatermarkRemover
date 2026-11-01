@@ -89,7 +89,7 @@ public partial class ImageViewerWindow : Window
 
     // --- Loading ----------------------------------------------------------------
 
-    private void Load(string path)
+    private void Load(string path, bool resizeWindow = true)
     {
         BitmapSource? decoded = Decode(path, out int orientation);
         if (decoded is null)
@@ -132,7 +132,8 @@ public partial class ImageViewerWindow : Window
         Title = $"看图 · {Path.GetFileName(path)}";
 
         RefreshSiblings();
-        SizeWindowForImage();
+        // Walking a folder with ←/→ keeps the window put; only a fresh open re-sizes it.
+        if (resizeWindow) SizeWindowForImage();
         Apply();
     }
 
@@ -567,7 +568,7 @@ public partial class ImageViewerWindow : Window
         if (_siblings.Count <= 1) return;
         int next = _siblingIndex + delta;
         if (next < 0 || next >= _siblings.Count) return;
-        Load(_siblings[next]);
+        Load(_siblings[next], resizeWindow: false);
     }
 
     // --- Fullscreen --------------------------------------------------------------
