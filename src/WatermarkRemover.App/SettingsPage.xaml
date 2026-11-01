@@ -522,25 +522,73 @@
                         <TextBlock Text="全局快捷键" Style="{StaticResource SectionTitle}" Margin="0,0,0,8"/>
                         <Border Style="{StaticResource InsetCard}">
                             <StackPanel>
-                                <TextBlock Text="软件在后台（包括最小化时）也能用这个组合键开始截图。点击下面的输入框后直接按下组合键即可修改，至少需要包含 Ctrl / Alt / Shift / Win 中的一个。"
+                                <TextBlock Text="软件在后台（包括最小化时）也能用这些组合键。点击下面的输入框后直接按下组合键即可修改，至少需要包含 Ctrl / Alt / Shift / Win 中的一个。"
                                            Style="{StaticResource RowCaption}"
                                            Margin="0,0,0,10"/>
-                                <StackPanel Orientation="Horizontal">
-                                    <TextBox x:Name="ScreenshotHotkeyBox"
-                                             Width="200"
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="88"/>
+                                        <ColumnDefinition Width="200"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="Auto"/>
+                                    </Grid.RowDefinitions>
+
+                                    <TextBlock Grid.Row="0" Grid.Column="0" Text="区域截图"
+                                               FontSize="12" VerticalAlignment="Center"
+                                               Foreground="{StaticResource TextSecondaryBrush}"
+                                               Margin="0,0,12,8"/>
+                                    <TextBox x:Name="ScreenshotHotkeyBox" Grid.Row="0" Grid.Column="1"
+                                             Tag="region"
                                              Style="{StaticResource InputBox}"
-                                             IsReadOnly="True"
-                                             Cursor="Hand"
+                                             IsReadOnly="True" Cursor="Hand"
                                              Text="{Binding Settings.ScreenshotHotkey, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                                              PreviewKeyDown="OnScreenshotHotkeyPreviewKeyDown"
                                              ToolTip="点击后按下组合键"/>
-                                    <Button Content="恢复默认"
+                                    <Button Grid.Row="0" Grid.Column="2" Content="恢复默认"
+                                            Tag="region"
                                             Style="{StaticResource SmallButton}"
-                                            Margin="8,0,0,0"
-                                            VerticalAlignment="Center"
+                                            Margin="8,0,0,8" VerticalAlignment="Center"
                                             Click="OnResetScreenshotHotkey"/>
-                                </StackPanel>
-                                <TextBlock Text="改动随「返回应用」保存生效；保存前会自动检测组合键是否被其他程序占用，冲突时留在设置页并提示换键，不会丢掉原来的快捷键。"
+
+                                    <TextBlock Grid.Row="1" Grid.Column="0" Text="全屏截图"
+                                               FontSize="12" VerticalAlignment="Center"
+                                               Foreground="{StaticResource TextSecondaryBrush}"
+                                               Margin="0,0,12,8"/>
+                                    <TextBox x:Name="ScreenshotFullScreenHotkeyBox" Grid.Row="1" Grid.Column="1"
+                                             Tag="fullscreen"
+                                             Style="{StaticResource InputBox}"
+                                             IsReadOnly="True" Cursor="Hand"
+                                             Text="{Binding Settings.ScreenshotFullScreenHotkey, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                             PreviewKeyDown="OnScreenshotHotkeyPreviewKeyDown"
+                                             ToolTip="点击后按下组合键"/>
+                                    <Button Grid.Row="1" Grid.Column="2" Content="恢复默认"
+                                            Tag="fullscreen"
+                                            Style="{StaticResource SmallButton}"
+                                            Margin="8,0,0,8" VerticalAlignment="Center"
+                                            Click="OnResetScreenshotHotkey"/>
+
+                                    <TextBlock Grid.Row="2" Grid.Column="0" Text="截图晾衣绳"
+                                               FontSize="12" VerticalAlignment="Center"
+                                               Foreground="{StaticResource TextSecondaryBrush}"
+                                               Margin="0,0,12,0"/>
+                                    <TextBox x:Name="ScreenshotShelfHotkeyBox" Grid.Row="2" Grid.Column="1"
+                                             Tag="shelf"
+                                             Style="{StaticResource InputBox}"
+                                             IsReadOnly="True" Cursor="Hand"
+                                             Text="{Binding Settings.ScreenshotShelfHotkey, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                             PreviewKeyDown="OnScreenshotHotkeyPreviewKeyDown"
+                                             ToolTip="点击后按下组合键"/>
+                                    <Button Grid.Row="2" Grid.Column="2" Content="恢复默认"
+                                            Tag="shelf"
+                                            Style="{StaticResource SmallButton}"
+                                            Margin="8,0,0,0" VerticalAlignment="Center"
+                                            Click="OnResetScreenshotHotkey"/>
+                                </Grid>
+                                <TextBlock Text="改动随「返回应用」保存生效；保存前会检查格式、三个功能是否撞键、以及组合键是否被其他程序占用，冲突时留在设置页并提示换键，不会丢掉原来的快捷键。"
                                            Style="{StaticResource RowCaption}"
                                            Margin="0,8,0,0"/>
                             </StackPanel>

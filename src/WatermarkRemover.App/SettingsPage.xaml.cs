@@ -149,7 +149,18 @@ public partial class SettingsPage : UserControl
         if (parts.Count > 0 &&
             ScreenshotHotkey.TryParse($"{string.Join('+', parts)}+{name}", out ScreenshotHotkey gesture))
         {
-            vm.Settings.ScreenshotHotkey = gesture.ToString();
+            switch ((sender as FrameworkElement)?.Tag as string)
+            {
+                case "fullscreen":
+                    vm.Settings.ScreenshotFullScreenHotkey = gesture.ToString();
+                    break;
+                case "shelf":
+                    vm.Settings.ScreenshotShelfHotkey = gesture.ToString();
+                    break;
+                default:
+                    vm.Settings.ScreenshotHotkey = gesture.ToString();
+                    break;
+            }
         }
 
         e.Handled = true;
@@ -172,7 +183,20 @@ public partial class SettingsPage : UserControl
 
     private void OnResetScreenshotHotkey(object sender, RoutedEventArgs e)
     {
-        if (ViewModel is { } vm) vm.Settings.ScreenshotHotkey = ScreenshotHotkey.Default.ToString();
+        if (ViewModel is not { } vm) return;
+
+        switch ((sender as FrameworkElement)?.Tag as string)
+        {
+            case "fullscreen":
+                vm.Settings.ScreenshotFullScreenHotkey = ScreenshotHotkey.FullScreenDefault.ToString();
+                break;
+            case "shelf":
+                vm.Settings.ScreenshotShelfHotkey = ScreenshotHotkey.ShelfDefault.ToString();
+                break;
+            default:
+                vm.Settings.ScreenshotHotkey = ScreenshotHotkey.Default.ToString();
+                break;
+        }
     }
 
     private void OnBrowseScreenshotDirectory(object sender, RoutedEventArgs e)

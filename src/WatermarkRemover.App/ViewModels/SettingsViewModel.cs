@@ -705,6 +705,8 @@ public sealed class SettingsViewModel : ObservableObject
         _target.ScanOutputDirectory = Settings.ScanOutputDirectory?.Trim() ?? string.Empty;
         _target.TransferOutputDirectory = Settings.TransferOutputDirectory?.Trim() ?? string.Empty;
         _target.ScreenshotHotkey = Settings.ScreenshotHotkey;
+        _target.ScreenshotFullScreenHotkey = Settings.ScreenshotFullScreenHotkey;
+        _target.ScreenshotShelfHotkey = Settings.ScreenshotShelfHotkey;
         _target.ScreenshotOutputDirectory = Settings.ScreenshotOutputDirectory?.Trim() ?? string.Empty;
         _target.ScreenshotAutoCopy = Settings.ScreenshotAutoCopy;
         _target.ScreenshotAutoSave = Settings.ScreenshotAutoSave;

@@ -27,12 +27,16 @@ public partial class MainWindow : Window
     private readonly MainViewModel _viewModel = new();
     private readonly Services.IDialogService _dialogs = new Services.DialogService();
 
-    /// <summary>System-wide shortcut that opens the screenshot overlay while the app is in the background.</summary>
+    /// <summary>System-wide shortcuts for the three screenshot actions; one service each so
+    /// each gesture keeps its own registration id and fallback.</summary>
     private GlobalHotkeyService? _hotkeys;
+    private GlobalHotkeyService? _fullScreenHotkeys;
     private GlobalHotkeyService? _shelfHotkeys;
 
-    /// <summary>The gesture currently registered (null when none); restored if a new one fails.</summary>
+    /// <summary>The gestures currently registered (null when none); restored if a new one fails.</summary>
     private ScreenshotHotkey? _activeHotkey;
+    private ScreenshotHotkey? _activeFullScreenHotkey;
+    private ScreenshotHotkey? _activeShelfHotkey;
 
     private ScreenshotShelfWindow? _shelf;
     private TrayIconService? _tray;
@@ -74,14 +78,16 @@ public partial class MainWindow : Window
             return ScreenshotOverlaySession.CaptureFullScreenAsync(this, _viewModel.Settings, delaySeconds);
         };
         // The settings page asks before saving: an occupied gesture is rejected there, so the
-        // old shortcut and the saved settings both stay untouched.
+        // old shortcut and the saved settings both stay untouched. A gesture already used by
+        // one of our own three features counts as free — saving re-registers all of them.
         _viewModel.ScreenshotHotkeyValidator = hotkey =>
         {
-            if (_activeHotkey == hotkey) return null;
+            if (_activeHotkey == hotkey || _activeFullScreenHotkey == hotkey || _activeShelfHotkey == hotkey)
+                return null;
             return _hotkeys is null ? null
                 : _hotkeys.CanRegister(hotkey, out string? error) ? null : error;
         };
-        _viewModel.ScreenshotHotkeyChanged += (_, _) => RegisterScreenshotHotkey(notifyFailure: true);
+        _viewModel.ScreenshotHotkeyChanged += (_, _) => RegisterScreenshotHotkeys(notifyFailure: true);
         _viewModel.ScreenshotShelfRequested += (_, _) => ToggleScreenshotShelf();
         _viewModel.ScreenshotPinRequested += (_, path) => PinnedImageWindow.ShowFor(path);
         _viewModel.ScreenshotOcrRequested += (_, path) => _ = ShowScreenshotOcrAsync(path);
@@ -179,13 +185,12 @@ public partial class MainWindow : Window
         int preference = DwmwcpRound;
         _ = DwmSetWindowAttribute(hwnd, DwmwaWindowCornerPreference, ref preference, sizeof(int));
 
-        // The message loop exists now, so WM_HOTKEY has somewhere to land.
+        // The message loop exists now, so WM_HOTKEY has somewhere to land. Three ids: region
+        // capture, full-screen capture and the shelf, each independently configurable.
         _hotkeys = new GlobalHotkeyService(hwnd, 0x5348, OnScreenshotHotkey);
-        RegisterScreenshotHotkey();
-
+        _fullScreenHotkeys = new GlobalHotkeyService(hwnd, 0x534B, OnFullScreenHotkey);
         _shelfHotkeys = new GlobalHotkeyService(hwnd, 0x534A, ToggleScreenshotShelf);
-        if (!_shelfHotkeys.Register(ScreenshotHotkey.ShelfDefault, out string? shelfError))
-            AppLog.Warn($"注册晾衣绳快捷键 {ScreenshotHotkey.ShelfDefault} 失败：{shelfError}");
+        RegisterScreenshotHotkeys();
 
         _tray = new TrayIconService(hwnd, ShowFromTray, () => _ = _viewModel.CaptureScreenshotAsync(),
             ToggleScreenshotShelf, ExitFromTray);
@@ -275,44 +280,65 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Hotkey / settings: re-point the global shortcut and tell the screenshot page. A failed
-    /// registration after the user changed the gesture is also reported in a dialog — silently
-    /// saving a shortcut that does nothing is exactly the confusing case this avoids.
+    /// Re-points all three screenshot shortcuts. Every service releases its gesture first, so
+    /// the three are cleared up front: swapping two gestures between slots would otherwise fail
+    /// halfway through, while the target id still held the combination.
+    /// A failed change is reported and the previous gesture is restored — silently saving a
+    /// shortcut that does nothing is exactly the confusing case this avoids.
     /// </summary>
-    private void RegisterScreenshotHotkey(bool notifyFailure = false)
+    private void RegisterScreenshotHotkeys(bool notifyFailure = false)
     {
-        if (_hotkeys is null) return;
+        _hotkeys?.Clear();
+        _fullScreenHotkeys?.Clear();
+        _shelfHotkeys?.Clear();
 
-        ScreenshotHotkey requested = ScreenshotHotkey.ParseOrDefault(_viewModel.Settings.ScreenshotHotkey);
-        if (_activeHotkey == requested)
+        ScreenshotHotkey region = ScreenshotHotkey.ParseOrDefault(_viewModel.Settings.ScreenshotHotkey);
+        ScreenshotHotkey fullScreen = ScreenshotHotkey.ParseOrDefault(
+            _viewModel.Settings.ScreenshotFullScreenHotkey);
+        ScreenshotHotkey shelf = ScreenshotHotkey.ParseOrDefault(_viewModel.Settings.ScreenshotShelfHotkey);
+
+        bool regionOk = ApplyGesture(_hotkeys, region, ref _activeHotkey, "截图快捷键", notifyFailure);
+        ApplyGesture(_fullScreenHotkeys, fullScreen, ref _activeFullScreenHotkey, "全屏截图快捷键", notifyFailure);
+        ApplyGesture(_shelfHotkeys, shelf, ref _activeShelfHotkey, "截图晾衣绳快捷键", notifyFailure);
+
+        // The screenshot page's status line talks about the region gesture.
+        _viewModel.ReportScreenshotHotkey(
+            region, regionOk,
+            regionOk ? null : "注册失败，可能已被其他程序占用",
+            regionOk ? null : _activeHotkey);
+    }
+
+    /// <summary>Registers one gesture and puts the previous one back when it is rejected.</summary>
+    private bool ApplyGesture(
+        GlobalHotkeyService? service,
+        ScreenshotHotkey requested,
+        ref ScreenshotHotkey? active,
+        string label,
+        bool notifyFailure)
+    {
+        if (service is null) return false;
+        if (active == requested) return true;
+
+        if (service.Register(requested, out string? error))
         {
-            _viewModel.ReportScreenshotHotkey(requested, true, null);
-            return;
+            active = requested;
+            return true;
         }
 
-        bool registered = _hotkeys.Register(requested, out string? error);
-        if (registered)
-        {
-            _activeHotkey = requested;
-            _viewModel.ReportScreenshotHotkey(requested, true, null);
-            return;
-        }
-
-        // Registration unregisters the old gesture first. Put it back so a failed change never
-        // leaves the user with no screenshot hotkey at all.
-        ScreenshotHotkey? fallback = _activeHotkey;
-        bool restored = fallback is { } previous && _hotkeys.Register(previous, out _);
-        _activeHotkey = restored ? fallback : null;
-        _viewModel.ReportScreenshotHotkey(requested, false, error, restored ? fallback : null);
+        ScreenshotHotkey? fallback = active;
+        bool restored = fallback is { } previous && service.Register(previous, out _);
+        active = restored ? fallback : null;
 
         if (notifyFailure)
         {
             string kept = restored ? $"\n\n仍继续使用原快捷键 {fallback}。" : string.Empty;
             _dialogs.Warn(
-                $"截图快捷键 {requested} 未能注册：{error ?? "未知原因"}。{kept}\n\n" +
-                "请换一个组合键，或先关闭占用该快捷键的程序；截图页面上的「开始截图」按钮始终可用。",
-                "截图快捷键");
+                $"{label} {requested} 未能注册：{error ?? "未知原因"}。{kept}\n\n" +
+                "请换一个组合键，或先关闭占用该快捷键的程序；截图页面上的按钮始终可用。",
+                label);
         }
+
+        return false;
     }
 
     /// <summary>
@@ -324,6 +350,13 @@ public partial class MainWindow : Window
     {
         if (_viewModel.IsSettingsOpen) return;
         _ = _viewModel.CaptureScreenshotAsync();
+    }
+
+    /// <summary>WM_HOTKEY for a full-screen capture (no region overlay).</summary>
+    private void OnFullScreenHotkey()
+    {
+        if (_viewModel.IsSettingsOpen) return;
+        _ = _viewModel.CaptureFullScreenAsync(0);
     }
 
     /// <summary>

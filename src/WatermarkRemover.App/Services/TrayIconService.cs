@@ -66,7 +66,7 @@ public sealed class TrayIconService : IDisposable
             uFlags = NifMessage | NifIcon | NifTip,
             uCallbackMessage = CallbackMessage,
             hIcon = _icon,
-            szTip = "办公助理 · 截图 Ctrl+Alt+A · 最近截图 Ctrl+Alt+T",
+            szTip = "办公助理 · 截图与最近截图快捷键可在设置中修改",
             szInfo = string.Empty,
             szInfoTitle = string.Empty,
         };
@@ -123,8 +123,8 @@ public sealed class TrayIconService : IDisposable
     {
         IntPtr menu = CreatePopupMenu();
         AppendMenu(menu, MfString, MenuOpen, "打开办公助理");
-        AppendMenu(menu, MfString, MenuCapture, "截图 (Ctrl+Alt+A)");
-        AppendMenu(menu, MfString, MenuShelf, "最近截图 (Ctrl+Alt+T)");
+        AppendMenu(menu, MfString, MenuCapture, "截图（快捷键见设置）");
+        AppendMenu(menu, MfString, MenuShelf, "最近截图");
         AppendMenu(menu, MfSeparator, 0, null);
         AppendMenu(menu, MfString, MenuExit, "退出程序");
 

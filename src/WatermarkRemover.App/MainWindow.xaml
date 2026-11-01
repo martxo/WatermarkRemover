@@ -774,6 +774,7 @@
                     <Button Content="全屏截图"
                             Style="{StaticResource SmallButton}"
                             Command="{Binding CaptureFullScreenCommand}"
+                            ToolTip="整屏截图（不含框选）；快捷键在「设置 → 截图设置 → 全局快捷键」中修改"
                             Margin="10,0,0,0" VerticalAlignment="Center"/>
                     <Button Content="3 秒后全屏"
                             Style="{StaticResource SmallButton}"
@@ -791,7 +792,7 @@
                             Style="{StaticResource SmallButton}"
                             Command="{Binding ShowScreenshotShelfCommand}"
                             Margin="12,0,0,0" VerticalAlignment="Center"
-                            ToolTip="Ctrl+Alt+T：顶部滑出最近截图，单击复制、拖出使用、双击打开"/>
+                            ToolTip="晾衣绳快捷键（默认 Ctrl+Alt+T）：顶部滑出最近截图，单击复制、拖出使用、双击打开"/>
                     <Button Content="打开截图文件夹"
                             Style="{StaticResource SmallButton}"
                             Command="{Binding OpenScreenshotFolderCommand}"
@@ -807,7 +808,7 @@
                            Foreground="{StaticResource TextSecondaryBrush}"
                            TextTrimming="CharacterEllipsis"
                            Margin="0,3,0,0"/>
-                <TextBlock Text="鼠标移到屏幕顶部、按 Ctrl+Alt+T 或点「截图晾衣绳」，晾衣绳会从屏幕上方滑下：单击复制、拖出使用、双击打开；记录里的「贴图」会把截图置顶显示。"
+                <TextBlock Text="鼠标移到屏幕顶部、按晾衣绳快捷键（默认 Ctrl+Alt+T）或点「截图晾衣绳」，晾衣绳会从屏幕上方滑下：单击复制、拖出使用、双击打开；记录里的「贴图」会把截图置顶显示。"
                            FontSize="11"
                            Foreground="{StaticResource TextSecondaryBrush}"
                            TextWrapping="Wrap"

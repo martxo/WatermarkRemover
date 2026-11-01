@@ -79,6 +79,10 @@ public sealed class GlobalHotkeyService : IDisposable
         return false;
     }
 
+    /// <summary>Releases the held gesture without registering a new one (used before a
+    /// multi-shortcut re-registration so slots can swap combinations).</summary>
+    public void Clear() => Unregister();
+
     private static bool TryMap(ScreenshotHotkey hotkey, out uint modifiers, out uint virtualKey, out string? error)
     {
         modifiers = 0;

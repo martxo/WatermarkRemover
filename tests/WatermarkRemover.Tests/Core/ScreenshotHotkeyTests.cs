@@ -24,6 +24,14 @@ public sealed class ScreenshotHotkeyTests
         Assert.Equal(ScreenshotHotkey.ShelfDefault, parsed);
     }
 
+    [Fact]
+    public void The_full_screen_shortcut_is_ctrl_alt_f_and_distinct_from_the_other_two()
+    {
+        Assert.Equal("Ctrl+Alt+F", ScreenshotHotkey.FullScreenDefault.ToString());
+        Assert.NotEqual(ScreenshotHotkey.Default, ScreenshotHotkey.FullScreenDefault);
+        Assert.NotEqual(ScreenshotHotkey.ShelfDefault, ScreenshotHotkey.FullScreenDefault);
+    }
+
     [Theory]
     [InlineData("ctrl+alt+a")]
     [InlineData("CONTROL+ALT+A")]

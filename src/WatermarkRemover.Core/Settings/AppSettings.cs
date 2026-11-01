@@ -107,6 +107,14 @@ public sealed class AppSettings
     public string ScreenshotHotkey { get; set; } =
         WatermarkRemover.Core.Features.Screenshot.ScreenshotHotkey.Default.ToString();
 
+    /// <summary>Global shortcut for a full-screen capture, skipping the region overlay.</summary>
+    public string ScreenshotFullScreenHotkey { get; set; } =
+        WatermarkRemover.Core.Features.Screenshot.ScreenshotHotkey.FullScreenDefault.ToString();
+
+    /// <summary>Global shortcut that slides the recent-screenshot shelf down.</summary>
+    public string ScreenshotShelfHotkey { get; set; } =
+        WatermarkRemover.Core.Features.Screenshot.ScreenshotHotkey.ShelfDefault.ToString();
+
     /// <summary>Where screenshots are saved (截图设置). Empty = 图片\Screenshots.</summary>
     public string ScreenshotOutputDirectory { get; set; } = string.Empty;
 
@@ -158,6 +166,8 @@ public sealed class AppSettings
         ScanOutputDirectory = ScanOutputDirectory,
         TransferOutputDirectory = TransferOutputDirectory,
         ScreenshotHotkey = ScreenshotHotkey,
+        ScreenshotFullScreenHotkey = ScreenshotFullScreenHotkey,
+        ScreenshotShelfHotkey = ScreenshotShelfHotkey,
         ScreenshotOutputDirectory = ScreenshotOutputDirectory,
         ScreenshotAutoCopy = ScreenshotAutoCopy,
         ScreenshotAutoSave = ScreenshotAutoSave,

@@ -115,23 +115,54 @@ public sealed partial class MainViewModel
 
         // Screenshot settings: a malformed gesture would silently register nothing, and a
         // folder that cannot be created would lose every capture. Both are caught here.
-        if (!ScreenshotHotkey.TryParse(page.Settings.ScreenshotHotkey, out ScreenshotHotkey hotkey))
+        (string Value, string Label)[] gestures =
         {
-            _dialogs.Warn("截图快捷键格式不正确，请填入类似 Ctrl+Alt+A 的组合（至少包含一个修饰键）。", "提示");
-            return false;
+            (page.Settings.ScreenshotHotkey, "区域截图"),
+            (page.Settings.ScreenshotFullScreenHotkey, "全屏截图"),
+            (page.Settings.ScreenshotShelfHotkey, "截图晾衣绳"),
+        };
+
+        var parsed = new List<ScreenshotHotkey>(gestures.Length);
+        foreach ((string value, string label) in gestures)
+        {
+            if (!ScreenshotHotkey.TryParse(value, out ScreenshotHotkey gesture))
+            {
+                _dialogs.Warn(
+                    $"「{label}」快捷键格式不正确，请填入类似 Ctrl+Alt+A 的组合（至少包含一个修饰键）。",
+                    "提示");
+                return false;
+            }
+
+            parsed.Add(gesture);
         }
 
-        // Preflight the gesture before committing: saving a shortcut another app owns would
-        // otherwise silently leave the screenshot feature without a working hotkey.
-        if (ScreenshotHotkeyValidator?.Invoke(hotkey) is { Length: > 0 } hotkeyConflict)
+        // Two features on one combination would make the second registration fail.
+        for (int i = 0; i < parsed.Count; i++)
         {
+            for (int j = i + 1; j < parsed.Count; j++)
+            {
+                if (parsed[i] != parsed[j]) continue;
+                _dialogs.Warn(
+                    $"「{gestures[i].Label}」和「{gestures[j].Label}」都设成了 {parsed[i]}，请给其中一个换组合键。",
+                    "截图快捷键");
+                return false;
+            }
+        }
+
+        // Preflight every gesture before committing: saving a shortcut another app owns would
+        // otherwise silently leave that feature without a working hotkey.
+        for (int i = 0; i < parsed.Count; i++)
+        {
+            if (ScreenshotHotkeyValidator?.Invoke(parsed[i]) is not { Length: > 0 } conflict) continue;
             _dialogs.Warn(
-                $"截图快捷键 {hotkey} 不可用：{hotkeyConflict}。\n\n请换一个组合键后再保存。",
+                $"「{gestures[i].Label}」快捷键 {parsed[i]} 不可用：{conflict}。\n\n请换一个组合键后再保存。",
                 "截图快捷键");
             return false;
         }
 
-        page.Settings.ScreenshotHotkey = hotkey.ToString();
+        page.Settings.ScreenshotHotkey = parsed[0].ToString();
+        page.Settings.ScreenshotFullScreenHotkey = parsed[1].ToString();
+        page.Settings.ScreenshotShelfHotkey = parsed[2].ToString();
         string screenshotDirectory = page.Settings.ScreenshotOutputDirectory?.Trim() ?? string.Empty;
         if (screenshotDirectory.Length != 0)
         {
