@@ -178,6 +178,17 @@
         </Style.Triggers>
     </Style>
 
+    <!-- Corner close for the fullscreen viewers (PDF pages, screenshots): the same 46x44
+         top-right target, white glyph, red on hover. Shared so every viewer closes alike. -->
+    <Style x:Key="VeilCloseButton" TargetType="Button" BasedOn="{StaticResource CaptionButton}">
+        <Style.Triggers>
+            <Trigger Property="IsMouseOver" Value="True">
+                <Setter Property="Background" Value="#C42B1C"/>
+                <Setter Property="Foreground" Value="White"/>
+            </Trigger>
+        </Style.Triggers>
+    </Style>
+
     <!-- Copy-error pill shown on failed rows: puts the full diagnostic report on the clipboard -->
     <Style x:Key="RowCopyErrorButton" TargetType="Button">
         <Setter Property="Background" Value="{StaticResource SurfaceAltBrush}"/>
