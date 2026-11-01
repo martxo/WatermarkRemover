@@ -305,7 +305,9 @@ public partial class ImageViewerWindow : Window
             if (bitmap is null) return null;
             const int width = 152;
             int height = Math.Max(1, (int)Math.Round(bitmap.Height * (width / (double)bitmap.Width)));
-            using SKBitmap? resized = bitmap.Resize(new SKImageInfo(width, height), SKFilterQuality.Medium);
+            using SKBitmap? resized = bitmap.Resize(
+                new SKImageInfo(width, height),
+                new SKSamplingOptions(SKFilterMode.Linear, SKMipmapMode.None));
             return resized is null ? null : SkiaBitmapBridge.ToBitmapSource(resized);
         }
         catch (Exception ex)
