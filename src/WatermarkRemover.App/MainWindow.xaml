@@ -1213,9 +1213,9 @@
                                     </Grid.ColumnDefinitions>
 
                                     <StackPanel Grid.Column="0">
-                                        <!-- Tendedero-style quick shelf: a screenshot row shows its own
-                                             thumbnail. Single click copies it, dragging out hands the file
-                                             to any app/folder. -->
+                                        <!-- Every row opens on a thumbnail click: a screenshot opens
+                                             the built-in viewer, a PDF opens its preview. Dragging out
+                                             still hands the file to any app/folder. -->
                                         <Image Source="{Binding Thumbnail}"
                                                Height="54" MaxWidth="110"
                                                HorizontalAlignment="Left"
@@ -1223,7 +1223,7 @@
                                                Margin="0,0,0,8"
                                                RenderOptions.BitmapScalingMode="HighQuality"
                                                Cursor="Hand"
-                                               ToolTip="单击复制图片；按住拖到其他程序或文件夹即可发送"
+                                               ToolTip="单击查看图片（滚轮缩放、双击 100%）；按住拖到其他程序或文件夹即可发送"
                                                MouseLeftButtonDown="OnScreenshotThumbnailMouseDown"
                                                MouseMove="OnScreenshotThumbnailMouseMove"
                                                MouseLeftButtonUp="OnScreenshotThumbnailMouseUp"

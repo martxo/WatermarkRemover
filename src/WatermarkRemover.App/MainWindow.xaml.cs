@@ -661,7 +661,9 @@ public partial class MainWindow : Window
         _thumbnailDragStarted = false;
         if (job is null || dragged) return;
 
-        job.CopyImageCommand.Execute(null);
+        // Same gesture as a PDF row's thumbnail: a click opens instead of copying, so every
+        // record in the list behaves the same way. Copy stays available in the row's actions.
+        job.OpenImageCommand.Execute(null);
         e.Handled = true;
     }
 }
