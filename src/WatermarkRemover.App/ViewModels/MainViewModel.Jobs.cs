@@ -251,4 +251,126 @@ public sealed partial class MainViewModel
         ScheduleJournalSave();
         OnPropertyChanged(nameof(CanUploadBatch));
     }
+
+    // --- 任务中心（未完成任务 / 停止 / 继续） --------------------------
+
+    /// <summary>Reads the unfinished-file record back at startup; missing files are dropped.</summary>
+    private void RestorePending()
+    {
+        if (_pendingJournal is null) return;
+
+        _pending.Clear();
+        foreach (var entry in _pendingJournal.Load())
+        {
+            if (!File.Exists(entry.InputPath)) continue;
+            if (!_composition.Registry.Features.Any(f => f.Id == entry.SectionId)) continue;
+            _pending.Add(entry);
+        }
+
+        _pendingJournal.Save(_pending);
+        RaisePendingChanged();
+        if (_pending.Count > 0)
+            AppLog.Info($"任务中心：{_pending.Count} 个文件在退出时未处理完，可继续");
+    }
+
+    /// <summary>Snapshots the batch into the pending file before the first job starts.</summary>
+    private void RecordPending(IEnumerable<FileJobViewModel> jobs)
+    {
+        var batch = jobs.ToList();
+        var paths = batch.Select(j => j.InputPath).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        _pending.RemoveAll(e => paths.Contains(e.InputPath));
+        _pending.AddRange(batch.Select(j =>
+            new PendingTaskEntry(j.OwnerFeatureId ?? SelectedFeature.Id, j.InputPath, DateTime.Now)));
+
+        _pendingJournal?.Save(_pending);
+        RaisePendingChanged();
+    }
+
+    /// <summary>One file finished (or was stopped): it no longer belongs to the unfinished set.</summary>
+    private void ClearPending(FileJobViewModel job)
+    {
+        // Called from the queue's worker threads: the list and the banner are UI state.
+        var dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher is not null && !dispatcher.CheckAccess())
+        {
+            dispatcher.BeginInvoke(() => ClearPending(job));
+            return;
+        }
+
+        if (_pending.RemoveAll(e => string.Equals(
+                e.InputPath, job.InputPath, StringComparison.OrdinalIgnoreCase)) == 0)
+        {
+            return;
+        }
+
+        _pendingJournal?.Save(_pending);
+        RaisePendingChanged();
+    }
+
+    /// <summary>Stops the running batch; only files that have not started are cancelled.</summary>
+    private void StopBatch()
+    {
+        if (_batchCancellation is null || _isStopping) return;
+
+        _isStopping = true;
+        StopBatchCommand.RaiseCanExecuteChanged();
+        AppLog.Info("任务中心：用户停止当前批次，未开始的文件标记为已停止");
+        _batchCancellation.Cancel();
+    }
+
+    /// <summary>Drops the interrupted-run record without touching the files.</summary>
+    private void DiscardPending()
+    {
+        if (_pending.Count == 0) return;
+
+        AppLog.Info($"任务中心：丢弃 {_pending.Count} 个未完成任务记录");
+        _pending.Clear();
+        _pendingJournal?.Save(_pending);
+        RaisePendingChanged();
+    }
+
+    /// <summary>Processes every file the last run left behind, section by section.</summary>
+    private async Task ResumePendingAsync()
+    {
+        if (IsBusy || _pending.Count == 0) return;
+
+        foreach (var group in _pending.GroupBy(e => e.SectionId).ToList())
+        {
+            IFeature? feature = _composition.Registry.Features.FirstOrDefault(f => f.Id == group.Key);
+            if (feature is null) continue;
+
+            var jobs = new List<FileJobViewModel>();
+            foreach (var entry in group)
+            {
+                if (!File.Exists(entry.InputPath)) continue;
+
+                var job = new FileJobViewModel(entry.InputPath, Settings.QuickSuffixes)
+                {
+                    OwnerFeatureId = feature.Id,
+                };
+                WireJob(job);
+                Board.Add(job);
+                jobs.Add(job);
+            }
+
+            if (jobs.Count == 0) continue;
+            await ProcessJobsAsync(jobs, feature).ConfigureAwait(true);
+        }
+
+        // Files deleted while the app was closed fall out here.
+        _pending.RemoveAll(e => !File.Exists(e.InputPath));
+        _pendingJournal?.Save(_pending);
+        RaisePendingChanged();
+    }
+
+    private void RaisePendingChanged()
+    {
+        OnPropertyChanged(nameof(HasPendingTasks));
+        OnPropertyChanged(nameof(PendingTaskCount));
+        OnPropertyChanged(nameof(PendingTasksText));
+        OnPropertyChanged(nameof(ShowPendingBanner));
+        ResumePendingCommand.RaiseCanExecuteChanged();
+        DiscardPendingCommand.RaiseCanExecuteChanged();
+    }
 }
+

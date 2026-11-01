@@ -215,6 +215,13 @@ public sealed partial class MainViewModel
     private async Task ProcessJobsAsync(IReadOnlyList<FileJobViewModel> jobs, IFeature feature)
     {
         IsBusy = true;
+        _isStopping = false;
+        _batchCancellation = new CancellationTokenSource();
+        CancellationToken cancellation = _batchCancellation.Token;
+        // Written before the first job runs: a crash or an update mid-batch leaves a record of
+        // the files that still need work, and the startup banner offers to continue them.
+        RecordPending(jobs);
+
         var stopwatch = Stopwatch.StartNew();
         try
         {
@@ -235,14 +242,18 @@ public sealed partial class MainViewModel
             await _queue.RunAsync(jobs, feature, context, maxConcurrency, job =>
             {
                 Board.MarkCompleted(job);
+                ClearPending(job);
                 if (Interlocked.Decrement(ref pendingRows) == 0) _preview.OpenWhenFinished(job);
-            }).ConfigureAwait(true);
+            }, cancellation).ConfigureAwait(true);
 
             AppLog.Info($"批次处理结束：{jobs.Count} 个文件，并发 {maxConcurrency}，" +
                         $"总耗时 {stopwatch.ElapsedMilliseconds} ms");
         }
         finally
         {
+            _batchCancellation.Dispose();
+            _batchCancellation = null;
+            _isStopping = false;
             IsBusy = false;
         }
     }

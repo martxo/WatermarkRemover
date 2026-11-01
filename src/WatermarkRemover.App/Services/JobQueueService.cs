@@ -39,20 +39,27 @@ public sealed class JobQueueService
         IFeature feature,
         FeatureContext context,
         int maxConcurrency,
-        Action<FileJobViewModel> onJobFinished)
+        Action<FileJobViewModel> onJobFinished,
+        CancellationToken cancellation = default)
     {
         using var throttle = new SemaphoreSlim(maxConcurrency, maxConcurrency);
 
         await Task.WhenAll(jobs.Select(async job =>
         {
             long waitStart = Stopwatch.GetTimestamp();
-            await throttle.WaitAsync().ConfigureAwait(false);
+            await throttle.WaitAsync(cancellation).ConfigureAwait(false);
             long waitMs = (long)Stopwatch.GetElapsedTime(waitStart).TotalMilliseconds;
             AppLog.Debug($"任务排队：{Path.GetFileName(job.InputPath)} 等待 {waitMs} ms");
 
             try
             {
-                await ExecuteAsync(job, feature, context).ConfigureAwait(false);
+                // 停止 = 不再开始新文件；正在跑的那一个会跑完，因为特征处理是同步的。
+                if (cancellation.IsCancellationRequested) job.MarkStopped();
+                else await ExecuteAsync(job, feature, context).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                job.MarkStopped();
             }
             finally
             {

@@ -686,6 +686,13 @@ public sealed class FileJobViewModel : ObservableObject
         }
     }
 
+    /// <summary>Batch stopped before this file started; the row says so instead of pretending it ran.</summary>
+    public void MarkStopped()
+    {
+        Detail = "已停止，未处理";
+        State = JobState.Skipped;
+    }
+
     public void Apply(FeatureResult result)
     {
         ProcessedAt = DateTime.Now;

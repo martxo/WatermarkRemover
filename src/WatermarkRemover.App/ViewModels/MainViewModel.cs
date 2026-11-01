@@ -55,6 +55,10 @@ public sealed partial class MainViewModel : ObservableObject
     private readonly IDialogService _dialogs;
     private readonly IShellOpenService _shell;
     private readonly TaskJournal? _journal;
+    private readonly PendingTaskJournal? _pendingJournal;
+    private readonly List<PendingTaskEntry> _pending = new();
+    private CancellationTokenSource? _batchCancellation;
+    private bool _isStopping;
     private int _journalSaveQueued;
     private readonly JobQueueService _queue = new();
     private readonly ScanCoordinator _scan;
@@ -68,7 +72,8 @@ public sealed partial class MainViewModel : ObservableObject
 
     public MainViewModel()
         : this(DialogService.Default, ShellOpenService.Default,
-            new TaskJournal(Path.Combine(AppFolders.Root, "journal")))
+            new TaskJournal(Path.Combine(AppFolders.Root, "journal")),
+            pendingJournal: new PendingTaskJournal(Path.Combine(AppFolders.Root, "journal")))
     {
     }
 
@@ -79,11 +84,13 @@ public sealed partial class MainViewModel : ObservableObject
         IDialogService dialogs,
         IShellOpenService shell,
         TaskJournal? journal = null,
-        AppComposition? composition = null)
+        AppComposition? composition = null,
+        PendingTaskJournal? pendingJournal = null)
     {
         _dialogs = dialogs ?? throw new ArgumentNullException(nameof(dialogs));
         _shell = shell ?? throw new ArgumentNullException(nameof(shell));
         _journal = journal;
+        _pendingJournal = pendingJournal;
         _composition = composition ?? AppComposition.Shared;
 
         Settings = SettingsService.Load();
@@ -134,6 +141,12 @@ public sealed partial class MainViewModel : ObservableObject
             p => p is FileJobViewModel);
         UploadVisibleCommand = new RelayCommand(() => _ = UploadVisibleAsync(), () => CanUploadBatch);
 
+        // 任务中心：停止当前批次，以及重启后继续上次没跑完的文件。
+        StopBatchCommand = new RelayCommand(StopBatch, () => IsBusy && !_isStopping);
+        ResumePendingCommand = new RelayCommand(
+            () => _ = ResumePendingAsync(), () => HasPendingTasks && IsIdle);
+        DiscardPendingCommand = new RelayCommand(DiscardPending, () => HasPendingTasks);
+
         // --- 截图 ---
         // The overlay lives in the shell; this page keeps the launcher, hotkey state and records.
         CaptureScreenshotCommand = new RelayCommand(
@@ -161,7 +174,28 @@ public sealed partial class MainViewModel : ObservableObject
 
         // Last, once every service the restored rows talk to (netdisk accounts included) exists.
         RestoreJournal();
+        RestorePending();
     }
+
+    /// <summary>Stops the running batch: files that have not started are marked 已停止.</summary>
+    public RelayCommand StopBatchCommand { get; }
+
+    /// <summary>Re-queues the files an interrupted run left behind.</summary>
+    public RelayCommand ResumePendingCommand { get; }
+
+    /// <summary>Drops the interrupted-run record without processing anything.</summary>
+    public RelayCommand DiscardPendingCommand { get; }
+
+    public bool HasPendingTasks => _pending.Count > 0;
+
+    public int PendingTaskCount => _pending.Count;
+
+    /// <summary>The task-center line shown above the list after an interrupted run.</summary>
+    public string PendingTasksText => _pending.Count == 0
+        ? string.Empty
+        : $"上次有 {_pending.Count} 个文件没处理完（{Path.GetFileName(_pending[0].InputPath)} 等），可以继续。";
+
+    public bool ShowPendingBanner => HasPendingTasks && !IsBusy;
 
     public AppSettings Settings { get; }
 
@@ -283,8 +317,11 @@ public sealed partial class MainViewModel : ObservableObject
             if (SetProperty(ref _isBusy, value))
             {
                 OnPropertyChanged(nameof(IsIdle));
+                OnPropertyChanged(nameof(ShowPendingBanner));
                 Board.IsBusy = value;
                 ScanCommand.RaiseCanExecuteChanged();
+                StopBatchCommand?.RaiseCanExecuteChanged();
+                ResumePendingCommand?.RaiseCanExecuteChanged();
                 Netdisk.RefreshCommandState();
             }
         }
