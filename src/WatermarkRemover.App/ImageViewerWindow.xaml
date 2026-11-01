@@ -99,12 +99,15 @@
                 </StackPanel>
 
                 <TextBlock Grid.Column="1"
-                           Text="滚轮缩放 · 拖动平移 · 双击 100% · ← → 切换图片 · R 旋转"
+                           Text="滚轮缩放 · 拖动平移 · 双击 100% · ← → 切换图片 · R 旋转 · M 标注"
                            FontSize="11" Foreground="#66FFFFFF"
                            VerticalAlignment="Center" HorizontalAlignment="Center"/>
 
                 <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center"
                             Margin="0,0,54,0">
+                    <Button Content="标注" Style="{StaticResource SmallButton}"
+                            Click="OnMarkupClick" Margin="0,0,8,0"
+                            ToolTip="标注/打码，保存为同目录副本，原图不动（M）"/>
                     <Button Content="旋转" Style="{StaticResource SmallButton}"
                             Click="OnRotateClick" Margin="0,0,8,0"
                             ToolTip="顺时针旋转 90°（R，Shift+R 反向）"/>

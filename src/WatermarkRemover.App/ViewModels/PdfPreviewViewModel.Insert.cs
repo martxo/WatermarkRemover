@@ -64,40 +64,13 @@ public sealed partial class PdfPreviewViewModel
                 op.Complete("已取消（文件已保存）");
                 return; // the file is saved; nothing is on screen any more
             }
-            _cache.ShiftPages(insertAfterIndex, added);
-            PageCount += added;
-
-            // Fresh scanner pages can sit sideways or upside down whatever the document looked
-            // like before the gap — probe each new page and turn the crooked ones in place,
-            // before the strip below paints them.
-            await OrientInsertedPagesAsync(insertAfterIndex + 1, added).ConfigureAwait(true);
-            op.Step("插入页方向校正");
+            await GrowStripAfterInsertAsync(insertAfterIndex, added).ConfigureAwait(true);
+            op.Step("插入页就位", $"{slot}新增 {added} 页");
             if (IsCancelled)
             {
                 op.Complete("已取消（文件已保存）");
                 return; // pages are fixed in the file; nothing is on screen any more
             }
-            _file.RememberStamp(force: true);
-
-            // Grow the strip in place: tiles before the gap keep their page, tiles after it are
-            // re-pointed with a notification, and only the scanner's pages need pixels. The old
-            // clear-and-rebuild threw away every tile and every cached render, so the whole
-            // strip blanked and repainted page by page — the post-insert jolt.
-            int firstMoved = insertAfterIndex + 1;
-            for (int i = firstMoved; i < Thumbnails.Count; i++)
-                Thumbnails[i].SetIndex(i + added);
-            var fresh = new List<PdfPreviewThumbnailViewModel>();
-            for (int i = 0; i < added; i++)
-            {
-                var tile = new PdfPreviewThumbnailViewModel(this, firstMoved + i);
-                fresh.Add(tile);
-                Thumbnails.Insert(firstMoved + i, tile);
-            }
-            SyncThumbnailSelection();
-            foreach (var thumb in Thumbnails) thumb.RefreshCommands();
-            RebuildStripItems();
-            _ = LoadThumbnailsAsync(fresh, ++_thumbnailLoadGeneration);
-            op.Step("缩略图刷新", $"新增 {added} 页");
 
             // Land on the first page that came out of the scanner.
             await RenderAsync(Math.Min(insertAfterIndex + 1, PageCount - 1), force: true).ConfigureAwait(true);
@@ -130,6 +103,132 @@ public sealed partial class PdfPreviewViewModel
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// 「插入文件」：把另一个 PDF 的页插到当前页之后，一次写盘。与插入扫描页共用同一套收尾
+    /// （安全写盘、新页方向校正、条带增量刷新），区别只在来源是用户选的文件、且用完后原地保留。
+    /// </summary>
+    internal async Task InsertFileAfterAsync(int insertAfterIndex, string sourcePdfPath)
+    {
+        if (IsCancelled || IsRotating || IsOrienting) return;
+        if (insertAfterIndex < -1 || insertAfterIndex >= PageCount) return;
+
+        if (string.IsNullOrWhiteSpace(sourcePdfPath) || !File.Exists(sourcePdfPath))
+        {
+            StatusText = "要插入的 PDF 不存在。";
+            return;
+        }
+
+        // 把文件插进它自己会得到页数翻倍的结果，且写盘时读写的是同一个文件 —— 直接拒绝。
+        if (string.Equals(
+                Path.GetFullPath(sourcePdfPath), Path.GetFullPath(_file.Path),
+                StringComparison.OrdinalIgnoreCase))
+        {
+            StatusText = "不能把文件插入它自己。";
+            return;
+        }
+
+        string slot = insertAfterIndex < 0 ? "开头" : $"第 {insertAfterIndex + 1} 页后";
+        using var op = AppLog.BeginOperation(
+            LogCategory.Preview, "插入文件页", $"{slot} / {Path.GetFileName(sourcePdfPath)}");
+
+        IsRotating = true;
+        StatusText = $"正在插入 {Path.GetFileName(sourcePdfPath)}…";
+        try
+        {
+            PdfInsertResult insert = await _edits
+                .InsertAsync(insertAfterIndex, sourcePdfPath)
+                .ConfigureAwait(true);
+            int added = insert.AddedPages;
+            if (added == 0)
+            {
+                StatusText = $"{Path.GetFileName(sourcePdfPath)} 里没有可插入的页。";
+                op.Complete("源文件无页面，未插入");
+                return;
+            }
+
+            op.Step("插入写盘", $"{slot}新增 {added} 页" +
+                (insert.SavedAsCopy ? $"（另存为 {Path.GetFileName(insert.PdfPath)}）" : string.Empty));
+            if (IsCancelled)
+            {
+                op.Complete("已取消（文件已保存）");
+                return;
+            }
+
+            await GrowStripAfterInsertAsync(insertAfterIndex, added).ConfigureAwait(true);
+            op.Step("插入页就位", $"新增 {added} 页");
+            if (IsCancelled)
+            {
+                op.Complete("已取消（文件已保存）");
+                return;
+            }
+
+            await RenderAsync(Math.Min(insertAfterIndex + 1, PageCount - 1), force: true).ConfigureAwait(true);
+            op.Step("画布刷新", $"第 {PageIndex + 1} 页");
+
+            if (StatusText.Length == 0)
+            {
+                StatusText = $"已从 {Path.GetFileName(sourcePdfPath)} 插入 {added} 页" +
+                    (insert.SavedAsCopy
+                        ? $"，原文件被其他程序占用，已另存为 {Path.GetFileName(insert.PdfPath)}"
+                        : "。");
+            }
+            op.Complete($"{slot}新增 {added} 页，共 {PageCount} 页");
+        }
+        catch (FileNotFoundException ex)
+        {
+            op.Fail($"插入文件失败（文件不可达）：{ex.FileName}", ex);
+            if (!IsCancelled) StatusText = ex.Message;
+        }
+        catch (Exception ex)
+        {
+            op.Fail($"插入文件失败：{Path.GetFileName(sourcePdfPath)}", ex);
+            if (!IsCancelled) StatusText = $"插入文件失败：{ex.Message}";
+        }
+        finally
+        {
+            IsRotating = false;
+        }
+    }
+
+    /// <summary>页面按钮的入口：插到当前显示页之后。</summary>
+    internal void InsertFileAfterCurrent(string sourcePdfPath) =>
+        _ = InsertFileAfterAsync(PageIndex, sourcePdfPath);
+
+    /// <summary>
+    /// 插入写盘后的公共收尾：渲染缓存按插入点位移、页数上调、新页做一次方向校正，再在条带里
+    /// 原地插入缩略图（插入点之后的瓦片重新编号，只有新页需要像素）。插入扫描页与插入文件页
+    /// 共用这一段，保证两种来源的插入在界面上完全一致。
+    /// </summary>
+    private async Task GrowStripAfterInsertAsync(int insertAfterIndex, int added)
+    {
+        _cache.ShiftPages(insertAfterIndex, added);
+        PageCount += added;
+
+        // 新页可能横躺或倒置，与文档原来的方向无关：逐页投票，歪的一次性转正，再让条带绘制。
+        await OrientInsertedPagesAsync(insertAfterIndex + 1, added).ConfigureAwait(true);
+        _file.RememberStamp(force: true);
+
+        // Grow the strip in place: tiles before the gap keep their page, tiles after it are
+        // re-pointed with a notification, and only the inserted pages need pixels. The old
+        // clear-and-rebuild threw away every tile and every cached render, so the whole
+        // strip blanked and repainted page by page — the post-insert jolt.
+        int firstMoved = insertAfterIndex + 1;
+        for (int i = firstMoved; i < Thumbnails.Count; i++)
+            Thumbnails[i].SetIndex(i + added);
+
+        var fresh = new List<PdfPreviewThumbnailViewModel>(added);
+        for (int i = 0; i < added; i++)
+        {
+            var tile = new PdfPreviewThumbnailViewModel(this, firstMoved + i);
+            fresh.Add(tile);
+            Thumbnails.Insert(firstMoved + i, tile);
+        }
+        SyncThumbnailSelection();
+        foreach (var thumb in Thumbnails) thumb.RefreshCommands();
+        RebuildStripItems();
+        _ = LoadThumbnailsAsync(fresh, ++_thumbnailLoadGeneration);
     }
 
     /// <summary>

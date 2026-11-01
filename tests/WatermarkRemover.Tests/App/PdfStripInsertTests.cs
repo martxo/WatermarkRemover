@@ -186,6 +186,78 @@ public class PdfStripInsertTests : IDisposable
     }
 
     [Fact]
+    public async Task Inserting_another_pdf_puts_its_pages_after_the_current_page()
+    {
+        string pdf = WritePdf("target.pdf", 100, 110, 120);
+        string other = WritePdf("other.pdf", 210, 220);
+        var vm = new PdfPreviewViewModel(pdf, "doc.pdf", new FakeRenderer(3));
+        try
+        {
+            await vm.LoadAsync();
+            await DrainAsync(vm);
+
+            await vm.InsertFileAfterAsync(1, other);
+
+            Assert.Equal(new double[] { 100, 110, 210, 220, 120 }, WidthsOf(pdf));
+            Assert.Equal(5, vm.PageCount);
+            Assert.Equal(2, vm.PageIndex); // 画布落到第一张新插入的页
+            // 用户选的文件是源文件，不能被"消费"掉（那是扫描中间件的规则）。
+            Assert.True(File.Exists(other));
+            Assert.Contains("插入 2 页", vm.StatusText);
+        }
+        finally
+        {
+            File.Delete(pdf);
+            File.Delete(other);
+        }
+    }
+
+    [Fact]
+    public async Task A_pdf_cannot_be_inserted_into_itself()
+    {
+        string pdf = WritePdf("target.pdf", 100, 110);
+        byte[] before = File.ReadAllBytes(pdf);
+        var vm = new PdfPreviewViewModel(pdf, "doc.pdf", new FakeRenderer(2));
+        try
+        {
+            await vm.LoadAsync();
+            await DrainAsync(vm);
+
+            await vm.InsertFileAfterAsync(0, pdf);
+
+            Assert.Contains("不能把文件插入它自己", vm.StatusText);
+            Assert.Equal(before, File.ReadAllBytes(pdf));
+        }
+        finally
+        {
+            File.Delete(pdf);
+        }
+    }
+
+    [Fact]
+    public async Task A_missing_source_pdf_is_reported_without_touching_the_document()
+    {
+        string pdf = WritePdf("target.pdf", 100, 110);
+        byte[] before = File.ReadAllBytes(pdf);
+        var vm = new PdfPreviewViewModel(pdf, "doc.pdf", new FakeRenderer(2));
+        try
+        {
+            await vm.LoadAsync();
+            await DrainAsync(vm);
+
+            await vm.InsertFileAfterAsync(0, Path.Combine(_dir, "gone.pdf"));
+
+            Assert.Contains("不存在", vm.StatusText);
+            Assert.Equal(2, vm.PageCount);
+            Assert.Equal(before, File.ReadAllBytes(pdf));
+        }
+        finally
+        {
+            File.Delete(pdf);
+        }
+    }
+
+    [Fact]
     public async Task A_failed_scan_reports_in_status_and_touches_nothing()
     {
         string pdf = WritePdf("target.pdf", 100, 110, 120);

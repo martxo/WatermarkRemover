@@ -39,6 +39,7 @@ public partial class ImageViewerWindow : Window
     private int _siblingIndex = -1;
 
     private readonly ObservableCollection<RailItem> _rail = new();
+    private DispatcherTimer? _toastTimer;
     private string? _railDirectory;
     private int _railGeneration;
 
@@ -333,6 +334,36 @@ public partial class ImageViewerWindow : Window
 
     private void OnRotateClick(object sender, RoutedEventArgs e) => Surface.Rotate(90);
 
+    /// <summary>
+    /// 标注/打码：复用截图用的标注编辑器（矩形/箭头/画笔/文字/马赛克 + 撤销重做）。它把结果
+    /// 写成同目录的「原名_标注_时间.png」副本，原图永远不动；保存后把新副本收进左侧胶片轨并
+    /// 提示文件名，方便接着看。
+    /// </summary>
+    private void OnMarkupClick(object sender, RoutedEventArgs e) => OpenMarkup();
+
+    private void OpenMarkup()
+    {
+        if (string.IsNullOrEmpty(_path) || !File.Exists(_path)) return;
+
+        try
+        {
+            var editor = new ImageMarkupWindow(_path, (target, width, height) =>
+            {
+                AppLog.Info($"图片标注已保存：{target}（{width}×{height}）");
+                RefreshSiblings();
+                SyncRail();
+                ShowToast($"已标注并保存副本：{Path.GetFileName(target)}");
+            });
+            editor.Show();
+            editor.Activate();
+        }
+        catch (Exception ex)
+        {
+            AppLog.Warn($"打开标注窗口失败：{ex.Message}");
+            ShowToast($"无法打开标注窗口：{ex.Message}");
+        }
+    }
+
     private void OnCopyClick(object sender, RoutedEventArgs e) => CopyImage();
 
     private void OnRevealClick(object sender, RoutedEventArgs e)
@@ -358,18 +389,7 @@ public partial class ImageViewerWindow : Window
             try
             {
                 Clipboard.SetImage(_image);
-                ToastText.Text = "已复制到剪贴板";
-                Toast.Visibility = Visibility.Visible;
-                var timer = new System.Windows.Threading.DispatcherTimer
-                {
-                    Interval = TimeSpan.FromMilliseconds(1300),
-                };
-                timer.Tick += (_, _) =>
-                {
-                    timer.Stop();
-                    Toast.Visibility = Visibility.Collapsed;
-                };
-                timer.Start();
+                ShowToast("已复制到剪贴板");
                 return;
             }
             catch (Exception ex)
@@ -378,6 +398,24 @@ public partial class ImageViewerWindow : Window
                 Thread.Sleep(40);
             }
         }
+    }
+
+    /// <summary>Bottom-centre toast. The timer is kept on the window so a second message replaces
+    /// the first one's expiry instead of leaving two hidden timers racing.</summary>
+    private void ShowToast(string text)
+    {
+        ToastText.Text = text;
+        Toast.Visibility = Visibility.Visible;
+        _toastTimer?.Stop();
+
+        var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1600) };
+        timer.Tick += (_, _) =>
+        {
+            timer.Stop();
+            Toast.Visibility = Visibility.Collapsed;
+        };
+        _toastTimer = timer;
+        timer.Start();
     }
 
     // --- Keyboard ----------------------------------------------------------------
@@ -400,6 +438,9 @@ public partial class ImageViewerWindow : Window
                 break;
             case Key.R:
                 Surface.Rotate(shift ? -90 : 90);
+                break;
+            case Key.M:
+                OpenMarkup();
                 break;
             case Key.D0:
             case Key.NumPad0:
