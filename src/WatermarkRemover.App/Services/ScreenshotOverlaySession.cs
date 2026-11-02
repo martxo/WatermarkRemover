@@ -2,23 +2,13 @@ using System.IO;
 using System.Windows;
 using System.Windows.Media.Imaging;
 using SkiaSharp;
+using WatermarkRemover.App.Editing;
 using WatermarkRemover.App.Logging;
 using WatermarkRemover.Core.Features.Screenshot;
 using WatermarkRemover.Core.Settings;
 using WatermarkRemover.Imaging.Screenshot;
 
 namespace WatermarkRemover.App.Services;
-
-/// <summary>Tools the annotation toolbar can arm.</summary>
-public enum ScreenshotTool
-{
-    None,
-    Rectangle,
-    Arrow,
-    Pen,
-    Text,
-    Mosaic,
-}
 
 /// <summary>What a capture produced; <see cref="Canceled"/> when the user pressed Esc.</summary>
 public sealed record ScreenshotCaptureResult(
@@ -46,22 +36,22 @@ public sealed class ScreenshotOverlaySession
     private readonly TaskCompletionSource<ScreenshotCaptureResult> _completion =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly List<ScreenshotOverlayWindow> _windows = new();
-    private readonly List<ScreenshotAnnotation> _annotations = new();
-    private readonly List<ScreenshotAnnotation> _redo = new();
+    private readonly AnnotationEditSession _edit = new()
+    {
+        // 画布坐标 = 全局物理像素；粗细/字号按起笔点（或文字锚点）所在显示器的 scale 换算。
+        StrokeFloor = 2f,
+        MinMarkSpan = 4f,
+        MinPenStep = 1.5f,
+        RequireBothSides = true,
+    };
 
     private ScreenshotRect? _selection;
     private Mode _mode;
     private Point _dragStart;
     private ScreenshotRect _dragOriginal;
     private ScreenshotHandle _dragHandle;
-    private ScreenshotAnnotation? _draft;
-    private ScreenshotTool _tool;
-    private uint _colorArgb = ScreenshotAnnotation.DefaultColorArgb;
-    private float _lineWidthDip = 2.5f;
-    private float _textFontSizeDip = 16f;
     private ScreenshotRect? _hoverWindow;
     private Point _hoverProbePoint = new(double.NaN, double.NaN);
-    private Point? _textAnchor;
     private MonitorInfo? _toolbarMonitor;
     private SKBitmap? _preview;
     private int _previewVersion;
@@ -72,6 +62,13 @@ public sealed class ScreenshotOverlaySession
     {
         _settings = settings;
         _desktop = desktop;
+
+        _edit.ScaleAt = point => (float)ScaleAt(point);
+        _edit.ToLocal = ToLocal;
+        _edit.CanPlaceText = point => _selection is { } selection && selection.Contains(point.X, point.Y);
+        // 内核的变化翻译回截图侧的两条既有通道：重算合成预览 + 通知各显示器重绘。
+        _edit.HistoryChanged += (_, _) => RebuildPreview();
+        _edit.Changed += (_, _) => RaiseChanged();
     }
 
     /// <summary>
@@ -211,31 +208,31 @@ public sealed class ScreenshotOverlaySession
 
     public bool HasSelection => _selection is { IsEmpty: false };
 
-    public bool HasAnnotations => _annotations.Count > 0;
+    public bool HasAnnotations => _edit.HasAnnotations;
 
     public bool IsSelecting => _mode == Mode.Creating;
 
-    public ScreenshotTool Tool => _tool;
+    public ScreenshotTool Tool => _edit.Tool;
 
     /// <summary>Mark colour chosen in the toolbar (ARGB).</summary>
-    public uint ColorArgb => _colorArgb;
+    public uint ColorArgb => _edit.Style.ColorArgb;
 
     /// <summary>Stroke width in device-independent pixels; converted to physical per monitor.</summary>
-    public float LineWidth => _lineWidthDip;
+    public float LineWidth => _edit.Style.LineWidthDip;
 
     /// <summary>Text annotation font size in device-independent pixels (12 / 16 / 20).</summary>
-    public float TextFontSize => _textFontSizeDip;
+    public float TextFontSize => _edit.Style.TextFontSizeDip;
 
     /// <summary>Whether an undone annotation can be restored (Ctrl+Y).</summary>
-    public bool CanRedo => _redo.Count > 0;
+    public bool CanRedo => _edit.CanRedo;
 
     /// <summary>Window under the pointer before a selection exists (PixPin-style hover highlight).</summary>
     public ScreenshotRect? HoverWindow => _hoverWindow;
 
     /// <summary>The in-progress annotation, in global physical pixels (overlay-only preview).</summary>
-    public ScreenshotAnnotation? Draft => _draft;
+    public ScreenshotAnnotation? Draft => _edit.Draft;
 
-    public Point? TextAnchor => _textAnchor;
+    public Point? TextAnchor => _edit.TextAnchor;
 
     public MonitorInfo? ToolbarMonitor => _toolbarMonitor;
 
@@ -273,7 +270,7 @@ public sealed class ScreenshotOverlaySession
 
     public void Press(Point global)
     {
-        if (_textAnchor is not null) return;
+        if (_edit.TextAnchor is not null) return;
 
         if (_selection is not ScreenshotRect existing || existing.IsEmpty)
         {
@@ -285,21 +282,20 @@ public sealed class ScreenshotOverlaySession
         }
 
         ScreenshotRect selection = existing;
-        if (_tool != ScreenshotTool.None)
+        ScreenshotTool tool = _edit.Tool;
+        if (tool != ScreenshotTool.None)
         {
             if (selection.Contains(global.X, global.Y))
             {
-                if (_tool == ScreenshotTool.Text)
+                if (tool == ScreenshotTool.Text)
                 {
-                    _textAnchor = global;
-                    RaiseChanged();
+                    _edit.Begin(global);
                     return;
                 }
 
                 _mode = Mode.Drawing;
                 _dragStart = global;
-                _draft = NewDraft(global, global);
-                RaiseChanged();
+                _edit.Begin(global);
                 return;
             }
 
@@ -367,7 +363,7 @@ public sealed class ScreenshotOverlaySession
                 break;
 
             case Mode.Drawing:
-                UpdateDraft(global);
+                _edit.Update(global);
                 RaiseChanged();
                 break;
         }
@@ -447,7 +443,7 @@ public sealed class ScreenshotOverlaySession
 
             case Mode.Drawing:
                 _mode = Mode.None;
-                CommitDraft();
+                _edit.Commit();
                 RaiseChanged();
                 break;
         }
@@ -482,8 +478,8 @@ public sealed class ScreenshotOverlaySession
 
     private void BeginSelection(Point global)
     {
-        DiscardAnnotations();
-        _tool = ScreenshotTool.None;
+        _edit.Clear();
+        _edit.SelectTool(ScreenshotTool.None);
         _mode = Mode.Creating;
         _dragStart = global;
         _selection = new ScreenshotRect(global.X, global.Y, 0, 0);
@@ -491,44 +487,20 @@ public sealed class ScreenshotOverlaySession
         RaiseChanged();
     }
 
-    private void DiscardAnnotations()
-    {
-        _redo.Clear();
-        if (_annotations.Count == 0) return;
-        _annotations.Clear();
-        RebuildPreview();
-    }
-
     // --- Tools -----------------------------------------------------------------
 
     public void SelectTool(ScreenshotTool tool)
     {
         if (!HasSelection) return;
-        _tool = _tool == tool ? ScreenshotTool.None : tool;
-        _textAnchor = null;
+        _edit.SelectTool(tool);
         RaiseChanged();
     }
 
-    public void SetColor(uint colorArgb)
-    {
-        if (_colorArgb == colorArgb) return;
-        _colorArgb = colorArgb;
-        RaiseChanged();
-    }
+    public void SetColor(uint colorArgb) => _edit.SetColor(colorArgb);
 
-    public void SetLineWidth(float lineWidthDip)
-    {
-        if (Math.Abs(_lineWidthDip - lineWidthDip) < 0.01f) return;
-        _lineWidthDip = lineWidthDip;
-        RaiseChanged();
-    }
+    public void SetLineWidth(float lineWidthDip) => _edit.SetLineWidth(lineWidthDip);
 
-    public void SetTextFontSize(float fontSizeDip)
-    {
-        if (Math.Abs(_textFontSizeDip - fontSizeDip) < 0.01f) return;
-        _textFontSizeDip = fontSizeDip;
-        RaiseChanged();
-    }
+    public void SetTextFontSize(float fontSizeDip) => _edit.SetTextFontSize(fontSizeDip);
 
     /// <summary>
     /// Leaves normal capture mode and opens the manual long-screenshot stitcher. Annotations are
@@ -585,151 +557,23 @@ public sealed class ScreenshotOverlaySession
     private void CancelLongCapture() => FinishLongCapture(
         new ScreenshotCaptureResult(null, 0, 0, false, null, true));
 
-    public void Undo()
-    {
-        if (_annotations.Count == 0) return;
-        int last = _annotations.Count - 1;
-        _redo.Add(_annotations[last]);
-        _annotations.RemoveAt(last);
-        RebuildPreview();
-        RaiseChanged();
-    }
+    public void Undo() => _edit.Undo();
 
-    public void Redo()
-    {
-        if (_redo.Count == 0) return;
-        _annotations.Add(_redo[^1]);
-        _redo.RemoveAt(_redo.Count - 1);
-        RebuildPreview();
-        RaiseChanged();
-    }
+    public void Redo() => _edit.Redo();
 
-    public void ClearAnnotations()
-    {
-        if (_annotations.Count == 0) return;
-        _redo.Clear();
-        _annotations.Clear();
-        RebuildPreview();
-        RaiseChanged();
-    }
+    public void ClearAnnotations() => _edit.Clear();
 
-    public void CancelText()
-    {
-        if (_textAnchor is null) return;
-        _textAnchor = null;
-        RaiseChanged();
-    }
+    public void CancelText() => _edit.CancelText();
 
-    public void CommitText(string text)
-    {
-        Point? anchor = _textAnchor;
-        _textAnchor = null;
-        if (anchor is { } point && _selection is { } selection && selection.Contains(point.X, point.Y)
-            && !string.IsNullOrWhiteSpace(text))
-        {
-            float scale = (float)ScaleAt(point);
-            var local = new ScreenshotPointF((float)(point.X - selection.Left), (float)(point.Y - selection.Top));
-            // The toolbar's text size, converted to physical pixels for this monitor.
-            _annotations.Add(new ScreenshotAnnotation
-            {
-                Kind = ScreenshotAnnotationKind.Text,
-                Points = new[] { local },
-                Text = text.Trim(),
-                FontSize = Math.Max(10, _textFontSizeDip * scale),
-                ColorArgb = _colorArgb,
-                Thickness = 1f,
-            });
-            _redo.Clear();
-            RebuildPreview();
-        }
-
-        RaiseChanged();
-    }
+    public void CommitText(string text) => _edit.CommitText(text);
 
     // --- Draft annotation -------------------------------------------------------
 
-    private ScreenshotAnnotation NewDraft(Point start, Point end)
-    {
-        float thickness = Math.Max(2, _lineWidthDip * (float)ScaleAt(start));
-        var first = new ScreenshotPointF((float)start.X, (float)start.Y);
-        var last = new ScreenshotPointF((float)end.X, (float)end.Y);
-
-        return _tool switch
-        {
-            ScreenshotTool.Arrow => Styled(ScreenshotAnnotationKind.Arrow, new[] { first, last }, thickness),
-            ScreenshotTool.Pen => Styled(ScreenshotAnnotationKind.Pen, new List<ScreenshotPointF> { first }, thickness),
-            ScreenshotTool.Mosaic => Styled(ScreenshotAnnotationKind.Mosaic, new[] { first, last }, thickness),
-            _ => Styled(ScreenshotAnnotationKind.Rectangle, new[] { first, last }, thickness),
-        };
-    }
-
-    /// <summary>Builds an annotation carrying the colour/width chosen in the toolbar.</summary>
-    private ScreenshotAnnotation Styled(
-        ScreenshotAnnotationKind kind, IReadOnlyList<ScreenshotPointF> points, float thickness) =>
-        new()
-        {
-            Kind = kind,
-            Points = points,
-            ColorArgb = _colorArgb,
-            Thickness = Math.Max(1, thickness),
-        };
-
-    private void UpdateDraft(Point end)
-    {
-        if (_draft is null) return;
-
-        if (_draft.Kind == ScreenshotAnnotationKind.Pen)
-        {
-            var points = _draft.Points as List<ScreenshotPointF> ?? _draft.Points.ToList();
-            var last = points[^1];
-            if (Math.Abs(last.X - end.X) < 1.5f && Math.Abs(last.Y - end.Y) < 1.5f) return;
-            points.Add(new ScreenshotPointF((float)end.X, (float)end.Y));
-            _draft = RecreateDraft(_draft, points);
-            return;
-        }
-
-        var endPoint = new ScreenshotPointF((float)end.X, (float)end.Y);
-        _draft = Styled(
-            _draft.Kind, new[] { _draft.Points[0], endPoint }, _draft.Thickness);
-    }
-
-    private static ScreenshotAnnotation RecreateDraft(ScreenshotAnnotation source, IReadOnlyList<ScreenshotPointF> points) =>
-        new()
-        {
-            Kind = source.Kind,
-            Points = points,
-            ColorArgb = source.ColorArgb,
-            Thickness = source.Thickness,
-            Text = source.Text,
-            FontSize = source.FontSize,
-        };
-
-    private void CommitDraft()
-    {
-        ScreenshotAnnotation? draft = _draft;
-        _draft = null;
-        if (draft is null || _selection is not { } selection) return;
-
-        var local = new List<ScreenshotPointF>(draft.Points.Count);
-        foreach (ScreenshotPointF point in draft.Points)
-            local.Add(new ScreenshotPointF((float)(point.X - selection.Left), (float)(point.Y - selection.Top)));
-
-        if (draft.Kind != ScreenshotAnnotationKind.Pen)
-        {
-            ScreenshotRect bounds = ScreenshotRect.FromPoints(
-                local[0].X, local[0].Y, local[^1].X, local[^1].Y);
-            if (bounds.Width < 4 || bounds.Height < 4) return;
-        }
-        else if (local.Count < 2)
-        {
-            return;
-        }
-
-        _annotations.Add(RecreateDraft(draft, local));
-        // A new mark invalidates the redo branch, standard editor behaviour.
-        _redo.Clear();
-        RebuildPreview();
-    }
+    /// <summary>画布全局坐标 → 选区内标注坐标（与旧 <c>CommitDraft</c> 的换算一致）。</summary>
+    private Point ToLocal(Point point) =>
+        _selection is { } selection
+            ? new Point(point.X - selection.Left, point.Y - selection.Top)
+            : point;
 
     private void RebuildPreview()
     {
@@ -737,7 +581,7 @@ public sealed class ScreenshotOverlaySession
         _preview = null;
         _previewVersion++;
 
-        if (_annotations.Count == 0 || !HasSelection) return;
+        if (_edit.Annotations.Count == 0 || !HasSelection) return;
 
         ScreenshotRect selection = _selection!.Value;
         var crop = new SKRectI(
@@ -747,7 +591,7 @@ public sealed class ScreenshotOverlaySession
             (int)Math.Round(selection.Bottom));
         try
         {
-            _preview = ScreenshotComposer.Compose(_desktop.Bitmap, crop, _annotations);
+            _preview = ScreenshotComposer.Compose(_desktop.Bitmap, crop, _edit.Annotations);
         }
         catch (Exception ex)
         {
@@ -777,7 +621,7 @@ public sealed class ScreenshotOverlaySession
             var crop = new SKRectI(
                 (int)Math.Round(selection.Left), (int)Math.Round(selection.Top),
                 (int)Math.Round(selection.Right), (int)Math.Round(selection.Bottom));
-            output = ScreenshotComposer.Compose(_desktop.Bitmap, crop, _annotations);
+            output = ScreenshotComposer.Compose(_desktop.Bitmap, crop, _edit.Annotations);
             _completion.TrySetResult(SaveAndCopy(output, _settings, width, height));
         }
         catch (Exception ex)

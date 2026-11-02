@@ -8,6 +8,8 @@ using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
 using System.Windows.Threading;
 using SkiaSharp;
+using WatermarkRemover.App.Controls;
+using WatermarkRemover.App.Editing;
 using WatermarkRemover.App.Services;
 using WatermarkRemover.Core.Features.Screenshot;
 using WatermarkRemover.Imaging.Screenshot;
@@ -24,19 +26,11 @@ public partial class ScreenshotOverlayWindow : Window
 {
     private const int SwpNoActivate = 0x0010;
     private static readonly IntPtr HwndTopmost = new(-1);
-    private readonly SolidColorBrush _markBrush = new(Color.FromRgb(229, 57, 53));
 
     private readonly ScreenshotOverlaySession _session;
     private readonly MonitorInfo _monitor;
     private bool _loaded;
     private bool _dragging;
-    private bool _textEditing;
-
-    private Rectangle? _draftRect;
-    private Line? _draftLine;
-    private Polygon? _draftHead;
-    private Polyline? _draftPen;
-    private Rectangle? _draftMosaic;
 
     private BitmapSource? _previewSource;
     private int _previewCachedVersion = -1;
@@ -51,7 +45,6 @@ public partial class ScreenshotOverlayWindow : Window
         Width = monitor.Width / monitor.Scale;
         Height = monitor.Height / monitor.Scale;
 
-        CreateDraftShapes();
         WireToolbar();
 
         _session.Changed += OnSessionChanged;
@@ -99,73 +92,24 @@ public partial class ScreenshotOverlayWindow : Window
 
     private void WireToolbar()
     {
-        RectTool.Click += (_, _) => _session.SelectTool(ScreenshotTool.Rectangle);
-        ArrowTool.Click += (_, _) => _session.SelectTool(ScreenshotTool.Arrow);
-        PenTool.Click += (_, _) => _session.SelectTool(ScreenshotTool.Pen);
-        TextTool.Click += (_, _) => _session.SelectTool(ScreenshotTool.Text);
-        MosaicTool.Click += (_, _) => _session.SelectTool(ScreenshotTool.Mosaic);
-        ColorRed.Click += (_, _) => _session.SetColor(0xFFE53935);
-        ColorYellow.Click += (_, _) => _session.SetColor(0xFFFBC02D);
-        ColorBlue.Click += (_, _) => _session.SetColor(0xFF1E88E5);
-        ColorGreen.Click += (_, _) => _session.SetColor(0xFF43A047);
-        ColorBlack.Click += (_, _) => _session.SetColor(0xFF111111);
-        ThinWidth.Click += (_, _) => _session.SetLineWidth(1.5f);
-        MediumWidth.Click += (_, _) => _session.SetLineWidth(3f);
-        ThickWidth.Click += (_, _) => _session.SetLineWidth(5f);
-        TextSizeBox.SelectionChanged += (_, _) =>
-        {
-            float size = TextSizeBox.SelectedIndex switch
-            {
-                0 => 12f,
-                2 => 20f,
-                _ => 16f,
-            };
-            _session.SetTextFontSize(size);
-        };
+        Toolbar.ToolClick += (_, tool) => _session.SelectTool(tool);
+        Toolbar.ColorClick += (_, argb) => _session.SetColor(argb);
+        Toolbar.WidthClick += (_, dip) => _session.SetLineWidth(dip);
+        Toolbar.FontSizeClick += (_, size) => _session.SetTextFontSize(size);
+        Toolbar.UndoClick += (_, _) => _session.Undo();
+        Toolbar.RedoClick += (_, _) => _session.Redo();
+        Toolbar.ClearClick += (_, _) => _session.ClearAnnotations();
         LongCaptureButton.Click += (_, _) => _session.StartLongCapture();
-        UndoButton.Click += (_, _) => _session.Undo();
-        RedoButton.Click += (_, _) => _session.Redo();
-        ClearButton.Click += (_, _) => _session.ClearAnnotations();
         CancelButton.Click += (_, _) => _session.Cancel();
         ConfirmButton.Click += (_, _) => _session.Confirm();
+        Editor.Completed += OnTextEditorCompleted;
     }
 
-    private void CreateDraftShapes()
+    /// <summary>文字浮层结束：文本 = 提交；null = 取消。</summary>
+    private void OnTextEditorCompleted(object? sender, string? text)
     {
-        _draftRect = new Rectangle
-        {
-            Stroke = _markBrush,
-            StrokeThickness = 2,
-            Visibility = Visibility.Collapsed,
-        };
-        _draftLine = new Line
-        {
-            Stroke = _markBrush,
-            StrokeThickness = 2,
-            Visibility = Visibility.Collapsed,
-        };
-        _draftHead = new Polygon
-        {
-            Fill = _markBrush,
-            Visibility = Visibility.Collapsed,
-        };
-        _draftPen = new Polyline
-        {
-            Stroke = _markBrush,
-            StrokeThickness = 2,
-            Visibility = Visibility.Collapsed,
-        };
-        _draftMosaic = new Rectangle
-        {
-            Fill = new SolidColorBrush(Color.FromArgb(90, 0, 0, 0)),
-            Stroke = new SolidColorBrush(Color.FromArgb(220, 255, 255, 255)),
-            StrokeThickness = 1,
-            StrokeDashArray = new DoubleCollection { 3, 3 },
-            Visibility = Visibility.Collapsed,
-        };
-
-        foreach (Shape shape in new Shape[] { _draftRect, _draftLine, _draftHead, _draftPen, _draftMosaic })
-            ShapeLayer.Children.Add(shape);
+        if (text is null) _session.CancelText();
+        else _session.CommitText(text);
     }
 
     private void OnClosed(object? sender, EventArgs e)
@@ -459,79 +403,21 @@ public partial class ScreenshotOverlayWindow : Window
 
     private void DrawDraft()
     {
-        _draftRect!.Visibility = Visibility.Collapsed;
-        _draftLine!.Visibility = Visibility.Collapsed;
-        _draftHead!.Visibility = Visibility.Collapsed;
-        _draftPen!.Visibility = Visibility.Collapsed;
-        _draftMosaic!.Visibility = Visibility.Collapsed;
-
         ScreenshotAnnotation? draft = _session.Draft;
-        if (draft is null || draft.Points.Count < 2) return;
+        if (draft is null)
+        {
+            ShapeLayer.Children.Clear();
+            return;
+        }
 
         // Live preview uses the toolbar's colour and width, exactly what the PNG will get.
-        _markBrush.Color = MarkColor(_session.ColorArgb);
-        double stroke = _session.LineWidth;
-        _draftRect!.StrokeThickness = stroke;
-        _draftLine!.StrokeThickness = stroke;
-        _draftPen!.StrokeThickness = stroke;
-        _draftHead!.Fill = _markBrush;
-
-        Point first = LocalFromGlobal(new Point(draft.Points[0].X, draft.Points[0].Y));
-        Point last = LocalFromGlobal(new Point(draft.Points[^1].X, draft.Points[^1].Y));
-
-        switch (draft.Kind)
-        {
-            case ScreenshotAnnotationKind.Rectangle:
-                Place(_draftRect!, Math.Min(first.X, last.X), Math.Min(first.Y, last.Y),
-                    Math.Abs(last.X - first.X), Math.Abs(last.Y - first.Y));
-                _draftRect!.Visibility = Visibility.Visible;
-                break;
-
-            case ScreenshotAnnotationKind.Arrow:
-                _draftLine!.X1 = first.X;
-                _draftLine!.Y1 = first.Y;
-                _draftLine!.X2 = last.X;
-                _draftLine!.Y2 = last.Y;
-                _draftLine!.Visibility = Visibility.Visible;
-                DrawArrowHead(first, last);
-                break;
-
-            case ScreenshotAnnotationKind.Pen:
-            {
-                var points = new PointCollection();
-                foreach (ScreenshotPointF point in draft.Points)
-                    points.Add(LocalFromGlobal(new Point(point.X, point.Y)));
-                _draftPen!.Points = points;
-                _draftPen!.Visibility = Visibility.Visible;
-                break;
-            }
-
-            case ScreenshotAnnotationKind.Mosaic:
-                Place(_draftMosaic!, Math.Min(first.X, last.X), Math.Min(first.Y, last.Y),
-                    Math.Abs(last.X - first.X), Math.Abs(last.Y - first.Y));
-                _draftMosaic!.Visibility = Visibility.Visible;
-                break;
-        }
-    }
-
-    /// <summary>ARGB (0xAARRGGBB) from the session to a WPF colour.</summary>
-    private static Color MarkColor(uint argb) => Color.FromArgb(
-        (byte)(argb >> 24), (byte)(argb >> 16), (byte)(argb >> 8), (byte)argb);
-
-    private void DrawArrowHead(Point start, Point end)
-    {
-        double angle = Math.Atan2(end.Y - start.Y, end.X - start.X);
-        double head = Math.Max(10, _session.LineWidth * 3.2);
-        double spread = Math.PI / 7;
-        var points = new PointCollection
-        {
-            end,
-            new Point(end.X - head * Math.Cos(angle - spread), end.Y - head * Math.Sin(angle - spread)),
-            new Point(end.X - head * Math.Cos(angle + spread), end.Y - head * Math.Sin(angle + spread)),
-        };
-
-        _draftHead!.Points = points;
-        _draftHead!.Visibility = Visibility.Visible;
+        // Geometry and the arrow head live in DraftShapeRenderer, shared with the markup window.
+        DraftShapeRenderer.Render(ShapeLayer, draft, LocalFromGlobal, new DraftShapeRenderer.Options(
+            DraftShapeRenderer.MarkColor(_session.ColorArgb),
+            _session.LineWidth,
+            Color.FromArgb(90, 0, 0, 0),
+            Color.FromArgb(220, 255, 255, 255),
+            new DoubleCollection { 3, 3 }));
     }
 
     private void DrawToolbar(double width, double height, bool hasSelection, Rect localSelection)
@@ -543,30 +429,15 @@ public partial class ScreenshotOverlayWindow : Window
             return;
         }
 
-        RectTool.IsChecked = _session.Tool == ScreenshotTool.Rectangle;
-        ArrowTool.IsChecked = _session.Tool == ScreenshotTool.Arrow;
-        PenTool.IsChecked = _session.Tool == ScreenshotTool.Pen;
-        TextTool.IsChecked = _session.Tool == ScreenshotTool.Text;
-        MosaicTool.IsChecked = _session.Tool == ScreenshotTool.Mosaic;
-        UndoButton.IsEnabled = _session.HasAnnotations;
-        RedoButton.IsEnabled = _session.CanRedo;
-        ClearButton.IsEnabled = _session.HasAnnotations;
+        Toolbar.Sync(
+            _session.Tool,
+            _session.ColorArgb,
+            _session.LineWidth,
+            _session.TextFontSize,
+            _session.HasAnnotations,
+            _session.CanRedo,
+            _session.HasAnnotations);
         LongCaptureButton.IsEnabled = hasSelection && !_session.HasAnnotations;
-
-        SetSwatch(ColorRed, 0xFFE53935);
-        SetSwatch(ColorYellow, 0xFFFBC02D);
-        SetSwatch(ColorBlue, 0xFF1E88E5);
-        SetSwatch(ColorGreen, 0xFF43A047);
-        SetSwatch(ColorBlack, 0xFF111111);
-        ThinWidth.IsChecked = Math.Abs(_session.LineWidth - 1.5f) < 0.01f;
-        MediumWidth.IsChecked = Math.Abs(_session.LineWidth - 3f) < 0.01f;
-        ThickWidth.IsChecked = Math.Abs(_session.LineWidth - 5f) < 0.01f;
-        TextSizeBox.SelectedIndex = _session.TextFontSize switch
-        {
-            <= 12f => 0,
-            >= 20f => 2,
-            _ => 1,
-        };
 
         ToolbarHost.Visibility = Visibility.Visible;
         ToolbarHost.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
@@ -581,9 +452,6 @@ public partial class ScreenshotOverlayWindow : Window
         Canvas.SetTop(ToolbarHost, y);
     }
 
-    private void SetSwatch(Button swatch, uint argb) =>
-        swatch.Opacity = _session.ColorArgb == argb ? 1.0 : 0.45;
-
     // --- Text annotation -------------------------------------------------------
 
     private void ShowTextEditor()
@@ -591,84 +459,26 @@ public partial class ScreenshotOverlayWindow : Window
         Point? anchor = _session.TextAnchor;
         if (anchor is null)
         {
-            if (_textEditing) HideEditor();
+            if (Editor.IsActive) Editor.Hide();
             return;
         }
 
         MonitorInfo host = _session.MonitorAt(anchor.Value);
         if (host != _monitor)
         {
-            if (_textEditing) HideEditor();
+            if (Editor.IsActive) Editor.Hide();
             return;
         }
 
-        if (_textEditing) return;
+        if (Editor.IsActive) return;
 
-        _textEditing = true;
         Point local = LocalFromGlobal(anchor.Value);
         double width = RootCanvas.ActualWidth;
         double height = RootCanvas.ActualHeight;
-        double x = Math.Clamp(local.X + 4, 4, Math.Max(4, width - TextEditor.Width - 4));
-        double y = Math.Clamp(local.Y, 4, Math.Max(4, height - TextEditor.Height - 4));
-        Canvas.SetLeft(TextEditor, x);
-        Canvas.SetTop(TextEditor, y);
-        TextEditor.Text = string.Empty;
-        TextEditor.FontSize = _session.TextFontSize;
-        TextEditor.Foreground = new SolidColorBrush(MarkColor(_session.ColorArgb));
-        TextEditor.Visibility = Visibility.Visible;
-
-        Dispatcher.BeginInvoke(new Action(() =>
-        {
-            Keyboard.Focus(TextEditor);
-            TextEditor.SelectAll();
-        }), DispatcherPriority.Input);
-    }
-
-    private void HideEditor()
-    {
-        _textEditing = false;
-        TextEditor.Visibility = Visibility.Collapsed;
-        Keyboard.Focus(RootCanvas);
-    }
-
-    private void CommitTextFromEditor()
-    {
-        if (!_textEditing) return;
-        string text = TextEditor.Text;
-        HideEditor();
-        _session.CommitText(text);
-    }
-
-    private void CancelTextFromEditor()
-    {
-        if (!_textEditing) return;
-        HideEditor();
-        _session.CancelText();
-    }
-
-    private void OnTextEditorKeyDown(object sender, KeyEventArgs e)
-    {
-        Key key = RealKey(e);
-        if (key == Key.Enter && !Keyboard.Modifiers.HasFlag(ModifierKeys.Shift))
-        {
-            CommitTextFromEditor();
-            e.Handled = true;
-        }
-        else if (key == Key.Enter)
-        {
-            // Shift+Enter inserts a newline; the composer draws each line.
-            e.Handled = false;
-        }
-        else if (key == Key.Escape)
-        {
-            CancelTextFromEditor();
-            e.Handled = true;
-        }
-    }
-
-    private void OnTextEditorLostFocus(object sender, RoutedEventArgs e)
-    {
-        if (_textEditing) CommitTextFromEditor();
+        double x = Math.Clamp(local.X + 4, 4, Math.Max(4, width - Editor.Width - 4));
+        double y = Math.Clamp(local.Y, 4, Math.Max(4, height - Editor.Height - 4));
+        Editor.Start(new Point(x, y), _session.TextFontSize,
+            DraftShapeRenderer.MarkColor(_session.ColorArgb), Editor.Width, Editor.Height);
     }
 
     // --- Mouse -----------------------------------------------------------------
@@ -676,11 +486,11 @@ public partial class ScreenshotOverlayWindow : Window
     private void OnMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
         if (IsWithin(e.OriginalSource as DependencyObject, ToolbarHost)) return;
-        if (IsWithin(e.OriginalSource as DependencyObject, TextEditor)) return;
+        if (IsWithin(e.OriginalSource as DependencyObject, Editor)) return;
 
-        if (_textEditing)
+        if (Editor.IsActive)
         {
-            CommitTextFromEditor();
+            Editor.Submit();
             e.Handled = true;
             return;
         }
@@ -723,13 +533,13 @@ public partial class ScreenshotOverlayWindow : Window
 
     private void OnMouseEnter(object sender, MouseEventArgs e)
     {
-        if (!_textEditing) Activate();
+        if (!Editor.IsActive) Activate();
     }
 
     /// <summary>Crosshair + magnifier while no selection exists yet.</summary>
     private void UpdateHover(Point local, Point global)
     {
-        if (_textEditing || _session.HasSelection)
+        if (Editor.IsActive || _session.HasSelection)
         {
             Hide(HoverLayer);
             return;
@@ -772,7 +582,7 @@ public partial class ScreenshotOverlayWindow : Window
 
     private void OnPreviewKeyDown(object sender, KeyEventArgs e)
     {
-        if (TextEditor.IsKeyboardFocusWithin) return;
+        if (Editor.IsKeyboardFocusWithin) return;
 
         Key key = RealKey(e);
         if (key == Key.Escape)
@@ -810,22 +620,13 @@ public partial class ScreenshotOverlayWindow : Window
             return;
         }
 
-        // Tool shortcuts, the same muscle memory desktop screenshot tools use.
+        // Tool shortcuts, the same muscle memory desktop screenshot tools use. The mapping
+        // lives on the tools themselves — a newly registered tool brings its own key.
         if (Keyboard.Modifiers != ModifierKeys.None) return;
 
-        ScreenshotTool? shortcut = key switch
+        if (AnnotationToolRegistry.Default.FindByKey(key) is { } tool)
         {
-            Key.R => ScreenshotTool.Rectangle,
-            Key.A => ScreenshotTool.Arrow,
-            Key.P => ScreenshotTool.Pen,
-            Key.T => ScreenshotTool.Text,
-            Key.M => ScreenshotTool.Mosaic,
-            _ => null,
-        };
-
-        if (shortcut is { } tool)
-        {
-            _session.SelectTool(tool);
+            _session.SelectTool(tool.Tool);
             e.Handled = true;
         }
     }
