@@ -27,42 +27,71 @@
 
     <StackPanel>
         <TextBlock Style="{StaticResource Caption}"
-                   Text="鼠标快速移到屏幕边缘的触发区域，最近截图晾衣绳就会滑出。四条边可分别启用；在左侧示意图里拖动色块调整沿边位置，厚度/长度单位为屏幕像素。改动随「返回应用」保存生效。"/>
+                   Text="鼠标快速移到屏幕边缘的触发区域，最近截图晾衣绳就会滑出；悬上热区时会浮出一朵云提示「就在这里」。四条边可分别启用；在左侧示意图里拖动云朵调整沿边位置，厚度/长度单位为屏幕像素。改动随「返回应用」保存生效。"/>
         <Grid Margin="0,12,0,0">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="*"/>
             </Grid.ColumnDefinitions>
 
-            <!-- 屏幕（工作区）示意图：色块就是热区，按住可沿边拖动 -->
+            <!-- 屏幕（工作区）示意图：云朵色块就是热区，按住可沿边拖动。
+                 形状/颜色/阴影与运行时指示器同源（Themes/TriggerZone.xaml）。 -->
             <Border Grid.Column="0" Width="300" Height="190" CornerRadius="6"
                     Background="#FFF3F4F6"
                     BorderBrush="{StaticResource ShellInsetCardStrokeBrush}"
                     BorderThickness="1" Margin="0,0,18,0">
                 <Grid x:Name="ScreenMock">
-                    <TextBlock Text="屏幕边缘示意 · 拖动色块调整位置"
+                    <TextBlock Text="屏幕边缘示意 · 拖动云朵调整位置"
                                HorizontalAlignment="Center" VerticalAlignment="Center"
                                Foreground="#FFB6BCC6" FontSize="11" IsHitTestVisible="False"/>
                     <Border x:Name="TopZone" Tag="Top" Cursor="SizeAll"
-                            Background="#33E53935" BorderBrush="#FFE53935" BorderThickness="1"
-                            CornerRadius="2" HorizontalAlignment="Left" VerticalAlignment="Top"
+                            Background="{StaticResource TriggerCloudSoftFillBrush}"
+                            BorderBrush="{StaticResource TriggerCloudEdgeBrush}" BorderThickness="1"
+                            CornerRadius="12" Effect="{StaticResource TriggerCloudShadow}"
+                            HorizontalAlignment="Left" VerticalAlignment="Top"
                             MouseLeftButtonDown="OnZoneMouseDown" MouseMove="OnZoneMouseMove"
-                            MouseLeftButtonUp="OnZoneMouseUp"/>
+                            MouseLeftButtonUp="OnZoneMouseUp">
+                        <Path Data="{StaticResource TriggerCloudGeometry}"
+                              Fill="{StaticResource TriggerCloudFillBrush}"
+                              Stretch="Uniform" Width="44" Height="23"
+                              IsHitTestVisible="False"/>
+                    </Border>
                     <Border x:Name="BottomZone" Tag="Bottom" Cursor="SizeAll"
-                            Background="#33E53935" BorderBrush="#FFE53935" BorderThickness="1"
-                            CornerRadius="2" HorizontalAlignment="Left" VerticalAlignment="Bottom"
+                            Background="{StaticResource TriggerCloudSoftFillBrush}"
+                            BorderBrush="{StaticResource TriggerCloudEdgeBrush}" BorderThickness="1"
+                            CornerRadius="12" Effect="{StaticResource TriggerCloudShadow}"
+                            HorizontalAlignment="Left" VerticalAlignment="Bottom"
                             MouseLeftButtonDown="OnZoneMouseDown" MouseMove="OnZoneMouseMove"
-                            MouseLeftButtonUp="OnZoneMouseUp"/>
+                            MouseLeftButtonUp="OnZoneMouseUp">
+                        <Path Data="{StaticResource TriggerCloudGeometry}"
+                              Fill="{StaticResource TriggerCloudFillBrush}"
+                              Stretch="Uniform" Width="44" Height="23"
+                              IsHitTestVisible="False"/>
+                    </Border>
                     <Border x:Name="LeftZone" Tag="Left" Cursor="SizeAll"
-                            Background="#33E53935" BorderBrush="#FFE53935" BorderThickness="1"
-                            CornerRadius="2" HorizontalAlignment="Left" VerticalAlignment="Top"
+                            Background="{StaticResource TriggerCloudSoftFillBrush}"
+                            BorderBrush="{StaticResource TriggerCloudEdgeBrush}" BorderThickness="1"
+                            CornerRadius="12" Effect="{StaticResource TriggerCloudShadow}"
+                            HorizontalAlignment="Left" VerticalAlignment="Top"
                             MouseLeftButtonDown="OnZoneMouseDown" MouseMove="OnZoneMouseMove"
-                            MouseLeftButtonUp="OnZoneMouseUp"/>
+                            MouseLeftButtonUp="OnZoneMouseUp">
+                        <Path Data="{StaticResource TriggerCloudGeometry}"
+                              Fill="{StaticResource TriggerCloudFillBrush}"
+                              Stretch="Uniform" Width="44" Height="23"
+                              IsHitTestVisible="False"/>
+                    </Border>
                     <Border x:Name="RightZone" Tag="Right" Cursor="SizeAll"
-                            Background="#33E53935" BorderBrush="#FFE53935" BorderThickness="1"
-                            CornerRadius="2" HorizontalAlignment="Right" VerticalAlignment="Top"
+                            Background="{StaticResource TriggerCloudSoftFillBrush}"
+                            BorderBrush="{StaticResource TriggerCloudEdgeBrush}" BorderThickness="1"
+                            CornerRadius="12" Effect="{StaticResource TriggerCloudShadow}"
+                            HorizontalAlignment="Right" VerticalAlignment="Top"
                             MouseLeftButtonDown="OnZoneMouseDown" MouseMove="OnZoneMouseMove"
-                            MouseLeftButtonUp="OnZoneMouseUp"/>
+                            MouseLeftButtonUp="OnZoneMouseUp">
+                        <Path Data="{StaticResource TriggerCloudGeometry}"
+                              Fill="{StaticResource TriggerCloudFillBrush}"
+                              Stretch="Uniform" Width="44" Height="23"
+                              IsHitTestVisible="False"/>
+                    </Border>
                 </Grid>
             </Border>
 

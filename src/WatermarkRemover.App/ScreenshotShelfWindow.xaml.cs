@@ -9,6 +9,7 @@ using System.Windows.Media.Animation;
 using System.Windows.Media.Effects;
 using System.Windows.Threading;
 using System.Windows.Interop;
+using WatermarkRemover.App.Controls;
 using WatermarkRemover.App.Services;
 using WatermarkRemover.App.ViewModels;
 using WatermarkRemover.Core.Features.Screenshot;
@@ -21,7 +22,9 @@ namespace WatermarkRemover.App;
 /// each peg swings with a damped spring, new shots drop in from 46px above and kick the line,
 /// hover grows the glass card by 3.5%, and a copy shows the checkmark capsule and a 3° nudge.
 /// The line hides itself above the screen until the pointer rests in a configured trigger zone
-/// (截图设置 → 触发区域: four screen edges, each independently enabled).
+/// (截图设置 → 触发区域: four screen edges, each independently enabled). While the pointer is
+/// inside a zone but the line has not slid down yet, a translucent cloud (TriggerZoneIndicator,
+/// the same asset the settings mock uses) marks the zone so the gesture is discoverable.
 /// </summary>
 public partial class ScreenshotShelfWindow : Window
 {
@@ -33,8 +36,21 @@ public partial class ScreenshotShelfWindow : Window
     private const double HiddenHeight = 220;
 
     private const double HoldMilliseconds = 450;
-    private const double RevealDelayMilliseconds = 250;
-    private const double RetractDelayMilliseconds = 500;
+
+    /// <summary>
+    /// 指针轮询周期。旧实现是 Background 优先级的 DispatcherTimer、100ms：探针实测间隔
+    /// 109-110ms，且在切应用瞬间整段饿死 1.18s（22:58:07.901→09.079 无任何轮询记录）——
+    /// 「切到别的软件一直不收回，像卡住」的直接证据。现改为专用线程定时器 40ms，
+    /// 每个周期以 Input 优先级切回 UI 线程，判定不再被渲染/后台工作拖后腿。
+    /// </summary>
+    private const int PointerPollMilliseconds = 40;
+
+    /// <summary>热区停留多久弹出（旧值 250ms，叠加轮询量化后实测 314-332ms，「弹出慢」）。</summary>
+    private const double RevealDelayMilliseconds = 200;
+
+    /// <summary>鼠标离开多久收回（旧值 500ms，叠加轮询量化后实测 549-578ms，「收回慢」）。</summary>
+    private const double RetractDelayMilliseconds = 200;
+
     private const double PeekMilliseconds = 2500;
 
     private readonly DataTemplate _photoTemplate;
@@ -42,7 +58,14 @@ public partial class ScreenshotShelfWindow : Window
     private readonly List<ShelfItem> _falling = new();
     private readonly List<FileJobViewModel> _initialJobs;
     private readonly DispatcherTimer _frameTimer;
-    private readonly DispatcherTimer _pointerTimer;
+
+    /// <summary>
+    /// 指针轮询：跑在专用线程定时器上（不随 UI 线程忙碌而饿死），每个周期以 Input
+    /// 优先级切回 UI 线程执行判定。旧的 DispatcherTimer 方案见
+    /// <see cref="PointerPollMilliseconds"/> 的说明与探针日志。
+    /// </summary>
+    private readonly System.Threading.Timer _pointerTimer;
+
     private readonly DispatcherTimer _longPressTimer;
     private readonly DispatcherTimer _gustTimer;
     private readonly Random _random = new();
@@ -50,11 +73,27 @@ public partial class ScreenshotShelfWindow : Window
     /// <summary>触发区域配置（截图设置，四边独立）；设置保存后由宿主热更新。</summary>
     private ScreenshotTriggerSettings _trigger;
 
-    /// <summary>上次轮询时刻（探针：实测轮询间隔，验证定时器是否被饿死）。</summary>
-    private long _lastPointerTickMs = Environment.TickCount64;
+    /// <summary>上次轮询执行时刻（探针：UI 线程滞后证据——定时器准但执行被拖后）。</summary>
+    private long _lastPointerExecMs = Environment.TickCount64;
+
+    /// <summary>上次定时器周期时刻（探针：实测轮询间隔，验证线程定时器是否被饿死）。</summary>
+    private long _lastTimerTickMs = Environment.TickCount64;
+
+    /// <summary>最近一个定时器周期的实测间隔（ms），由轮询执行时读取用于探针。</summary>
+    private long _lastPollIntervalMs = PointerPollMilliseconds;
 
     /// <summary>窗口句柄钩子（探针：激活/失焦/鼠标离开等系统消息）。</summary>
     private HwndSource? _hwndSource;
+
+    /// <summary>触发区域「云朵」指示器：命中热区时浮出， lazily 创建后复用。</summary>
+    private TriggerZoneIndicator? _zoneIndicator;
+
+    /// <summary>截图会话进行中：热区整体静默——取景时鼠标会划过屏幕边缘，
+    /// 晾衣绳和云朵都不该在那一刻弹出来（长截图还会反复截屏，污染拼接图）。</summary>
+    private bool _captureSuppressed;
+
+    /// <summary>已进入关闭流程：线程定时器回调直接退场，不再往调度器投递。</summary>
+    private volatile bool _closed;
 
     private Rect _workArea;
     private long _lastFrameMs;
@@ -104,8 +143,11 @@ public partial class ScreenshotShelfWindow : Window
         _frameTimer = new DispatcherTimer(DispatcherPriority.Render) { Interval = TimeSpan.FromMilliseconds(16) };
         _frameTimer.Tick += OnFrame;
 
-        _pointerTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
-        _pointerTimer.Tick += OnPointerTick;
+        _pointerTimer = new System.Threading.Timer(
+            static state => ((ScreenshotShelfWindow)state!).OnPointerTimerTick(),
+            this,
+            TimeSpan.FromMilliseconds(PointerPollMilliseconds),
+            TimeSpan.FromMilliseconds(PointerPollMilliseconds));
 
         _longPressTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(HoldMilliseconds) };
         _longPressTimer.Tick += OnLongPressTick;
@@ -119,16 +161,17 @@ public partial class ScreenshotShelfWindow : Window
         MouseLeave += OnWindowMouseLeave;
         Closing += (_, _) =>
         {
+            _closed = true;
             _hwndSource?.RemoveHook(WndProc);
             _frameTimer.Stop();
-            _pointerTimer.Stop();
+            _pointerTimer.Dispose();
             _longPressTimer.Stop();
             _gustTimer.Stop();
+            _zoneIndicator?.Close();
             foreach (ShelfItem item in _items)
                 item.Root.ClearValue(RenderTransformProperty);
         };
 
-        _pointerTimer.Start();
         _lastFrameMs = Environment.TickCount64;
         ScheduleGust();
     }
@@ -253,6 +296,19 @@ public partial class ScreenshotShelfWindow : Window
         BeginAnimation(TopProperty, null);
         Top = _windowTop;
         IsHitTestVisible = false;
+
+        // 会话全程静默热区（配对调用见 ResumeAfterCapture）：云朵也不该浮出来。
+        _captureSuppressed = true;
+        HideZoneCloud();
+        ShelfProbe.Log("截图会话开始：热区响应静默");
+    }
+
+    /// <summary>截图会话结束：恢复热区响应（<see cref="SuppressForCapture"/> 的配对调用）。</summary>
+    public void ResumeAfterCapture()
+    {
+        if (!_captureSuppressed) return;
+        _captureSuppressed = false;
+        ShelfProbe.Log("截图会话结束：恢复热区响应");
     }
 
     /// <summary>设置保存后热更新触发区域（改配置不用重启）。</summary>
@@ -260,6 +316,7 @@ public partial class ScreenshotShelfWindow : Window
     {
         _trigger = trigger ?? throw new ArgumentNullException(nameof(trigger));
         ClampTrigger();
+        HideZoneCloud(); // 云朵按旧配置定位已无意义，下一轮命中会按新配置重新浮出
         ShelfProbe.Log($"触发区域已更新：[{DescribeZones()}]");
     }
 
@@ -272,6 +329,9 @@ public partial class ScreenshotShelfWindow : Window
         _manual |= manual;
         IsHitTestVisible = true;
         _topHotSince = DateTime.MinValue;
+
+        // 弹出态由晾衣绳本身占位，云朵退场（不压在绳子/照片上）。
+        HideZoneCloud();
 
         if (!_frameTimer.IsEnabled)
         {
@@ -295,45 +355,87 @@ public partial class ScreenshotShelfWindow : Window
         ShelfProbe.Log("收回");
     }
 
-    private void OnPointerTick(object? sender, EventArgs e)
+    /// <summary>
+    /// 线程定时器周期：只负责「量间隔 + 切回 UI 线程」，判定全部在 <see cref="OnPointerPoll"/>。
+    /// 线程定时器不随 UI 线程忙碌而饿死；投递用 Input 优先级，排在渲染之前。
+    /// </summary>
+    private void OnPointerTimerTick()
+    {
+        if (_closed) return;
+
+        long now = Environment.TickCount64;
+        _lastPollIntervalMs = now - _lastTimerTickMs;
+        _lastTimerTickMs = now;
+
+        try
+        {
+            Dispatcher.BeginInvoke(new Action(OnPointerPoll), DispatcherPriority.Input);
+        }
+        catch (Exception)
+        {
+            // 关闭竞态：调度器已停时没有可投递的队列，忽略即可（_closed 会拦住后续周期）。
+        }
+    }
+
+    /// <summary>
+    /// 指针判定（UI 线程，Input 优先级）。与旧版一致的状态机，三处变化：
+    /// ① 截图会话中整体静默；② 命中热区时浮出云朵；③ 探针记录定时器实测周期与执行滞后。
+    /// </summary>
+    private void OnPointerPoll()
     {
         if (!GetCursorPos(out CursorPoint cursor)) return;
 
-        // 探针：实测轮询间隔。DispatcherTimer 在 UI 线程繁忙时会拖后腿，间隔本身就是证据。
-        long tickNow = Environment.TickCount64;
-        long interval = tickNow - _lastPointerTickMs;
-        _lastPointerTickMs = tickNow;
+        // 探针：UI 线程滞后证据（定时器周期准、执行间隔被拉长 = 判定延迟来自 UI 线程）。
+        long execNow = Environment.TickCount64;
+        long execInterval = execNow - _lastPointerExecMs;
+        _lastPointerExecMs = execNow;
+        if (execInterval > PointerPollMilliseconds + 60)
+        {
+            ShelfProbe.Log(
+                $"⚠ 轮询执行滞后：定时器 {_lastPollIntervalMs}ms，实际执行间隔 {execInterval}ms（UI 线程被占）");
+        }
+
+        long interval = _lastPollIntervalMs;
         DateTime now = DateTime.Now;
 
         if (!_revealed)
         {
+            if (_captureSuppressed) return;
+
             ScreenEdge? hot = _trigger.HitTest(
                 cursor.X, cursor.Y, _workArea.Left, _workArea.Top, _workArea.Width, _workArea.Height);
             bool gated = _manual || _dragStarted;
-            if (hot is not null && !gated)
-            {
-                if (_topHotSince == DateTime.MinValue) _topHotSince = now;
-                double held = (now - _topHotSince).TotalMilliseconds;
-                if (held >= RevealDelayMilliseconds)
-                {
-                    _topHotSince = DateTime.MinValue;
-                    ShelfProbe.Log($"轮询间隔{interval}ms 光标({cursor.X},{cursor.Y}) 命中{hot}边并持续{held:F0}ms，达到弹出阈值");
-                    ShowLine(manual: false);
-                }
-                else
-                {
-                    ShelfProbe.Log($"轮询间隔{interval}ms 光标({cursor.X},{cursor.Y}) 命中{hot}边，持续{held:F0}ms / {RevealDelayMilliseconds:F0}ms");
-                }
-            }
-            else
+
+            // 云朵只看「命中哪条边」：命中即浮出（gated 时也浮，只是不弹晾衣绳）。
+            if (hot is not null) ShowZoneCloud(hot.Value);
+            else HideZoneCloud();
+
+            if (hot is null || gated)
             {
                 if (_topHotSince != DateTime.MinValue)
                     ShelfProbe.Log($"轮询间隔{interval}ms 光标({cursor.X},{cursor.Y}) 热区中断（manual={_manual} drag={_dragStarted}），持续计时清零");
                 _topHotSince = DateTime.MinValue;
+                return;
+            }
+
+            if (_topHotSince == DateTime.MinValue) _topHotSince = now;
+            double held = (now - _topHotSince).TotalMilliseconds;
+            if (held >= RevealDelayMilliseconds)
+            {
+                _topHotSince = DateTime.MinValue;
+                ShelfProbe.Log($"轮询间隔{interval}ms 光标({cursor.X},{cursor.Y}) 命中{hot}边并持续{held:F0}ms，达到弹出阈值");
+                ShowLine(manual: false);
+            }
+            else
+            {
+                ShelfProbe.Log($"轮询间隔{interval}ms 光标({cursor.X},{cursor.Y}) 命中{hot}边，持续{held:F0}ms / {RevealDelayMilliseconds:F0}ms");
             }
 
             return;
         }
+
+        // 弹出态由晾衣绳占位，云朵退场。
+        HideZoneCloud();
 
         bool inside = cursor.Y >= _workArea.Top - 2 &&
                       cursor.Y <= _workArea.Top + Height + 8 &&
@@ -366,6 +468,45 @@ public partial class ScreenshotShelfWindow : Window
         }
     }
 
+    /// <summary>
+    /// 系统层面通知「本软件不再是前台」：立即收回。探针证实 WM_ACTIVATEAPP 失活消息
+    /// 到达及时（22:58:08.375 那条），旧代码只记日志不动作，收回全押在轮询上——
+    /// 轮询被 UI 线程饿死时就表现为「切到别的软件一直不收回，像卡住」。
+    /// 拖拽中的 OLE 模态循环会误报失活，排除；截图会话中窗口本就已收起，无需处理。
+    /// </summary>
+    private void HideFromSystem(string reason)
+    {
+        if (!_revealed || _dragStarted) return;
+        ShelfProbe.Log($"立即收回（{reason}）");
+        HideLine();
+    }
+
+    /// <summary>
+    /// 系统通知指针离开窗口（WM_MOUSELEAVE / WPF MouseLeave）：立刻开始离开计时，
+    /// 不等下一个轮询周期才发现——系统消息比轮询更早，且每轮还要再等最多 40ms。
+    /// </summary>
+    private void StartAwayCountdown(string reason)
+    {
+        if (!_revealed || _manual || _dragStarted || _awaySince != DateTime.MinValue) return;
+        _awaySince = DateTime.Now;
+        ShelfProbe.Log($"{reason}：开始离开计时（需{RetractDelayMilliseconds:F0}ms）");
+    }
+
+    /// <summary>命中热区：把云朵指示器挪到该边热区（屏幕坐标）并淡入；指示器只创建一次。</summary>
+    private void ShowZoneCloud(ScreenEdge edge)
+    {
+        if (_trigger.ZoneRect(edge, _workArea.Width, _workArea.Height) is not { } rect) return;
+
+        _zoneIndicator ??= new TriggerZoneIndicator();
+        _zoneIndicator.ShowAt(new ScreenRect(
+            rect.X + _workArea.Left,
+            rect.Y + _workArea.Top,
+            rect.Width,
+            rect.Height));
+    }
+
+    private void HideZoneCloud() => _zoneIndicator?.HideCloud();
+
     // --- 触发区域 / 探针 ---------------------------------------------------------
 
     private void ClampTrigger()
@@ -389,22 +530,29 @@ public partial class ScreenshotShelfWindow : Window
     private void OnWindowMouseEnter(object sender, MouseEventArgs e) =>
         ShelfProbe.Log("WPF MouseEnter：指针进入晾衣绳窗口");
 
-    private void OnWindowMouseLeave(object sender, MouseEventArgs e) =>
+    private void OnWindowMouseLeave(object sender, MouseEventArgs e)
+    {
         ShelfProbe.Log("WPF MouseLeave：指针离开晾衣绳窗口");
+        StartAwayCountdown("WPF MouseLeave");
+    }
 
     /// <summary>
-    /// 系统消息探针：激活/失焦/鼠标离开窗口。「切到其他应用不收回」必须先确认这些消息
-    /// 到底有没有到窗口，再决定根因方向（没收到底层消息 vs 收到了但判定逻辑不放行）。
+    /// 系统消息探针 + 响应：激活/失焦/鼠标离开窗口。「切到其他应用不收回」的根因就是
+    /// 失活消息收到了却没动作（探针第一轮已证实消息到达及时），现在收到即收回。
     /// </summary>
     private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
         switch (msg)
         {
             case 0x0006: // WM_ACTIVATE
-                ShelfProbe.Log($"WM_ACTIVATE 激活={wParam.ToInt32() != 0}");
+                bool windowActive = wParam.ToInt32() != 0;
+                ShelfProbe.Log($"WM_ACTIVATE 激活={windowActive}");
+                if (!windowActive) HideFromSystem("WM_ACTIVATE 失活");
                 break;
             case 0x001C: // WM_ACTIVATEAPP
-                ShelfProbe.Log($"WM_ACTIVATEAPP 激活={wParam != IntPtr.Zero}");
+                bool appActive = wParam != IntPtr.Zero;
+                ShelfProbe.Log($"WM_ACTIVATEAPP 激活={appActive}");
+                if (!appActive) HideFromSystem("WM_ACTIVATEAPP 失活");
                 break;
             case 0x0008: // WM_KILLFOCUS
                 ShelfProbe.Log($"WM_KILLFOCUS 新焦点窗口=0x{wParam.ToInt64():X8}");
@@ -414,6 +562,7 @@ public partial class ScreenshotShelfWindow : Window
                 break;
             case 0x02A3: // WM_MOUSELEAVE
                 ShelfProbe.Log("WM_MOUSELEAVE：系统通知指针离开窗口");
+                StartAwayCountdown("WM_MOUSELEAVE");
                 break;
         }
 

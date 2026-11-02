@@ -7,9 +7,10 @@ using WatermarkRemover.Core.Features.Screenshot;
 namespace WatermarkRemover.App.Controls;
 
 /// <summary>
-/// 截图设置 → 触发区域编辑器：左侧示意图里四条边的热区色块可按住沿边拖动调位置，
+/// 截图设置 → 触发区域编辑器：左侧示意图里四条边的云朵热区可按住沿边拖动调位置，
 /// 右侧各行改启停 / 厚度 / 长度。全部直接绑定设置工作副本，随「返回应用」持久化。
 /// 示意图按主屏工作区等比映射——位置用比例表示，换分辨率不会错位。
+/// 云朵形状与运行时指示器（TriggerZoneIndicator）共用 Themes/TriggerZone.xaml 的资源。
 /// </summary>
 public partial class ScreenshotTriggerEditor : UserControl
 {

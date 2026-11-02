@@ -66,16 +66,31 @@ public partial class MainWindow : Window
         // The screenshot overlay is a set of full-screen windows, so the host supplies it; the
         // view model only turns the result into a record and user-visible status.
         _viewModel.ScreenshotSaved += (_, job) => EnsureShelf().AddScreenshot(job);
-        _viewModel.ScreenshotCaptureHandler = () =>
+        _viewModel.ScreenshotCaptureHandler = async () =>
         {
             // The line is topmost: hide it so it never appears inside the captured image.
+            // 会话全程静默热区（取景时鼠标会划过屏幕边缘），结束再恢复。
             _shelf?.SuppressForCapture();
-            return ScreenshotOverlaySession.RunAsync(this, _viewModel.Settings);
+            try
+            {
+                return await ScreenshotOverlaySession.RunAsync(this, _viewModel.Settings).ConfigureAwait(true);
+            }
+            finally
+            {
+                _shelf?.ResumeAfterCapture();
+            }
         };
-        _viewModel.ScreenshotFullScreenHandler = delaySeconds =>
+        _viewModel.ScreenshotFullScreenHandler = async delaySeconds =>
         {
             _shelf?.SuppressForCapture();
-            return ScreenshotOverlaySession.CaptureFullScreenAsync(this, _viewModel.Settings, delaySeconds);
+            try
+            {
+                return await ScreenshotOverlaySession.CaptureFullScreenAsync(this, _viewModel.Settings, delaySeconds).ConfigureAwait(true);
+            }
+            finally
+            {
+                _shelf?.ResumeAfterCapture();
+            }
         };
         // The settings page asks before saving: an occupied gesture is rejected there, so the
         // old shortcut and the saved settings both stay untouched. A gesture already used by
