@@ -10,7 +10,7 @@ namespace WatermarkRemover.App;
 /// <see cref="ViewModels.PdfPreviewViewModel"/>; window-level keys (Esc) are handled by
 /// MainWindow. The page plane is the shared <see cref="Controls.ImageSurface"/>, so wheel
 /// zoom / drag pan / double-click behave exactly like the screenshot viewer — this control
-/// only contributes the film rail, paging arrows and the page operations around it.
+/// only contributes the film rail, paging arrows, page-zoom buttons and the page operations.
 /// </summary>
 public partial class PdfPreviewPage : UserControl
 {
@@ -18,6 +18,24 @@ public partial class PdfPreviewPage : UserControl
     {
         InitializeComponent();
     }
+
+    // --- 页面缩放 --------------------------------------------------------------
+    // 滚轮之外的可点入口：用户按了右侧那组缩略图缩放按钮却没反应，是因为它们只管胶片轨。
+    // 这三个动作全部作用在页面本身，窗口层的快捷键也走同三个入口。
+
+    internal void ZoomPage(double factor) => PageSurface.ZoomAtCenter(factor);
+
+    internal void FitPage() => PageSurface.Fit();
+
+    internal void ActualSizePage() => PageSurface.ActualSize();
+
+    private void OnZoomInClick(object sender, RoutedEventArgs e) => ZoomPage(1.25);
+
+    private void OnZoomOutClick(object sender, RoutedEventArgs e) => ZoomPage(1 / 1.25);
+
+    private void OnFitClick(object sender, RoutedEventArgs e) => FitPage();
+
+    private void OnActualSizeClick(object sender, RoutedEventArgs e) => ActualSizePage();
 
     /// <summary>「插入文件」：选一个 PDF，把它的页插到当前页之后。文件选择属于窗口层，
     /// 插入本身（写盘、方向校正、条带刷新）留在视图模型里。</summary>

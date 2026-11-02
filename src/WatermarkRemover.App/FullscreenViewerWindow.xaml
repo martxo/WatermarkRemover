@@ -14,5 +14,5 @@
     <!-- Screen-level image viewer: a dark veil over the entire screen (not just the app
          window), the page in the middle, the film rail on the left — reached by clicking a
          thumbnail tile, like every desktop image browser. -->
-    <app:PdfPreviewPage/>
+    <app:PdfPreviewPage x:Name="PageView"/>
 </Window>

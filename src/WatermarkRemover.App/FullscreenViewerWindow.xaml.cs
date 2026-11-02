@@ -28,11 +28,33 @@ public partial class FullscreenViewerWindow : System.Windows.Window
 
     private void OnPreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
     {
-        if (e.Key == System.Windows.Input.Key.Escape)
+        switch (e.Key)
         {
-            Close();
-            e.Handled = true;
+            case System.Windows.Input.Key.Escape:
+                Close();
+                break;
+            // 与看图窗口同一套缩放键：0 适应、1 原始、+/- 缩放。
+            case System.Windows.Input.Key.D0:
+            case System.Windows.Input.Key.NumPad0:
+                PageView.FitPage();
+                break;
+            case System.Windows.Input.Key.D1:
+            case System.Windows.Input.Key.NumPad1:
+                PageView.ActualSizePage();
+                break;
+            case System.Windows.Input.Key.OemPlus:
+            case System.Windows.Input.Key.Add:
+                PageView.ZoomPage(1.15);
+                break;
+            case System.Windows.Input.Key.OemMinus:
+            case System.Windows.Input.Key.Subtract:
+                PageView.ZoomPage(1 / 1.15);
+                break;
+            default:
+                return;
         }
+
+        e.Handled = true;
     }
 
     /// <summary>

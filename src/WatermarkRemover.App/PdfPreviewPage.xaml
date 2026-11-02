@@ -91,14 +91,27 @@
                 </StackPanel>
 
                 <TextBlock Grid.Column="1"
-                           Text="滚轮缩放 · 拖动平移 · 双击 100%"
+                           Text="滚轮缩放 · 拖动平移 · 双击 100% · 0 适应 · 1 原始 · +/- 缩放"
                            FontSize="11"
                            Foreground="#66FFFFFF"
                            VerticalAlignment="Center"
-                           HorizontalAlignment="Center"/>
+                           HorizontalAlignment="Center" TextTrimming="CharacterEllipsis"/>
 
                 <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center"
                             Margin="0,0,54,0">
+                    <!-- 页面缩放的可点入口：滚轮之外还有按钮，用户不必猜手势 -->
+                    <Button Content="－" Style="{StaticResource SmallButton}"
+                            Click="OnZoomOutClick" Margin="0,0,6,0"
+                            ToolTip="缩小（-）"/>
+                    <Button Content="＋" Style="{StaticResource SmallButton}"
+                            Click="OnZoomInClick" Margin="0,0,6,0"
+                            ToolTip="放大（+）"/>
+                    <Button Content="适应" Style="{StaticResource SmallButton}"
+                            Click="OnFitClick" Margin="0,0,6,0"
+                            ToolTip="把整页放进窗口（0）"/>
+                    <Button Content="1:1" Style="{StaticResource SmallButton}"
+                            Click="OnActualSizeClick" Margin="0,0,10,0"
+                            ToolTip="原始大小（1）"/>
                     <Button Content="插入文件"
                             Style="{StaticResource SmallButton}"
                             Click="OnInsertFileClick"
@@ -115,9 +128,11 @@
                  drag pan and double-click 100% — the exact interaction the screenshot viewer
                  uses, so both fullscreen viewers behave the same. The page ops below stay. -->
             <Grid Grid.Row="1">
+                <!-- 上下留白：整页「适应窗口」时页边不会贴着窗口边缘，看起来像被裁掉一截 -->
                 <controls:ImageSurface x:Name="PageSurface"
                                        Source="{Binding CurrentImage}"
-                                       AllowUpscaleInFit="True"/>
+                                       AllowUpscaleInFit="True"
+                                       Margin="0,6,0,14"/>
 
                 <!-- corner edit buttons: rotate + delete side by side at top-left (mirroring the
                      tile layout), paging arrows on the canvas edges; they drive the current
