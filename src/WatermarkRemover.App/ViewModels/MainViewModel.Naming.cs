@@ -45,7 +45,9 @@ public sealed partial class MainViewModel
         // The row says "完成" the moment the PDF lands, so naming needs its own line or the
         // work (and its failure) is completely invisible.
         bool namingOn = Settings.AutoNameByContent;
-        if (namingOn) job.SetNamingNote("识别命名中…");
+        // 首屏命名已在扫描途中给出行内结论（已识别：X / 首屏未识别）；这时再写「识别命名中…」
+        // 会把用户刚看到的名字盖掉，所以只在没有首屏结果时才用这条泛泛提示。
+        if (namingOn && earlyNaming is null) job.SetNamingNote("识别命名中…");
         try
         {
             // The open strip auto-orients / rewrites the file right after landing; a rename

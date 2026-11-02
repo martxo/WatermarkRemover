@@ -93,7 +93,7 @@ public sealed partial class MainViewModel
             {
                 AppLog.Debug($"扫描页到达：第 {page.PageNumber} 页附带命名图，" +
                              $"{namingImage.Length / 1024} KB，开始首屏命名");
-                earlyNaming = Task.Run(() => _naming.TrySuggestFromImageAsync(namingImage));
+                earlyNaming = SuggestEarlyAsync(namingImage, job, () => !scanFinished);
             }
         });
 
@@ -204,6 +204,28 @@ public sealed partial class MainViewModel
         // An interrupted session is the same — the next sheet stack belongs on this same
         // document via 「继续扫描」, not a fresh one.
         return !outcome.Cancelled && outcome.Interruption is not { Length: > 0 };
+    }
+
+    /// <summary>
+    /// 首屏命名在扫描还在读后面几页时就出结果。把名字立刻写到行上，用户不用等整份文档扫完
+    /// 才看到「识别到什么」；真正改名仍要等 PDF 落盘、且预览的自动摆正/清空白页写完。
+    /// </summary>
+    private async Task<AutoNameResult?> SuggestEarlyAsync(
+        byte[] namingImage, FileJobViewModel job, Func<bool> stillScanning)
+    {
+        AutoNameResult? suggestion = await _naming
+            .TrySuggestFromImageAsync(namingImage)
+            .ConfigureAwait(true);
+
+        // 扫描已经落盘时，行上的命名状态由后台命名接手；这份「扫描结束后改名」的旧话不能再写，
+        // 否则一页文档这种"落地比识别还快"的情况会把最终状态盖掉。
+        if (stillScanning())
+        {
+            job.SetNamingNote(suggestion is null
+                ? "首屏未识别，扫描结束后再试"
+                : $"已识别：{suggestion.SuggestedStem}，扫描结束后自动改名");
+        }
+        return suggestion;
     }
 
     /// <summary>A row that exists for the whole scan: live page count first, the finished PDF

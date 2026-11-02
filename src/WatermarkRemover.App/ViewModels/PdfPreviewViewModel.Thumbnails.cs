@@ -60,7 +60,27 @@ public sealed partial class PdfPreviewViewModel
     private void StartThumbnailLoad() =>
         _ = LoadThumbnailsAsync(Thumbnails.ToList(), ++_thumbnailLoadGeneration);
 
+    /// <summary>Fills the strip while marking the file as "being read by the preview": every tile
+    /// render opens the PDF for a moment, and a rename (File.Move) landing inside that window is
+    /// rejected by Windows — the 2026-11-02 scan read the name correctly and still kept the
+    /// timestamp name because the move hit a thumbnail render. The counter covers overlapping
+    /// fills (initial load + insert/delete rebuilds).</summary>
     private async Task LoadThumbnailsAsync(
+        IReadOnlyList<PdfPreviewThumbnailViewModel> thumbs,
+        int generation)
+    {
+        _thumbnailFillCount++;
+        try
+        {
+            await FillThumbnailsAsync(thumbs, generation).ConfigureAwait(false);
+        }
+        finally
+        {
+            _thumbnailFillCount--;
+        }
+    }
+
+    private async Task FillThumbnailsAsync(
         IReadOnlyList<PdfPreviewThumbnailViewModel> thumbs,
         int generation)
     {

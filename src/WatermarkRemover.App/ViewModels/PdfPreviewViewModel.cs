@@ -91,6 +91,9 @@ public sealed partial class PdfPreviewViewModel : ObservableObject
 
     private bool _isOrienting;
 
+    /// <summary>How many thumbnail fills are currently reading the PDF; a rename waits for zero.</summary>
+    private int _thumbnailFillCount;
+
     /// <summary>Bumped whenever the tile fill is released/restarted; an older fill stops early so
     /// a folded strip cannot keep decoding images in the background.</summary>
     private int _thumbnailLoadGeneration;

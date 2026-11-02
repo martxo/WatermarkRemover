@@ -339,14 +339,18 @@ public sealed partial class PdfPreviewViewModel
     }
 
     /// <summary>
-    /// Waits until no load / orientation / page-write pass is touching the file. The host's
-    /// background naming (a rename = File.Move) races those writers otherwise — a move during
-    /// a strip rewrite throws and the scan silently keeps its timestamp name.
+    /// Waits until no load / orientation / page-write / thumbnail-read pass is touching the file.
+    /// The host's background naming (a rename = File.Move) races those readers otherwise — a move
+    /// during a strip rewrite or thumbnail render throws and the scan keeps its timestamp name
+    /// even though the right name was already recognised.
     /// </summary>
     internal async Task WaitForSettledAsync()
     {
-        for (int i = 0; i < 300 && (_isLoading || _isOrienting || IsRotating); i++)
+        for (int i = 0; i < 300 &&
+            (_isLoading || _isOrienting || IsRotating || _thumbnailFillCount > 0); i++)
+        {
             await Task.Delay(100).ConfigureAwait(false);
+        }
     }
     /// <summary>
     /// Auto-orientation: render the first page, let the OCR engine vote on the four quarter

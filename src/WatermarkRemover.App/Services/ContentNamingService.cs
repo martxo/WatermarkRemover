@@ -184,8 +184,9 @@ public sealed class ContentNamingService
                 return pdfPath;
             }
 
-            // The strip may still hold the file for a page write (e.g. the user rotated a page
-            // while the naming OCR ran); a short backoff beats losing the good name.
+            // The strip may still hold the file for a page write or a thumbnail render (e.g. the
+            // user scrolled while the naming OCR ran); a bounded backoff (0.4 + 0.8 + 1.2 + 1.6 s)
+            // beats losing the good name — the host drains those passes, this covers the tail.
             int attempts = 0;
             for (int attempt = 1; ; attempt++)
             {
@@ -195,7 +196,7 @@ public sealed class ContentNamingService
                     File.Move(pdfPath, target);
                     break;
                 }
-                catch (IOException) when (attempt < 3)
+                catch (IOException) when (attempt < 5)
                 {
                     await Task.Delay(attempt * 400).ConfigureAwait(false);
                 }
