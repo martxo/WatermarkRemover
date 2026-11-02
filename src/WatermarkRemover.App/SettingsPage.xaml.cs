@@ -146,19 +146,21 @@ public partial class SettingsPage : UserControl
         if (modifiers.HasFlag(ModifierKeys.Shift)) parts.Add("Shift");
         if (modifiers.HasFlag(ModifierKeys.Windows)) parts.Add("Win");
 
-        if (parts.Count > 0 &&
-            ScreenshotHotkey.TryParse($"{string.Join('+', parts)}+{name}", out ScreenshotHotkey gesture))
+        // 单键也录：不按修饰键直接按 F1/A 就是单键热键（Win32 RegisterHotKey 接受
+        // fsModifiers=0，实测可注册）；抢占按键的风险在保存时一次性提示，这里不拦。
+        string gesture = parts.Count > 0 ? $"{string.Join('+', parts)}+{name}" : name;
+        if (ScreenshotHotkey.TryParse(gesture, out ScreenshotHotkey parsed))
         {
             switch ((sender as FrameworkElement)?.Tag as string)
             {
                 case "fullscreen":
-                    vm.Settings.ScreenshotFullScreenHotkey = gesture.ToString();
+                    vm.Settings.ScreenshotFullScreenHotkey = parsed.ToString();
                     break;
                 case "shelf":
-                    vm.Settings.ScreenshotShelfHotkey = gesture.ToString();
+                    vm.Settings.ScreenshotShelfHotkey = parsed.ToString();
                     break;
                 default:
-                    vm.Settings.ScreenshotHotkey = gesture.ToString();
+                    vm.Settings.ScreenshotHotkey = parsed.ToString();
                     break;
             }
         }

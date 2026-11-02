@@ -589,7 +589,7 @@
                                             Margin="8,0,0,0" VerticalAlignment="Center"
                                             Click="OnResetScreenshotHotkey"/>
                                 </Grid>
-                                <TextBlock Text="改动随「返回应用」保存生效；保存前会检查格式、三个功能是否撞键、以及组合键是否被其他程序占用，冲突时留在设置页并提示换键，不会丢掉原来的快捷键。"
+                                <TextBlock Text="可用形式：Ctrl+Alt+A 这样的组合键，或直接按 F1 / A 这样的单键（可用按键：字母、数字、F1-F24、PrintScreen）。单键全局热键会抢占该按键——运行本软件期间，其他程序里按这个键会触发截图而不是它们自己的功能（例如 F1 在多数软件里是「帮助」），保存时会提醒一次。改动随「返回应用」保存生效；保存前会检查格式、三个功能是否撞键、以及热键是否被其他程序占用，冲突时留在设置页并提示换键，不会丢掉原来的快捷键。"
                                            Style="{StaticResource RowCaption}"
                                            Margin="0,8,0,0"/>
                             </StackPanel>

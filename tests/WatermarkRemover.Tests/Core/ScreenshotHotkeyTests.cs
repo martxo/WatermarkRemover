@@ -53,15 +53,50 @@ public sealed class ScreenshotHotkeyTests
 
     [Theory]
     [InlineData("")]
-    [InlineData("A")]
     [InlineData("Ctrl")]
     [InlineData("Ctrl+Shift")]
     [InlineData("Ctrl+A+B")]
     [InlineData("Ctrl+Mouse1")]
     [InlineData("Ctrl+F25")]
+    [InlineData("Ctrl+F0")]
     public void Malformed_gestures_are_rejected(string text)
     {
         Assert.False(ScreenshotHotkey.TryParse(text, out _));
+    }
+
+    // --- 单键热键 -----------------------------------------------------------------
+    // Win32 RegisterHotKey 接受 fsModifiers=0（本机实测 F1/A/Space/PrintScreen 全部注册成功，
+    // 撞键返回 1409），所以解析层不再强制修饰键；抢占按键的风险由设置页一次性提示兜住。
+
+    [Theory]
+    [InlineData("F1", "F1")]
+    [InlineData("f2", "F2")]
+    [InlineData("F12", "F12")]
+    [InlineData("A", "A")]
+    [InlineData("q", "Q")]
+    [InlineData("7", "7")]
+    [InlineData("PrintScreen", "PrintScreen")]
+    [InlineData("PrtSc", "PrintScreen")]
+    public void A_bare_key_parses_without_modifiers(string text, string canonical)
+    {
+        Assert.True(ScreenshotHotkey.TryParse(text, out ScreenshotHotkey hotkey));
+        Assert.False(hotkey.HasModifier, $"{text} 应当没有修饰键");
+        Assert.Equal(canonical, hotkey.ToString());
+        Assert.Equal(canonical, hotkey.Key);
+    }
+
+    [Fact]
+    public void A_bare_key_round_trips_through_its_text_form()
+    {
+        Assert.True(ScreenshotHotkey.TryParse("F1", out ScreenshotHotkey hotkey));
+        Assert.Equal(hotkey, ScreenshotHotkey.ParseOrDefault(hotkey.ToString()));
+    }
+
+    [Fact]
+    public void ParseOrDefault_keeps_a_saved_bare_key_instead_of_replacing_it()
+    {
+        Assert.False(ScreenshotHotkey.ParseOrDefault("F1").HasModifier);
+        Assert.Equal("F1", ScreenshotHotkey.ParseOrDefault("F1").ToString());
     }
 
     [Fact]

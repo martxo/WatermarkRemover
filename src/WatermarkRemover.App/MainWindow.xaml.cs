@@ -318,9 +318,9 @@ public partial class MainWindow : Window
             _viewModel.Settings.ScreenshotFullScreenHotkey);
         ScreenshotHotkey shelf = ScreenshotHotkey.ParseOrDefault(_viewModel.Settings.ScreenshotShelfHotkey);
 
-        bool regionOk = ApplyGesture(_hotkeys, region, ref _activeHotkey, "截图快捷键", notifyFailure);
-        ApplyGesture(_fullScreenHotkeys, fullScreen, ref _activeFullScreenHotkey, "全屏截图快捷键", notifyFailure);
-        ApplyGesture(_shelfHotkeys, shelf, ref _activeShelfHotkey, "截图晾衣绳快捷键", notifyFailure);
+        bool regionOk = ApplyGesture(_hotkeys, region, ref _activeHotkey, "截图快捷键", notifyFailure, ScreenshotHotkey.Default);
+        ApplyGesture(_fullScreenHotkeys, fullScreen, ref _activeFullScreenHotkey, "全屏截图快捷键", notifyFailure, ScreenshotHotkey.FullScreenDefault);
+        ApplyGesture(_shelfHotkeys, shelf, ref _activeShelfHotkey, "截图晾衣绳快捷键", notifyFailure, ScreenshotHotkey.ShelfDefault);
 
         // The screenshot page's status line talks about the region gesture.
         _viewModel.ReportScreenshotHotkey(
@@ -335,7 +335,8 @@ public partial class MainWindow : Window
         ScreenshotHotkey requested,
         ref ScreenshotHotkey? active,
         string label,
-        bool notifyFailure)
+        bool notifyFailure,
+        ScreenshotHotkey builtInDefault)
     {
         if (service is null) return false;
         if (active == requested) return true;
@@ -346,13 +347,20 @@ public partial class MainWindow : Window
             return true;
         }
 
-        ScreenshotHotkey? fallback = active;
-        bool restored = fallback is { } previous && service.Register(previous, out _);
+        // 回退顺序：上一个可用的 →（启动时没有上一个）内置默认键。任何一步成功都不能让
+        // 功能处于「没有热键」的状态——那等于静默失效。
+        bool hasPrevious = active is { } previous;
+        ScreenshotHotkey? fallback = active ?? builtInDefault;
+        bool restored = fallback is { } candidate && service.Register(candidate, out _);
         active = restored ? fallback : null;
 
         if (notifyFailure)
         {
-            string kept = restored ? $"\n\n仍继续使用原快捷键 {fallback}。" : string.Empty;
+            string kept = restored
+                ? hasPrevious
+                    ? $"\n\n仍继续使用原快捷键 {fallback}。"
+                    : $"\n\n已临时回退到内置默认快捷键 {fallback}（你的设置保持不变，下次启动仍会尝试 {requested}）。"
+                : string.Empty;
             _dialogs.Warn(
                 $"{label} {requested} 未能注册：{error ?? "未知原因"}。{kept}\n\n" +
                 "请换一个组合键，或先关闭占用该快捷键的程序；截图页面上的按钮始终可用。",

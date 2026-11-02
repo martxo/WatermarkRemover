@@ -30,6 +30,12 @@ namespace WatermarkRemover.App.ViewModels;
 public sealed partial class MainViewModel
 {
     /// <summary>
+    /// 本次运行里是否已经提醒过「单键全局热键会抢占按键」。一次性提示：确认过一次之后，
+    /// 同一轮运行再改单键热键不再唠叨；重启后重新提醒（设置是持久的，提醒不必持久）。
+    /// </summary>
+    private bool _singleKeyRiskAcknowledged;
+
+    /// <summary>
     /// True while the settings second-level page covers the whole window. The view switches
     /// between the main shell and the settings page purely from this flag — no new window.
     /// </summary>
@@ -128,7 +134,8 @@ public sealed partial class MainViewModel
             if (!ScreenshotHotkey.TryParse(value, out ScreenshotHotkey gesture))
             {
                 _dialogs.Warn(
-                    $"「{label}」快捷键格式不正确，请填入类似 Ctrl+Alt+A 的组合（至少包含一个修饰键）。",
+                    $"「{label}」快捷键格式不正确。可用形式：Ctrl+Alt+A 这样的组合，或 F1 这样的单键" +
+                    "（可用按键：字母、数字、F1-F24、PrintScreen）。",
                     "提示");
                 return false;
             }
@@ -178,6 +185,20 @@ public sealed partial class MainViewModel
         }
 
         page.Settings.ScreenshotOutputDirectory = screenshotDirectory;
+
+        // 单键热键风险提醒（一次性）：单键全局热键会从所有程序手里抢这个键——运行本软件期间
+        // 别的程序按 F1 会触发截图而不是它们自己的帮助。允许设置，但每次运行只提醒一次，
+        // 用户取消就不落盘、留在设置页改。
+        if (!_singleKeyRiskAcknowledged && parsed.Any(gesture => !gesture.HasModifier))
+        {
+            _singleKeyRiskAcknowledged = _dialogs.Confirm(
+                "检测到没有修饰键的单键热键。\n\n" +
+                "单键全局热键会抢占该按键：运行本软件期间，其他程序里按这个键会触发截图，" +
+                "而不是它们自己的功能（例如 F1 在多数软件里是「帮助」）。\n\n" +
+                "确定要这样设置吗？",
+                "单键热键提醒");
+            if (!_singleKeyRiskAcknowledged) return false;
+        }
 
         if (!page.Settings.ScreenshotAutoCopy && !page.Settings.ScreenshotAutoSave)
         {

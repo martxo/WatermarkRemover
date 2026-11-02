@@ -38,8 +38,12 @@ public readonly record struct ScreenshotHotkey(bool Control, bool Alt, bool Shif
 
     /// <summary>
     /// Accepts case-insensitive modifier names (Ctrl/Control, Alt, Shift, Win/Windows) and
-    /// A-Z, 0-9 or F1-F24 keys. At least one modifier is required: a bare key would be
-    /// registered system-wide and steal typing from every application.
+    /// A-Z, 0-9 or F1-F24 keys. A bare key (no modifier at all) is accepted too:
+    /// <see cref="TryParse"/> does not require modifiers because Win32
+    /// <c>RegisterHotKey</c> takes <c>fsModifiers=0</c> — verified on this machine, F1/A/Space
+    /// all register successfully. The catch is behavioural, not technical: a bare global hotkey
+    /// steals that key from every application while this app runs (F1 is the help key in most
+    /// programs), so the settings page shows a one-time warning before saving one.
     /// </summary>
     public static bool TryParse(string? text, out ScreenshotHotkey hotkey)
     {
@@ -75,7 +79,8 @@ public readonly record struct ScreenshotHotkey(bool Control, bool Alt, bool Shif
             }
         }
 
-        if (key is null || !(control || alt || shift || windows)) return false;
+        // 不强制修饰键：单键（F1、A…）也是合法的全局热键（见方法注释里的实测结论）。
+        if (key is null) return false;
 
         hotkey = new ScreenshotHotkey(control, alt, shift, windows, key);
         return true;
