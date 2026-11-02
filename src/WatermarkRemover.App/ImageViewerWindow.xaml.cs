@@ -74,8 +74,18 @@ public partial class ImageViewerWindow : Window
 
     private void RestoreAndActivate()
     {
-        if (WindowState == WindowState.Minimized) WindowState = WindowState.Maximized;
+        // 统一由 ScreenCoverage 铺满显示器：WindowState=Maximized 的无边框窗口会停在任务栏外，
+        // 底部露出桌面，看图内容和 PDF 看图一样会"少一截"。
+        ScreenCoverage.CoverScreenOf(this);
         if (!IsActive) Activate();
+    }
+
+    /// <summary>创建即铺满显示器物理边界（含任务栏那条），见服务里的说明。</summary>
+    protected override void OnSourceInitialized(EventArgs e)
+    {
+        base.OnSourceInitialized(e);
+        ScreenCoverage.CoverScreenOf(this);
+        DpiChanged += (_, _) => ScreenCoverage.CoverScreenOf(this);
     }
 
     // --- Loading ----------------------------------------------------------------

@@ -6,7 +6,6 @@
         WindowStyle="None"
         AllowsTransparency="True"
         Background="#C8000000"
-        WindowState="Maximized"
         ResizeMode="NoResize"
         ShowInTaskbar="False"
         TextOptions.TextFormattingMode="Display"

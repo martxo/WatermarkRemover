@@ -1,3 +1,5 @@
+using WatermarkRemover.App.Services;
+
 namespace WatermarkRemover.App;
 
 /// <summary>
@@ -25,6 +27,18 @@ public partial class FullscreenViewerWindow : System.Windows.Window
 
     /// <summary>The viewer's close button — the strip asks to leave, the window obliges.</summary>
     private void OnStripRequestClose(object? sender, EventArgs e) => Close();
+
+    /// <summary>
+    /// 窗口一创建就铺满显示器物理边界（含任务栏那条）。用 WindowState=Maximized 时无边框窗口
+    /// 只铺到工作区，底部会露出桌面、页面也因此少一截——这是用户反馈"下方被裁剪"的根因。
+    /// </summary>
+    protected override void OnSourceInitialized(EventArgs e)
+    {
+        base.OnSourceInitialized(e);
+        ScreenCoverage.CoverScreenOf(this);
+        // 换到另一块缩放到显示器上时重新铺满。
+        DpiChanged += (_, _) => ScreenCoverage.CoverScreenOf(this);
+    }
 
     private void OnPreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
     {
@@ -93,10 +107,8 @@ public partial class FullscreenViewerWindow : System.Windows.Window
     /// <summary>Pulls the open viewer back to the front (another app may hold the foreground).</summary>
     private void RestoreAndActivate()
     {
-        if (WindowState == System.Windows.WindowState.Minimized)
-        {
-            WindowState = System.Windows.WindowState.Maximized;
-        }
+        // 窗口不再用 WindowState=Maximized（那会停在任务栏外）：重新按显示器边界铺满即可。
+        ScreenCoverage.CoverScreenOf(this);
 
         // A rail click inside the open viewer targets the window that already has the
         // foreground; re-activating a maximised AllowsTransparency window only recomposes the
