@@ -196,6 +196,22 @@ public sealed partial class PdfPreviewViewModel : ObservableObject
         AppendScanCommand = new RelayCommand(
             () => _ = InsertScanAfterAsync(PageCount - 1),
             () => _scanProvider is not null && !IsRotating && !IsOrienting && PageCount > 0);
+
+        // 标注（阶段 2）：进入/退出 + 三档保存。会话的事件转播给宿主（视图）。
+        ToggleAnnotationCommand = new RelayCommand(() => ToggleAnnotation());
+        SaveOverlayAnnotationsCommand = new RelayCommand(
+            () => _ = SaveOverlayAnnotationsAsync(),
+            () => IsAnnotating && _annotation.HasAnnotations && !IsRotating);
+        BurnAnnotationsCommand = new RelayCommand(
+            () => _ = BurnAnnotationsAsync(),
+            () => IsAnnotating && _annotation.HasAnnotations && !IsRotating);
+        _annotation.Changed += (_, _) =>
+        {
+            OnPropertyChanged(nameof(HasUnsavedAnnotations));
+            OnPropertyChanged(nameof(AnnotationStatusText));
+            AnnotationsChanged?.Invoke(this, EventArgs.Empty);
+        };
+        _annotation.StyleChanged += (_, _) => AnnotationStylesChanged?.Invoke(this, EventArgs.Empty);
     }
 
     /// <summary>Multiplier on the base tile size, driven by the grid's zoom rail (0.6–2.0).</summary>
@@ -524,6 +540,8 @@ public sealed partial class PdfPreviewViewModel : ObservableObject
         long startTicks = Stopwatch.GetTimestamp();
         int generation = ++_loadGeneration;
         PageIndex = pageIndex;
+        // 标注会话跟着翻页走：每页一份撤销栈，翻页不丢（不标注时也切，开销只是查字典）。
+        _annotation.SwitchTo(pageIndex);
         IsLoading = true;
         StatusText = $"正在渲染第 {pageIndex + 1} 页…";
 

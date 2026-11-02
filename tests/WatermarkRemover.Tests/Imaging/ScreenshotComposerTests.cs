@@ -120,4 +120,60 @@ public sealed class ScreenshotComposerTests
         SKColor middle = output.GetPixel(60, 60);
         Assert.True(middle.Red > 150 && middle.Green < 120, $"expected red arrow, got {middle}");
     }
+
+    [Fact]
+    public void Annotation_layer_paints_only_the_marks_on_transparency()
+    {
+        var mark = new[]
+        {
+            new ScreenshotAnnotation
+            {
+                Kind = ScreenshotAnnotationKind.Rectangle,
+                Points = new[] { new ScreenshotPointF(10, 10), new ScreenshotPointF(60, 60) },
+                ColorArgb = 0xFF1E88E5,
+                Thickness = 8f,
+            },
+        };
+
+        using var layer = ScreenshotComposer.ComposeAnnotationLayer(100, 100, mark);
+
+        // 标注层是 PDF「保留原文 + 叠加批注」档的载荷：除了笔迹，全透明。
+        Assert.True(layer.GetPixel(95, 95).Alpha == 0, $"corner must be transparent, got {layer.GetPixel(95, 95)}");
+        Assert.True(layer.GetPixel(35, 35).Alpha == 0, $"inside must be transparent, got {layer.GetPixel(35, 35)}"); // 矩形内部也透明
+        SKColor stroke = layer.GetPixel(10, 35);
+        Assert.True(stroke.Alpha > 200, $"stroke must be opaque, got {stroke}");
+        Assert.True(stroke.Blue > 150, $"stroke must be the mark colour, got {stroke}");
+    }
+
+    [Fact]
+    public void Annotation_layer_mosaic_samples_the_page_render_not_transparency()
+    {
+        // 马赛克要从页面渲染图取样再画进透明层——叠回页面后才和预览看到的像素化一致。
+        using var page = Solid(100, 100, new SKColor(30, 160, 60));
+        var mosaic = new[]
+        {
+            ScreenshotAnnotation.Mosaic(20, 20, 60, 60, 3),
+        };
+
+        using var layer = ScreenshotComposer.ComposeAnnotationLayer(100, 100, mosaic, page);
+
+        SKColor inside = layer.GetPixel(40, 40);
+        Assert.True(inside.Alpha > 200, $"mosaic block must be opaque, got {inside}");
+        Assert.True(inside.Green > 120, $"mosaic must carry the page colour, got {inside}");
+        Assert.True(layer.GetPixel(80, 80).Alpha == 0, $"outside must be transparent, got {layer.GetPixel(80, 80)}");
+    }
+
+    [Fact]
+    public void Annotation_layer_without_a_mosaic_source_stays_transparent_under_mosaic()
+    {
+        // 没有页面渲染图可取样时，马赛克区域保持透明（不画假块）——调用方要么给图，要么别用马赛克。
+        var mosaic = new[]
+        {
+            ScreenshotAnnotation.Mosaic(20, 20, 60, 60, 3),
+        };
+
+        using var layer = ScreenshotComposer.ComposeAnnotationLayer(100, 100, mosaic);
+
+        Assert.True(layer.GetPixel(40, 40).Alpha == 0, $"mosaic area must stay transparent, got {layer.GetPixel(40, 40)}");
+    }
 }

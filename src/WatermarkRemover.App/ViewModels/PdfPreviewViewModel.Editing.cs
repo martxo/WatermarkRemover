@@ -143,6 +143,13 @@ public sealed partial class PdfPreviewViewModel
     internal async Task RotatePageAsync(int pageIndex)
     {
         if (IsCancelled || IsRotating) return;
+        if (IsAnnotating)
+        {
+            // 旋转会改变页面光栅，内存里的按页标注会对不上——先退出标注再转。
+            ShowTransientStatus("请先退出标注再旋转页面");
+            return;
+        }
+
         if (pageIndex < 0 || pageIndex >= PageCount) return;
 
         using var op = AppLog.BeginOperation(
@@ -210,6 +217,13 @@ public sealed partial class PdfPreviewViewModel
     internal async Task DeletePageAsync(int pageIndex)
     {
         if (IsCancelled || IsRotating) return;
+        if (IsAnnotating)
+        {
+            // 删页会让后面的页索引前移，按页标注整片错位——先退出标注再删。
+            ShowTransientStatus("请先退出标注再删除页面");
+            return;
+        }
+
         if (pageIndex < 0 || pageIndex >= PageCount) return;
         if (PageCount <= 1) return; // the last page must survive: empty PDFs cannot be opened
         if (_confirmPageDelete is { } confirm && !confirm(pageIndex)) return;
@@ -273,6 +287,13 @@ public sealed partial class PdfPreviewViewModel
     internal async Task MovePageAsync(int fromIndex, int toIndex)
     {
         if (IsCancelled || IsRotating || IsOrienting) return;
+        if (IsAnnotating)
+        {
+            // 调整顺序同样重排索引——按页标注必须在对齐后重新开始。
+            ShowTransientStatus("请先退出标注再调整页面顺序");
+            return;
+        }
+
         if (fromIndex == toIndex) return;
         if (fromIndex < 0 || fromIndex >= PageCount) return;
         if (toIndex < 0 || toIndex >= PageCount) return;

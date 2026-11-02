@@ -18,6 +18,13 @@ public sealed partial class PdfPreviewViewModel
     internal async Task InsertScanAfterAsync(int insertAfterIndex)
     {
         if (IsCancelled || IsRotating || IsOrienting) return;
+        if (IsAnnotating)
+        {
+            // 插页同样让后续页索引平移，按页标注会错位——先退出标注再插。
+            ShowTransientStatus("请先退出标注再插入页面");
+            return;
+        }
+
         if (_scanProvider is null) return;
         if (insertAfterIndex < -1 || insertAfterIndex >= PageCount) return; // -1 = in front of page one
 

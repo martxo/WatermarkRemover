@@ -46,6 +46,31 @@ public static class ScreenshotComposer
         return output;
     }
 
+    /// <summary>
+    /// 只画标注层、透明底：PDF「保留原文 + 叠加批注」档把这一层作为图像叠回页面上，原文与
+    /// 文本层因此完好保留（可检索）。尺寸由调用方按页面写盘光栅给出，标注坐标系与
+    /// <see cref="Compose"/> 完全一致（同一套 Draw）。
+    /// 马赛克从 <paramref name="mosaicSource"/>（同尺寸的页面渲染图）取样后画进透明层——
+    /// 叠回页面后与预览看到的像素化效果一致；不传则退化为透明取样（无可见输出）。
+    /// </summary>
+    public static SKBitmap ComposeAnnotationLayer(
+        int width, int height,
+        IReadOnlyList<ScreenshotAnnotation> annotations,
+        SKBitmap? mosaicSource = null)
+    {
+        ArgumentNullException.ThrowIfNull(annotations);
+
+        var output = new SKBitmap(new SKImageInfo(
+            Math.Max(1, width), Math.Max(1, height), SKColorType.Bgra8888, SKAlphaType.Premul));
+        using var canvas = new SKCanvas(output);
+
+        foreach (ScreenshotAnnotation annotation in annotations)
+            Draw(canvas, mosaicSource ?? output, annotation);
+
+        canvas.Flush();
+        return output;
+    }
+
     private static void Draw(SKCanvas canvas, SKBitmap current, ScreenshotAnnotation annotation)
     {
         SKColor color = new(annotation.ColorArgb);

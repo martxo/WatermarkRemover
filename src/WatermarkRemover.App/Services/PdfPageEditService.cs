@@ -1,6 +1,7 @@
 using System.IO;
 using WatermarkRemover.App.Logging;
 using WatermarkRemover.Pdf;
+using WatermarkRemover.Pdf.Annotation;
 using WatermarkRemover.Pdf.Preview;
 
 namespace WatermarkRemover.App.Services;
@@ -135,5 +136,46 @@ public sealed class PdfPageEditService
         _file.RememberStamp(force: true);
         foreach (var (pageIndex, _) in turns)
             _cache.InvalidatePage(pageIndex);
+    }
+
+    /// <summary>
+    /// 保存档①：把每页的标注层叠加回 PDF（原文与文本层保留，可检索）。走写门 + 锁占用
+    /// 另存副本模式，与旋转/删除完全一致；只有传入的页被碰过，其余页原样。
+    /// 返回 true 表示原文件被占用、结果落在了副本上（调用方应把会话指到新路径）。
+    /// </summary>
+    public async Task<bool> OverlayAnnotationsAsync(IReadOnlyList<PdfAnnotationPage> pages)
+    {
+        if (pages.Count == 0) return false;
+
+        string original = _file.Path;
+        string path = await _cache.RunWriteAsync(() =>
+        {
+            original = _file.Path;
+            return PdfAnnotationExporter.OverlayPages(original, pages);
+        }).ConfigureAwait(false);
+        bool savedAsCopy = Follow(path, original);
+        foreach (PdfAnnotationPage page in pages)
+            _cache.InvalidatePage(page.PageIndex);
+        return savedAsCopy;
+    }
+
+    /// <summary>
+    /// 保存档②：把每页的合成图烧录为页面内容（定稿/防改，页面从此不可检索）。写门与
+    /// 锁占用回退同 <see cref="OverlayAnnotationsAsync"/>。
+    /// </summary>
+    public async Task<bool> BurnAnnotationsAsync(IReadOnlyList<PdfAnnotationPage> pages)
+    {
+        if (pages.Count == 0) return false;
+
+        string original = _file.Path;
+        string path = await _cache.RunWriteAsync(() =>
+        {
+            original = _file.Path;
+            return PdfAnnotationExporter.BurnPages(original, pages);
+        }).ConfigureAwait(false);
+        bool savedAsCopy = Follow(path, original);
+        foreach (PdfAnnotationPage page in pages)
+            _cache.InvalidatePage(page.PageIndex);
+        return savedAsCopy;
     }
 }

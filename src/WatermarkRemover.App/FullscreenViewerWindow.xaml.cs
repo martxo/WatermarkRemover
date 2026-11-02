@@ -56,6 +56,10 @@ public partial class FullscreenViewerWindow : System.Windows.Window
 
     private void OnPreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
     {
+        // 标注态下按键先问页面：Esc 先收工具再退标注，R/A/P/T/M 直接选工具，
+        // Ctrl+Z/Y/S 走撤销/重做/保存；页面不认的键才落到下面的视图快捷键。
+        if (PageView.HandleAnnotationKey(e)) return;
+
         switch (e.Key)
         {
             case System.Windows.Input.Key.Escape:
@@ -77,6 +81,10 @@ public partial class FullscreenViewerWindow : System.Windows.Window
             case System.Windows.Input.Key.OemMinus:
             case System.Windows.Input.Key.Subtract:
                 PageView.ZoomPage(1 / 1.15);
+                break;
+            // 非标注态：M 进入标注（标注态下 M 是马赛克工具，上面已拦下）。
+            case System.Windows.Input.Key.M:
+                PageView.ToggleAnnotation();
                 break;
             default:
                 return;

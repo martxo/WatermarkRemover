@@ -112,6 +112,11 @@
                     <Button Content="1:1" Style="{StaticResource SmallButton}"
                             Click="OnActualSizeClick" Margin="0,0,10,0"
                             ToolTip="原始大小（1）"/>
+                    <!-- 标注入口：进入后工具条浮出；保存默认「保留原文 + 叠加批注」 -->
+                    <Button Content="{Binding AnnotationButtonText}"
+                            Style="{StaticResource SmallButton}"
+                            Command="{Binding ToggleAnnotationCommand}" Margin="0,0,8,0"
+                            ToolTip="在当前页上标注/打码；保存默认保留原文，文本仍可检索（M）"/>
                     <Button Content="插入文件"
                             Style="{StaticResource SmallButton}"
                             Click="OnInsertFileClick"
@@ -133,6 +138,56 @@
                                        Source="{Binding CurrentImage}"
                                        AllowUpscaleInFit="True"
                                        Margin="0,6,0,14"/>
+
+                <!-- 标注态（阶段 2）：工具条浮在画布顶部，深色皮肤与截图遮罩一致；草稿层/
+                     文字浮层由代码挂到 PageSurface 的覆盖层挂载点上，与页面平面严格同矩形。
+                     三档保存：保存批注=默认档（保留原文，可检索）/ 烧录定稿 / 导出。 -->
+                <Border x:Name="EditBar" Visibility="Collapsed"
+                        HorizontalAlignment="Center" VerticalAlignment="Top"
+                        Margin="0,14,0,0" Padding="10,8" CornerRadius="10"
+                        Background="#D9202024" BorderBrush="#33FFFFFF" BorderThickness="1">
+                    <DockPanel>
+                        <controls:AnnotationToolbar x:Name="Toolbar" Skin="Dark"
+                                                    VerticalAlignment="Center"/>
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"
+                                    VerticalAlignment="Center" Margin="12,0,0,0">
+                            <TextBlock Text="{Binding AnnotationStatusText}"
+                                       Foreground="#99FFFFFF" FontSize="11"
+                                       VerticalAlignment="Center" Margin="0,0,10,0"/>
+                            <Button Content="保存批注" Style="{StaticResource SmallButton}"
+                                    Command="{Binding SaveOverlayAnnotationsCommand}" Margin="0,0,6,0"
+                                    ToolTip="档①：标注层叠回 PDF，原文与文本保留、可检索（Ctrl+S）"/>
+                            <Button Content="烧录定稿" Style="{StaticResource SmallButton}"
+                                    Command="{Binding BurnAnnotationsCommand}" Margin="0,0,6,0"
+                                    ToolTip="档②：把标注烧进页面定稿，这些页之后不可检索、不可再改"/>
+                            <Button Content="导出" Style="{StaticResource SmallButton}"
+                                    Click="OnExportMenuClick" Margin="0,0,6,0"
+                                    ToolTip="导出为图片型 PDF（彻底脱敏）或当前页 PNG">
+                                <Button.ContextMenu>
+                                    <ContextMenu>
+                                        <MenuItem Header="图片型 PDF（脱敏安全出口）"
+                                                  Click="OnExportImagePdfClick"
+                                                  ToolTip="整文档变成图片：黑块/马赛克底下的文字也一起消失，搜不出来、拷不出去"/>
+                                        <MenuItem Header="当前页 PNG"
+                                                  Click="OnExportPagePngClick"
+                                                  ToolTip="把当前页（含标注）存成 PNG"/>
+                                    </ContextMenu>
+                                </Button.ContextMenu>
+                            </Button>
+                            <Button Content="完成" Style="{StaticResource SmallButton}"
+                                    Click="OnExitAnnotationClick" ToolTip="退出标注（Esc）"/>
+                        </StackPanel>
+                    </DockPanel>
+                </Border>
+
+                <!-- 标注态常驻提示：脏页数之外，固定说明视觉遮盖的边界 -->
+                <Border x:Name="EditHint" Visibility="Collapsed"
+                        HorizontalAlignment="Center" VerticalAlignment="Bottom"
+                        Margin="0,0,0,66" Padding="12,6" CornerRadius="8"
+                        Background="#B31F1F24">
+                    <TextBlock x:Name="EditHintText" FontSize="11" Foreground="#CCFFFFFF"
+                               Text="矩形/箭头/画笔/马赛克拖拽绘制 · 文字点击输入 · Ctrl+Z 撤销 · 翻页不丢标注 ·  Esc 退出。马赛克/黑块只防看不防取，彻底脱敏请用「导出 → 图片型 PDF」"/>
+                </Border>
 
                 <!-- corner edit buttons: rotate + delete side by side at top-left (mirroring the
                      tile layout), paging arrows on the canvas edges; they drive the current
