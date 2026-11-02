@@ -50,6 +50,13 @@
                    SnapsToDevicePixels="True"/>
         </Grid>
 
+        <!-- 编辑覆盖层挂载点：与图片平面严格同矩形（Apply 里同步 Width/Height/Margin），
+             宿主把草稿层/文字浮层放进来。IsHitTestVisible=false 时指针事件落回平面，
+             缩放/平移完全不受影响——「有工具抢占、无工具照旧看图」。 -->
+        <ContentControl x:Name="OverlayHost" Visibility="Collapsed"
+                        HorizontalAlignment="Left" VerticalAlignment="Top"
+                        IsHitTestVisible="False"/>
+
         <TextBlock x:Name="StatusHint" Text="无法读取这张图片"
                    Foreground="#B8FFFFFF" FontSize="13"
                    HorizontalAlignment="Center" VerticalAlignment="Center"

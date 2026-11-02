@@ -11,7 +11,8 @@
         Topmost="True"
         TextOptions.TextFormattingMode="Display"
         UseLayoutRounding="True"
-        PreviewKeyDown="OnWindowKeyDown">
+        PreviewKeyDown="OnWindowKeyDown"
+        Closing="OnWindowClosing">
 
     <Window.Resources>
         <!-- Rail tile: one image from the current folder, framed like the PDF page tiles. -->
@@ -105,9 +106,9 @@
 
                 <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center"
                             Margin="0,0,54,0">
-                    <Button Content="标注" Style="{StaticResource SmallButton}"
+                    <Button x:Name="MarkupButton" Content="标注" Style="{StaticResource SmallButton}"
                             Click="OnMarkupClick" Margin="0,0,8,0"
-                            ToolTip="标注/打码，保存为同目录副本，原图不动（M）"/>
+                            ToolTip="在图上标注/打码，保存为同目录副本，原图不动（M）"/>
                     <Button Content="旋转" Style="{StaticResource SmallButton}"
                             Click="OnRotateClick" Margin="0,0,8,0"
                             ToolTip="顺时针旋转 90°（R，Shift+R 反向）"/>
@@ -123,6 +124,37 @@
             <Grid Grid.Row="1">
                 <controls:ImageSurface x:Name="Surface" ShowCheckerboard="True"
                                        ViewChanged="OnSurfaceChanged"/>
+
+                <!-- 编辑态工具条（阶段 1：截图查看器接入 AnnotationEditCore）。深色皮肤与
+                     截图遮罩一致；浮在画布顶部，退出标注时收起。草稿层/文字浮层由代码挂到
+                     ImageSurface 的覆盖层挂载点上，与图片平面严格同矩形。 -->
+                <Border x:Name="EditBar" Visibility="Collapsed"
+                        HorizontalAlignment="Center" VerticalAlignment="Top"
+                        Margin="0,14,0,0" Padding="10,8" CornerRadius="10"
+                        Background="#D9202024" BorderBrush="#33FFFFFF" BorderThickness="1">
+                    <DockPanel>
+                        <controls:AnnotationToolbar x:Name="Toolbar" Skin="Dark"
+                                                    VerticalAlignment="Center"/>
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"
+                                    VerticalAlignment="Center" Margin="12,0,0,0">
+                            <TextBlock x:Name="EditStatusText" Foreground="#99FFFFFF" FontSize="11"
+                                       VerticalAlignment="Center" Margin="0,0,10,0"/>
+                            <Button Content="保存副本" Style="{StaticResource SmallButton}"
+                                    Click="OnSaveCopyClick" Margin="0,0,6,0"
+                                    ToolTip="标注烧进图片并另存副本，原图不动（Ctrl+S）"/>
+                            <Button Content="完成" Style="{StaticResource SmallButton}"
+                                    Click="OnExitEditClick" ToolTip="退出标注（Esc）"/>
+                        </StackPanel>
+                    </DockPanel>
+                </Border>
+
+                <!-- 编辑态常驻提示：标注数 + 操作口径 -->
+                <Border x:Name="EditHint" Visibility="Collapsed"
+                        HorizontalAlignment="Center" VerticalAlignment="Bottom"
+                        Margin="0,0,0,66" Padding="12,6" CornerRadius="8"
+                        Background="#B31F1F24">
+                    <TextBlock x:Name="EditHintText" FontSize="11" Foreground="#CCFFFFFF"/>
+                </Border>
 
                 <!-- paging arrows on the canvas edges, same discs as the PDF viewer -->
                 <Button x:Name="PrevButton" Style="{StaticResource CanvasNavButton}"

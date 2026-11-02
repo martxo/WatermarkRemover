@@ -73,11 +73,60 @@ public partial class ImageSurface : UserControl
 
     public double ZoomPercent => Math.Round(_scale * 100);
 
+    /// <summary>当前缩放（DIP / 图片像素），宿主做标注粗细换算时用。</summary>
+    public double Scale => _scale;
+
     public double Rotation => _angle;
 
     public string ModeName => _fit ? "适应窗口" : _scale == 1 ? "原始大小" : "自由缩放";
 
     public bool IsFitMode => _fit;
+
+    /// <summary>
+    /// 编辑覆盖层内容（草稿层 / 文字浮层）。设置后挂载点可见，并与图片平面同步布局；
+    /// 置 null 卸载。缩放/平移逻辑不受影响——见 <see cref="OverlayInteractive"/>。
+    /// </summary>
+    public UIElement? Overlay
+    {
+        get => (UIElement?)OverlayHost.Content;
+        set
+        {
+            OverlayHost.Content = value;
+            OverlayHost.Visibility = value is null ? Visibility.Collapsed : Visibility.Visible;
+            Apply();
+        }
+    }
+
+    /// <summary>
+    /// 覆盖层是否参与命中测试：true = 编辑中（指针事件走标注，宿主通常在选定工具时才开），
+    /// false = 透传回平面（滚轮缩放/拖动平移照旧）。缩放与平移的实现一行未动。
+    /// </summary>
+    public bool OverlayInteractive
+    {
+        get => OverlayHost.IsHitTestVisible;
+        set => OverlayHost.IsHitTestVisible = value;
+    }
+
+    /// <summary>平面坐标（相对图片左上角的 DIP）→ 位图坐标（原图像素，含旋转反算）。</summary>
+    public Point PlaneToPixel(Point plane) =>
+        PlaneMapping.ToPixel(_angle, _pixelWidth, _pixelHeight, _scale, plane);
+
+    /// <summary>位图坐标（原图像素）→ 平面坐标（DIP，相对图片左上角）。</summary>
+    public Point PixelToPlane(Point pixel) =>
+        PlaneMapping.ToPlane(_angle, _pixelWidth, _pixelHeight, _scale, pixel);
+
+    /// <summary>
+    /// 替换图片源但保留当前视图（缩放/平移/旋转）。标注预览的合成图与原图同尺寸，
+    /// 用户正放大着一处画标注，合成后视角不能被重置——这也是与
+    /// <see cref="SourceProperty"/>（换图 = 重新适应）的区别。
+    /// </summary>
+    public void ReplaceSource(ImageSource? source)
+    {
+        _source = source;
+        _rotated = null;
+        _rotatedAngle = -1;
+        Apply();
+    }
 
     private double DisplayWidth => ((int)_angle & 180) == 0 ? _pixelWidth : _pixelHeight;
 
@@ -233,6 +282,11 @@ public partial class ImageSurface : UserControl
         Plane.Margin = new Thickness(
             viewWidth / 2 - Plane.Width / 2 + _offsetX,
             viewHeight / 2 - Plane.Height / 2 + _offsetY, 0, 0);
+
+        // 覆盖层与平面严格同矩形：指针落在覆盖层上就是落在图片上（宿主据此做坐标换算）。
+        OverlayHost.Width = Plane.Width;
+        OverlayHost.Height = Plane.Height;
+        OverlayHost.Margin = Plane.Margin;
 
         ImageSource? shown = RotatedSource();
         if (!ReferenceEquals(Preview.Source, shown)) Preview.Source = shown;

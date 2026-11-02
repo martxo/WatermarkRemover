@@ -1,0 +1,15 @@
+<UserControl x:Class="WatermarkRemover.App.Controls.AnnotationOverlay"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="clr-namespace:WatermarkRemover.App.Controls"
+             Background="Transparent">
+    <Grid>
+        <!-- 草稿层：透明底可命中；与图片平面同矩形（宿主挂载时由 ImageSurface 保证）。
+             文字浮层必须在它之上，且点浮层不能落到草稿层（否则文字会被提前提交）。 -->
+        <Canvas x:Name="DraftLayer" Background="Transparent"
+                MouseLeftButtonDown="OnMouseDown" MouseMove="OnMouseMove"
+                MouseLeftButtonUp="OnMouseUp"/>
+        <controls:AnnotationTextEditor x:Name="Editor" Width="280" Height="62"
+                                        HorizontalAlignment="Left" VerticalAlignment="Top"/>
+    </Grid>
+</UserControl>

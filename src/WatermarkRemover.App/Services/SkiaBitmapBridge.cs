@@ -1,6 +1,8 @@
+using System.IO;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using SkiaSharp;
+using WatermarkRemover.App.Logging;
 using PixelFormat = System.Windows.Media.PixelFormat;
 
 namespace WatermarkRemover.App.Services;
@@ -46,5 +48,31 @@ internal static class SkiaBitmapBridge
             format, null, bitmap.Bytes.ToArray(), bitmap.RowBytes);
         source.Freeze();
         return source;
+    }
+
+    /// <summary>
+    /// WPF 位图 → Skia 位图（看图器标注的合成底图）。走「PNG 编码 → Skia 解码」的保真回路：
+    /// 与标注窗直接 <see cref="SKBitmap.Decode(string)"/> 出来的字节行为一致（alpha 直通），
+    /// 且不挑 WPF 像素格式（Bgr32/Bgra32/Pbgra32/TransformedBitmap 都能过）。编码失败
+    /// （极端格式）时返回 null，宿主据此提示「暂不支持标注」，不猜格式硬转。
+    /// </summary>
+    public static SKBitmap? FromBitmapSource(BitmapSource source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+
+        try
+        {
+            var encoder = new PngBitmapEncoder();
+            encoder.Frames.Add(BitmapFrame.Create(source));
+            using var stream = new MemoryStream();
+            encoder.Save(stream);
+            stream.Position = 0;
+            return SKBitmap.Decode(stream);
+        }
+        catch (Exception ex)
+        {
+            AppLog.Warn($"位图转 Skia 失败：{ex.Message}");
+            return null;
+        }
     }
 }
