@@ -669,12 +669,15 @@ public sealed partial class PdfPreviewViewModel : ObservableObject
     /// <summary>PDFium hands back PNG bytes; WPF wants a frozen bitmap it can bind from any thread.</summary>
     private static ImageSource Decode(byte[] png)
     {
+        AppLog.Debug($"看图解码：输入 PNG {png.Length} 字节");
         using var stream = new MemoryStream(png, writable: false);
         var bitmap = new BitmapImage();
         bitmap.BeginInit();
         bitmap.CacheOption = BitmapCacheOption.OnLoad;
         bitmap.StreamSource = stream;
         bitmap.EndInit();
+        AppLog.Debug($"看图解码：位图 {bitmap.PixelWidth}×{bitmap.PixelHeight}，" +
+                     Services.BitmapDiagnostics.DescribeBottomRows(bitmap));
         bitmap.Freeze();
         return bitmap;
     }

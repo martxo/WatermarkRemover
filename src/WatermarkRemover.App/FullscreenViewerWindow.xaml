@@ -4,15 +4,19 @@
         xmlns:app="clr-namespace:WatermarkRemover.App"
         Title="看图"
         WindowStyle="None"
-        AllowsTransparency="True"
-        Background="#C8000000"
         ResizeMode="NoResize"
         ShowInTaskbar="False"
         Topmost="True"
-        PreviewKeyDown="OnPreviewKeyDown">
+        PreviewKeyDown="OnPreviewKeyDown"
+        Background="#FF0E0E12">
 
-    <!-- Screen-level image viewer: a dark veil over the entire screen (not just the app
+    <!-- Screen-level image viewer: a dark backdrop over the entire screen (not just the app
          window), the page in the middle, the film rail on the left — reached by clicking a
-         thumbnail tile, like every desktop image browser. -->
+         thumbnail tile, like every desktop image browser.
+
+         必须保持不透明（不能用 AllowsTransparency）：这台机器的显卡/DWM 对全屏分层窗口存在
+         局部刷新故障——底部约 175px 条带在页面图片上屏后停止更新，冻结在"只有暗幕没有图片"
+         的初始帧，看起来就是"放大后下半页被裁掉"，而且缩放/适应都无效（条带不重绘）。
+         普通不透明窗口走正常 HWND 渲染，没有这个问题。-->
     <app:PdfPreviewPage x:Name="PageView"/>
 </Window>

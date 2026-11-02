@@ -36,6 +36,16 @@ public sealed class PdfiumPdfPageRenderer : IPdfPageRenderer
     private static readonly IImageBytesConverter WhiteBackground = new NaiveTransparencyRemover(255, 255, 255);
 
     /// <summary>
+    /// 诊断汇聚点：应用启动时接到 AppLog。库内不依赖日志组件，排查「放大图底部丢失」时
+    /// 渲染链每一环（原始位图 → PNG → 回读验证）都从这里输出像素采样。
+    /// </summary>
+    public static Action<string>? Diagnostics { get; set; }
+
+    private static void Diag(string message) => Diagnostics?.Invoke(message);
+
+    private static readonly object DumpSync = new();
+
+    /// <summary>
     /// Docnet's <see cref="DocLib"/> instance is a process-wide singleton and NOT thread-safe:
     /// overlapping readers (one scan's naming chain still rendering while the next scan's starts)
     /// make pdfium cross pages — scan B rendered scan A's pixels, OCR'd A's content and inherited
@@ -151,15 +161,84 @@ public sealed class PdfiumPdfPageRenderer : IPdfPageRenderer
             throw new InvalidOperationException("页面渲染尺寸无效。");
 
         using var bitmap = DecodeBitmap(page.GetImage(WhiteBackground), width, height);
+        Diag($"渲染诊断·原始位图：{bitmap.Width}×{bitmap.Height}，{DescribeBottom(bitmap)}");
 
         int longestSide = Math.Max(bitmap.Width, bitmap.Height);
         if (longestSide > MaxImageSide)
         {
             using SKBitmap scaled = Downscale(bitmap, MaxImageSide / (double)longestSide);
-            return EncodePng(scaled);
+            return EncodeAndVerify(scaled, "缩放后");
         }
 
-        return EncodePng(bitmap);
+        return EncodeAndVerify(bitmap, "原尺寸");
+    }
+
+    /// <summary>
+    /// PNG 编码 + 三重验证：字节长度、解码回读的尺寸与底部采样、渲染产物落盘。
+    /// 排查「放大图底部丢失」：这一环若完整，问题必在缓存/解码/显示层；若已缺底，问题在渲染。
+    /// </summary>
+    private static byte[] EncodeAndVerify(SKBitmap bitmap, string stage)
+    {
+        byte[] png = EncodePng(bitmap);
+        Diag($"渲染诊断·{stage} PNG：{bitmap.Width}×{bitmap.Height}，{DescribeBottom(bitmap)}，{png.Length} 字节");
+
+        using var readback = SKBitmap.Decode(png);
+        Diag(readback is null
+            ? "渲染诊断·PNG 回读：解码失败！"
+            : $"渲染诊断·PNG 回读：{readback.Width}×{readback.Height}，{DescribeBottom(readback)}");
+
+        DumpPng(png);
+        return png;
+    }
+
+    /// <summary>最底两行的像素采样：透明像素数、偏暗像素数、平均亮度。</summary>
+    private static string DescribeBottom(SKBitmap bitmap)
+    {
+        int rows = Math.Min(2, bitmap.Height);
+        int total = bitmap.Width * rows;
+        if (total == 0) return "空位图";
+
+        int transparent = 0, dark = 0;
+        long brightness = 0;
+        for (int y = bitmap.Height - rows; y < bitmap.Height; y++)
+        {
+            for (int x = 0; x < bitmap.Width; x++)
+            {
+                SKColor pixel = bitmap.GetPixel(x, y);
+                if (pixel.Alpha < 250) transparent++;
+                int b = (pixel.Red + pixel.Green + pixel.Blue) / 3;
+                if (b < 64) dark++;
+                brightness += b;
+            }
+        }
+
+        return $"底{rows}行：透明 {transparent}/{total}，偏暗 {dark}/{total}，平均亮度 {brightness / total}";
+    }
+
+    /// <summary>
+    /// 把渲染 PNG 落盘到 %APPDATA%\WatermarkRemover\render-debug（最多留 12 张），
+    /// 供与屏幕显示逐像素比对；落盘失败不影响渲染。
+    /// </summary>
+    private static void DumpPng(byte[] png)
+    {
+        try
+        {
+            string dir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "WatermarkRemover", "render-debug");
+            lock (DumpSync)
+            {
+                Directory.CreateDirectory(dir);
+                File.WriteAllBytes(Path.Combine(dir, $"render-{DateTime.Now:HHmmss-fff}.png"), png);
+                foreach (FileInfo stale in new DirectoryInfo(dir).GetFiles("render-*.png")
+                             .OrderByDescending(f => f.Name).Skip(12))
+                    stale.Delete();
+            }
+        }
+        catch
+        {
+            // 诊断落盘是纯增益，失败静默。
+        }
     }
 
     /// <summary>Wraps raw BGRA bytes (as PDFium returns them) in an Skia bitmap.</summary>

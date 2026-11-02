@@ -31,6 +31,8 @@ public sealed class AppComposition
     public AppComposition()
     {
         PdfRenderer = new PdfiumPdfPageRenderer();
+        // 渲染链诊断（原始位图/PNG/回读验证）走应用日志，排查「放大图底部丢失」用。
+        PdfiumPdfPageRenderer.Diagnostics = message => AppLog.Debug(message);
         OcrEngine = ResolveOcrEngine();
         Features = BuildFeatures(PdfRenderer, OcrEngine);
         Registry = new FeatureRegistry(Features);

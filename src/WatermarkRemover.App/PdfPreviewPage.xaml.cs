@@ -27,6 +27,9 @@ public partial class PdfPreviewPage : UserControl
 
     internal void FitPage() => PageSurface.Fit();
 
+    /// <summary>几何取证透传：排查「放大图底部丢失」时由宿主窗口定时调用。</summary>
+    internal void DumpSurfaceGeometry(string tag) => PageSurface.DumpGeometry(tag);
+
     internal void ActualSizePage() => PageSurface.ActualSize();
 
     private void OnZoomInClick(object sender, RoutedEventArgs e) => ZoomPage(1.25);

@@ -122,6 +122,38 @@ public partial class ImageSurface : UserControl
         StatusHint.Visibility = text is null ? Visibility.Collapsed : Visibility.Visible;
     }
 
+    /// <summary>
+    /// 排查「放大图底部丢失」用的几何取证：把视口与平面的实际尺寸、X/Y 缩放、平移、
+    /// 以及两者在屏幕上的物理坐标一次倒出。PointToScreen 会穿过全部渲染变换，
+    /// 所以平面底边的物理坐标就是它真正被画到的位置——和截图测量直接对账。
+    /// </summary>
+    public void DumpGeometry(string tag)
+    {
+        try
+        {
+            if (Preview.Source is null)
+            {
+                AppLog.Debug($"看图几何[{tag}]：无图，视口 {Viewport.ActualWidth:0}×{Viewport.ActualHeight:0}");
+                return;
+            }
+
+            var planeTop = Plane.PointToScreen(new Point(0, 0));
+            var planeBottom = Plane.PointToScreen(new Point(0, Plane.ActualHeight));
+            var viewTop = PointToScreen(new Point(0, 0));
+            var viewBottom = PointToScreen(new Point(0, Viewport.ActualHeight));
+            AppLog.Debug($"看图几何[{tag}]：视口 {Viewport.ActualWidth:0}×{Viewport.ActualHeight:0}（物理 y " +
+                         $"{viewTop.Y:0}→{viewBottom.Y:0}），图片 {_pixelWidth}×{_pixelHeight}，" +
+                         $"Plane {Plane.ActualWidth:0}×{Plane.ActualHeight:0}（物理 y {planeTop.Y:0}→{planeBottom.Y:0}，" +
+                         $"左 x {planeTop.X:0}），缩放 {_scale:0.####}，" +
+                         $"位移 ({_offsetX:0.#},{_offsetY:0.#})，" +
+                         $"Margin ({Plane.Margin.Left:0.#},{Plane.Margin.Top:0.#})，模式 {ModeName}");
+        }
+        catch (Exception ex)
+        {
+            AppLog.Debug($"看图几何[{tag}]：失败 {ex.Message}");
+        }
+    }
+
     // --- Layout ------------------------------------------------------------------
 
     private static void OnSourceChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
@@ -145,7 +177,9 @@ public partial class ImageSurface : UserControl
 
     private void AdoptSource(ImageSource? source)
     {
-        Preview.Source = source;
+        _source = source;
+        _rotated = null;
+        _rotatedAngle = -1;
 
         if (source is BitmapSource bitmap)
         {
@@ -162,21 +196,14 @@ public partial class ImageSurface : UserControl
             _pixelWidth = _pixelHeight = 0;
         }
 
-        if (_pixelWidth > 0 && _pixelHeight > 0)
-        {
-            Plane.Width = _pixelWidth;
-            Plane.Height = _pixelHeight;
-            Spin.CenterX = _pixelWidth / 2.0;
-            Spin.CenterY = _pixelHeight / 2.0;
-        }
-
         _angle = 0;
         _fit = true;
         _offsetX = _offsetY = 0;
         _scale = 1;
         CheckerViewport();
         Apply();
-        AppLog.Debug($"看图平面装载：图片 {_pixelWidth}×{_pixelHeight}，视口 " +
+        string bottomSample = source is BitmapSource bound ? Services.BitmapDiagnostics.DescribeBottomRows(bound) : "非位图";
+        AppLog.Debug($"看图平面装载：图片 {_pixelWidth}×{_pixelHeight}，{bottomSample}，视口 " +
                      $"{Viewport.ActualWidth:0}×{Viewport.ActualHeight:0}，缩放 {_scale:0.###}，模式 {ModeName}");
     }
 
@@ -197,13 +224,49 @@ public partial class ImageSurface : UserControl
 
         ClampPan(viewWidth, viewHeight);
 
-        Spin.Angle = _angle;
-        Zoom.ScaleX = _scale;
-        Zoom.ScaleY = _scale;
-        Pan.X = viewWidth / 2 - _scale * _pixelWidth / 2 + _offsetX;
-        Pan.Y = viewHeight / 2 - _scale * _pixelHeight / 2 + _offsetY;
+        // 缩放/平移/旋转全部落在平面自身的布局尺寸与 Margin 上：平面按「旋转后的位图
+        // 尺寸 × 缩放」布局，Image 拉伸铺满。不用 RenderTransform——部分机器的 WPF 会把
+        // 「比视口高的平面 + RenderTransform 缩放」的底部整块裁掉（探针复现：1718×1204
+        // 缩放 0.8412 后底部 161px 不绘制；改为布局尺寸后完整）。
+        Plane.Width = DisplayWidth * _scale;
+        Plane.Height = DisplayHeight * _scale;
+        Plane.Margin = new Thickness(
+            viewWidth / 2 - Plane.Width / 2 + _offsetX,
+            viewHeight / 2 - Plane.Height / 2 + _offsetY, 0, 0);
+
+        ImageSource? shown = RotatedSource();
+        if (!ReferenceEquals(Preview.Source, shown)) Preview.Source = shown;
 
         ViewChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    /// <summary>原始图像源（未旋转），角度变化时按需包一层 TransformedBitmap。</summary>
+    private ImageSource? _source;
+    private ImageSource? _rotated;
+    private int _rotatedAngle = -1;
+
+    /// <summary>
+    /// 按当前视角角度给出图像源：0° 直接用原图，90/180/270° 用 TransformedBitmap 预旋转。
+    /// 平面随后按旋转后的宽高布局，整个链路不产生 RenderTransform。
+    /// </summary>
+    private ImageSource? RotatedSource()
+    {
+        if (_source is null) return null;
+        int quarter = ((int)_angle % 360 + 360) % 360;
+        if (quarter == 0) return _source;
+        if (quarter == _rotatedAngle && _rotated is not null) return _rotated;
+        if (_source is not BitmapSource bitmap) return _source;
+
+        var turned = new TransformedBitmap(bitmap, quarter switch
+        {
+            90 => new RotateTransform(90),
+            180 => new RotateTransform(180),
+            _ => new RotateTransform(270),
+        });
+        turned.Freeze();
+        _rotated = turned;
+        _rotatedAngle = quarter;
+        return turned;
     }
 
     private void ClampPan(double viewWidth, double viewHeight)

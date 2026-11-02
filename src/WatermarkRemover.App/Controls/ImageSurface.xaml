@@ -33,15 +33,15 @@
     <Grid x:Name="Viewport" ClipToBounds="True"
           Background="Transparent"
           SizeChanged="OnViewportSizeChanged">
-        <Grid x:Name="Plane" HorizontalAlignment="Left" VerticalAlignment="Top">
-            <Grid.RenderTransform>
-                <TransformGroup>
-                    <RotateTransform x:Name="Spin" Angle="0"/>
-                    <ScaleTransform x:Name="Zoom" ScaleX="1" ScaleY="1"/>
-                    <TranslateTransform x:Name="Pan"/>
-                </TransformGroup>
-            </Grid.RenderTransform>
+        <!-- 一个图片平面供所有看图器共用（截图、PDF 页）：滚轮以光标为锚缩放、拖动平移、
+             双击适应/100%、可旋转视图。宿主拥有标题栏与翻页 chrome，只读回
+             ZoomPercent / ModeName。
 
+             重要：缩放/平移/旋转必须全部落在平面自身的布局尺寸与 Margin 上，不能用
+             RenderTransform——部分机器的 WPF 渲染会把「比视口高的平面 + RenderTransform
+             缩放」的底部整块裁掉（1718×1204 平面缩放 0.8412 后底部 161px 不绘制，
+             本地探针复现并验证：改为布局尺寸后完整）。XAML 里不再有任何变换。 -->
+        <Grid x:Name="Plane" HorizontalAlignment="Left" VerticalAlignment="Top">
             <Border x:Name="Checker" Background="{StaticResource SurfaceCheckerBrush}"
                     Visibility="Collapsed" IsHitTestVisible="False"/>
 

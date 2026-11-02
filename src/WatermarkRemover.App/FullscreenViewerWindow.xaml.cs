@@ -25,7 +25,18 @@ public partial class FullscreenViewerWindow : System.Windows.Window
         Closed += (_, _) => strip.RequestClose -= OnStripRequestClose;
         // 窗口尺寸在 Show 之后才最终落定：布局稳定后再适应一次，页面不会按"中间某个更矮的
         // 视口"缩放后停在窗口外（用户看到的就是下半页被裁掉）。
-        Loaded += (_, _) => PageView.FitPage();
+        Loaded += async (_, _) =>
+        {
+            PageView.FitPage();
+            // 几何取证：打开后 2.5 秒内分四次倒出平面/视口的实际屏幕坐标，
+            // 观察有没有「装载后几何又变了」或 X/Y 缩放不一致的情况。
+            foreach (int delay in new[] { 0, 400, 1200, 2500 })
+            {
+                try { await System.Threading.Tasks.Task.Delay(delay == 0 ? 1 : delay); }
+                catch (System.Threading.Tasks.TaskCanceledException) { return; }
+                PageView.DumpSurfaceGeometry($"t+{delay}ms");
+            }
+        };
     }
 
     /// <summary>The viewer's close button — the strip asks to leave, the window obliges.</summary>
