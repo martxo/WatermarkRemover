@@ -87,7 +87,12 @@ public partial class MainWindow : Window
             return _hotkeys is null ? null
                 : _hotkeys.CanRegister(hotkey, out string? error) ? null : error;
         };
-        _viewModel.ScreenshotHotkeyChanged += (_, _) => RegisterScreenshotHotkeys(notifyFailure: true);
+        _viewModel.ScreenshotHotkeyChanged += (_, _) =>
+        {
+            RegisterScreenshotHotkeys(notifyFailure: true);
+            // 设置保存后热更新触发区域：晾衣绳是长驻窗口，改配置不用重启。
+            _shelf?.UpdateTrigger(_viewModel.Settings.ScreenshotTrigger);
+        };
         _viewModel.ScreenshotShelfRequested += (_, _) => ToggleScreenshotShelf();
         _viewModel.ScreenshotPinRequested += (_, path) => PinnedImageWindow.ShowFor(path);
         _viewModel.ScreenshotOcrRequested += (_, path) => _ = ShowScreenshotOcrAsync(path);
@@ -269,7 +274,8 @@ public partial class MainWindow : Window
         if (_shelf is { } existing) return existing;
 
         var shelf = new ScreenshotShelfWindow(
-            _viewModel.ScreenshotShelfItems, _viewModel.OpenScreenshotFolder);
+            _viewModel.ScreenshotShelfItems, _viewModel.OpenScreenshotFolder,
+            _viewModel.Settings.ScreenshotTrigger);
         shelf.MarkupRequested += (_, job) => ShowImageMarkup(job);
         shelf.Closed += (_, _) => _shelf = null;
         _shelf = shelf;

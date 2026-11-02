@@ -1,3 +1,4 @@
+using WatermarkRemover.Core.Features.Screenshot;
 using WatermarkRemover.Core.Netdisk;
 
 namespace WatermarkRemover.Core.Settings;
@@ -125,6 +126,12 @@ public sealed class AppSettings
     public bool ScreenshotAutoSave { get; set; } = true;
 
     /// <summary>
+    /// 最近截图晾衣绳的触发区域（截图设置）：四条边各自独立启用、可调厚度/长度/位置，
+    /// 重启后保留。默认上边、居中——与旧版顶部 32px 热区一致，只是可配。
+    /// </summary>
+    public ScreenshotTriggerSettings ScreenshotTrigger { get; set; } = new();
+
+    /// <summary>
     /// Closing the main window hides it to the tray instead of exiting, so the global screenshot
     /// shortcut and the shelf stay available. The tray menu's 退出 is the explicit exit path.
     /// </summary>
@@ -171,6 +178,7 @@ public sealed class AppSettings
         ScreenshotOutputDirectory = ScreenshotOutputDirectory,
         ScreenshotAutoCopy = ScreenshotAutoCopy,
         ScreenshotAutoSave = ScreenshotAutoSave,
+        ScreenshotTrigger = ScreenshotTrigger.Clone(),
         MinimizeToTrayOnClose = MinimizeToTrayOnClose,
         NetdiskAccounts = NetdiskAccounts.ToList(),
         NetdiskUploadDrive = NetdiskUploadDrive,

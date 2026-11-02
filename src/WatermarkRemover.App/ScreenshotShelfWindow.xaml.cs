@@ -8,7 +8,10 @@ using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Media.Effects;
 using System.Windows.Threading;
+using System.Windows.Interop;
+using WatermarkRemover.App.Services;
 using WatermarkRemover.App.ViewModels;
+using WatermarkRemover.Core.Features.Screenshot;
 
 namespace WatermarkRemover.App;
 
@@ -17,11 +20,11 @@ namespace WatermarkRemover.App;
 /// the rope is a fixed quadratic sag, photos are evenly spread from the centre outwards,
 /// each peg swings with a damped spring, new shots drop in from 46px above and kick the line,
 /// hover grows the glass card by 3.5%, and a copy shows the checkmark capsule and a 3° nudge.
-/// The line hides itself above the screen until the pointer rests in the top 32px menu-bar zone.
+/// The line hides itself above the screen until the pointer rests in a configured trigger zone
+/// (截图设置 → 触发区域: four screen edges, each independently enabled).
 /// </summary>
 public partial class ScreenshotShelfWindow : Window
 {
-    private const double MenubarHeight = 32;
     private const double RopeBaseY = 42;
     private const double CardWidth = 150;
     private const double CardHalf = CardWidth / 2;
@@ -43,6 +46,15 @@ public partial class ScreenshotShelfWindow : Window
     private readonly DispatcherTimer _longPressTimer;
     private readonly DispatcherTimer _gustTimer;
     private readonly Random _random = new();
+
+    /// <summary>触发区域配置（截图设置，四边独立）；设置保存后由宿主热更新。</summary>
+    private ScreenshotTriggerSettings _trigger;
+
+    /// <summary>上次轮询时刻（探针：实测轮询间隔，验证定时器是否被饿死）。</summary>
+    private long _lastPointerTickMs = Environment.TickCount64;
+
+    /// <summary>窗口句柄钩子（探针：激活/失焦/鼠标离开等系统消息）。</summary>
+    private HwndSource? _hwndSource;
 
     private Rect _workArea;
     private long _lastFrameMs;
@@ -67,9 +79,11 @@ public partial class ScreenshotShelfWindow : Window
     private bool _dragStarted;
     private bool _longPressFired;
 
-    public ScreenshotShelfWindow(IReadOnlyList<FileJobViewModel> items, Action openFolder)
+    public ScreenshotShelfWindow(
+        IReadOnlyList<FileJobViewModel> items, Action openFolder, ScreenshotTriggerSettings trigger)
     {
         ArgumentNullException.ThrowIfNull(openFolder);
+        _trigger = trigger ?? throw new ArgumentNullException(nameof(trigger));
         _initialJobs = items.Where(i => i.HasThumbnail).ToList();
 
         InitializeComponent();
@@ -101,8 +115,11 @@ public partial class ScreenshotShelfWindow : Window
 
         Loaded += OnLoaded;
         SizeChanged += (_, _) => OnSizeChanged();
+        MouseEnter += OnWindowMouseEnter;
+        MouseLeave += OnWindowMouseLeave;
         Closing += (_, _) =>
         {
+            _hwndSource?.RemoveHook(WndProc);
             _frameTimer.Stop();
             _pointerTimer.Stop();
             _longPressTimer.Stop();
@@ -155,6 +172,13 @@ public partial class ScreenshotShelfWindow : Window
         LayoutTargets(instant: true);
         UpdateRope(force: true);
         UpdateEmptyHint();
+
+        ClampTrigger();
+        _hwndSource = HwndSource.FromHwnd(new WindowInteropHelper(this).Handle);
+        _hwndSource?.AddHook(WndProc);
+        ShelfProbe.Log($"窗口就绪 Topmost={Topmost} ShowActivated={ShowActivated} " +
+                       $"工作区=({_workArea.Left:F0},{_workArea.Top:F0}) {_workArea.Width:F0}×{_workArea.Height:F0} " +
+                       $"触发区=[{DescribeZones()}] 弹出阈值={RevealDelayMilliseconds:F0}ms 收回阈值={RetractDelayMilliseconds:F0}ms");
     }
 
     private void OnSizeChanged()
@@ -163,6 +187,7 @@ public partial class ScreenshotShelfWindow : Window
         _workArea = SystemParameters.WorkArea;
         Width = _workArea.Width;
         Left = _workArea.Left;
+        ClampTrigger();
         ItemsLayer.Width = Math.Max(1, RootCanvas.ActualWidth > 1 ? RootCanvas.ActualWidth : LineWidth);
         ItemsLayer.Height = Math.Max(1, RootCanvas.ActualHeight > 1 ? RootCanvas.ActualHeight : HiddenHeight);
 
@@ -230,6 +255,14 @@ public partial class ScreenshotShelfWindow : Window
         IsHitTestVisible = false;
     }
 
+    /// <summary>设置保存后热更新触发区域（改配置不用重启）。</summary>
+    public void UpdateTrigger(ScreenshotTriggerSettings trigger)
+    {
+        _trigger = trigger ?? throw new ArgumentNullException(nameof(trigger));
+        ClampTrigger();
+        ShelfProbe.Log($"触发区域已更新：[{DescribeZones()}]");
+    }
+
     // --- Show / hide -----------------------------------------------------------
 
     private void ShowLine(bool manual)
@@ -244,7 +277,10 @@ public partial class ScreenshotShelfWindow : Window
         {
             _lastFrameMs = Environment.TickCount64;
             _frameTimer.Start();
+            ShelfProbe.Log("帧定时器启动（弹簧动画）");
         }
+
+        ShelfProbe.Log($"弹出 manual={manual} Topmost={Topmost} 可点击={IsHitTestVisible}");
     }
 
     private void HideLine()
@@ -255,28 +291,44 @@ public partial class ScreenshotShelfWindow : Window
         IsHitTestVisible = false;
         foreach (ShelfItem item in _items)
             HideHover(item);
+
+        ShelfProbe.Log("收回");
     }
 
     private void OnPointerTick(object? sender, EventArgs e)
     {
         if (!GetCursorPos(out CursorPoint cursor)) return;
+
+        // 探针：实测轮询间隔。DispatcherTimer 在 UI 线程繁忙时会拖后腿，间隔本身就是证据。
+        long tickNow = Environment.TickCount64;
+        long interval = tickNow - _lastPointerTickMs;
+        _lastPointerTickMs = tickNow;
         DateTime now = DateTime.Now;
 
         if (!_revealed)
         {
-            bool inMenuBar = cursor.Y >= 0 && cursor.Y < MenubarHeight &&
-                             cursor.X >= _workArea.Left && cursor.X <= _workArea.Right;
-            if (inMenuBar && !_manual && !_dragStarted)
+            ScreenEdge? hot = _trigger.HitTest(
+                cursor.X, cursor.Y, _workArea.Left, _workArea.Top, _workArea.Width, _workArea.Height);
+            bool gated = _manual || _dragStarted;
+            if (hot is not null && !gated)
             {
                 if (_topHotSince == DateTime.MinValue) _topHotSince = now;
-                if ((now - _topHotSince).TotalMilliseconds >= RevealDelayMilliseconds)
+                double held = (now - _topHotSince).TotalMilliseconds;
+                if (held >= RevealDelayMilliseconds)
                 {
                     _topHotSince = DateTime.MinValue;
+                    ShelfProbe.Log($"轮询间隔{interval}ms 光标({cursor.X},{cursor.Y}) 命中{hot}边并持续{held:F0}ms，达到弹出阈值");
                     ShowLine(manual: false);
+                }
+                else
+                {
+                    ShelfProbe.Log($"轮询间隔{interval}ms 光标({cursor.X},{cursor.Y}) 命中{hot}边，持续{held:F0}ms / {RevealDelayMilliseconds:F0}ms");
                 }
             }
             else
             {
+                if (_topHotSince != DateTime.MinValue)
+                    ShelfProbe.Log($"轮询间隔{interval}ms 光标({cursor.X},{cursor.Y}) 热区中断（manual={_manual} drag={_dragStarted}），持续计时清零");
                 _topHotSince = DateTime.MinValue;
             }
 
@@ -286,9 +338,12 @@ public partial class ScreenshotShelfWindow : Window
         bool inside = cursor.Y >= _workArea.Top - 2 &&
                       cursor.Y <= _workArea.Top + Height + 8 &&
                       cursor.X >= _workArea.Left && cursor.X <= _workArea.Right;
+        double peekLeft = Math.Max(0, (_peekUntil - now).TotalMilliseconds);
 
         if (inside || _manual || _dragStarted || now < _peekUntil)
         {
+            if (_awaySince != DateTime.MinValue)
+                ShelfProbe.Log($"轮询间隔{interval}ms 光标({cursor.X},{cursor.Y}) 恢复保持条件（在内={inside} manual={_manual} drag={_dragStarted} peek余={peekLeft:F0}ms），离开计时清零");
             _awaySince = DateTime.MinValue;
             return;
         }
@@ -296,12 +351,73 @@ public partial class ScreenshotShelfWindow : Window
         if (_awaySince == DateTime.MinValue)
         {
             _awaySince = now;
+            ShelfProbe.Log($"轮询间隔{interval}ms 光标({cursor.X},{cursor.Y}) 离开保持区，开始计时（需{RetractDelayMilliseconds:F0}ms）");
         }
         else if ((now - _awaySince).TotalMilliseconds >= RetractDelayMilliseconds)
         {
+            double away = (now - _awaySince).TotalMilliseconds;
             _awaySince = DateTime.MinValue;
+            ShelfProbe.Log($"轮询间隔{interval}ms 光标({cursor.X},{cursor.Y}) 已离开{away:F0}ms，达到收回阈值");
             HideLine();
         }
+        else
+        {
+            ShelfProbe.Log($"轮询间隔{interval}ms 光标({cursor.X},{cursor.Y}) 保持离开，已计{(now - _awaySince).TotalMilliseconds:F0}ms / {RetractDelayMilliseconds:F0}ms");
+        }
+    }
+
+    // --- 触发区域 / 探针 ---------------------------------------------------------
+
+    private void ClampTrigger()
+    {
+        _trigger.Clamp(_workArea.Width, _workArea.Height);
+    }
+
+    private string DescribeZones()
+    {
+        var parts = new List<string>();
+        foreach (ScreenEdge edge in Enum.GetValues<ScreenEdge>())
+        {
+            TriggerZoneEdge zone = _trigger.Of(edge);
+            if (!zone.Enabled) continue;
+            parts.Add($"{edge} 厚{zone.Thickness} 长{zone.Length} 位{zone.Position:F2}");
+        }
+
+        return parts.Count == 0 ? "无启用边" : string.Join("；", parts);
+    }
+
+    private void OnWindowMouseEnter(object sender, MouseEventArgs e) =>
+        ShelfProbe.Log("WPF MouseEnter：指针进入晾衣绳窗口");
+
+    private void OnWindowMouseLeave(object sender, MouseEventArgs e) =>
+        ShelfProbe.Log("WPF MouseLeave：指针离开晾衣绳窗口");
+
+    /// <summary>
+    /// 系统消息探针：激活/失焦/鼠标离开窗口。「切到其他应用不收回」必须先确认这些消息
+    /// 到底有没有到窗口，再决定根因方向（没收到底层消息 vs 收到了但判定逻辑不放行）。
+    /// </summary>
+    private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        switch (msg)
+        {
+            case 0x0006: // WM_ACTIVATE
+                ShelfProbe.Log($"WM_ACTIVATE 激活={wParam.ToInt32() != 0}");
+                break;
+            case 0x001C: // WM_ACTIVATEAPP
+                ShelfProbe.Log($"WM_ACTIVATEAPP 激活={wParam != IntPtr.Zero}");
+                break;
+            case 0x0008: // WM_KILLFOCUS
+                ShelfProbe.Log($"WM_KILLFOCUS 新焦点窗口=0x{wParam.ToInt64():X8}");
+                break;
+            case 0x0021: // WM_MOUSEACTIVATE
+                ShelfProbe.Log($"WM_MOUSEACTIVATE 命中测试={wParam.ToInt32()} 鼠标消息={(int)(lParam.ToInt64() & 0xFFFF):X4}");
+                break;
+            case 0x02A3: // WM_MOUSELEAVE
+                ShelfProbe.Log("WM_MOUSELEAVE：系统通知指针离开窗口");
+                break;
+        }
+
+        return IntPtr.Zero;
     }
 
     // --- Items -----------------------------------------------------------------
@@ -518,6 +634,7 @@ public partial class ScreenshotShelfWindow : Window
             Math.Abs(_windowTop - (int)(_workArea.Top - HiddenHeight)) < 0.5)
         {
             _frameTimer.Stop();
+            ShelfProbe.Log("帧定时器停止（已收起且无掉落动画）");
         }
     }
 

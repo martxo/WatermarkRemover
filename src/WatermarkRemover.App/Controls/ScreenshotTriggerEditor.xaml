@@ -1,0 +1,156 @@
+<UserControl x:Class="WatermarkRemover.App.Controls.ScreenshotTriggerEditor"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Background="Transparent">
+    <UserControl.Resources>
+        <Style x:Key="Caption" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+        </Style>
+        <Style x:Key="FieldLabel" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Margin" Value="12,0,4,0"/>
+        </Style>
+        <Style x:Key="NumberBox" TargetType="TextBox">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Padding" Value="6,5"/>
+            <Setter Property="Width" Value="54"/>
+            <Setter Property="BorderBrush" Value="{StaticResource BorderBrushLight}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="TextAlignment" Value="Right"/>
+        </Style>
+    </UserControl.Resources>
+
+    <StackPanel>
+        <TextBlock Style="{StaticResource Caption}"
+                   Text="鼠标快速移到屏幕边缘的触发区域，最近截图晾衣绳就会滑出。四条边可分别启用；在左侧示意图里拖动色块调整沿边位置，厚度/长度单位为屏幕像素。改动随「返回应用」保存生效。"/>
+        <Grid Margin="0,12,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+
+            <!-- 屏幕（工作区）示意图：色块就是热区，按住可沿边拖动 -->
+            <Border Grid.Column="0" Width="300" Height="190" CornerRadius="6"
+                    Background="#FFF3F4F6"
+                    BorderBrush="{StaticResource ShellInsetCardStrokeBrush}"
+                    BorderThickness="1" Margin="0,0,18,0">
+                <Grid x:Name="ScreenMock">
+                    <TextBlock Text="屏幕边缘示意 · 拖动色块调整位置"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                               Foreground="#FFB6BCC6" FontSize="11" IsHitTestVisible="False"/>
+                    <Border x:Name="TopZone" Tag="Top" Cursor="SizeAll"
+                            Background="#33E53935" BorderBrush="#FFE53935" BorderThickness="1"
+                            CornerRadius="2" HorizontalAlignment="Left" VerticalAlignment="Top"
+                            MouseLeftButtonDown="OnZoneMouseDown" MouseMove="OnZoneMouseMove"
+                            MouseLeftButtonUp="OnZoneMouseUp"/>
+                    <Border x:Name="BottomZone" Tag="Bottom" Cursor="SizeAll"
+                            Background="#33E53935" BorderBrush="#FFE53935" BorderThickness="1"
+                            CornerRadius="2" HorizontalAlignment="Left" VerticalAlignment="Bottom"
+                            MouseLeftButtonDown="OnZoneMouseDown" MouseMove="OnZoneMouseMove"
+                            MouseLeftButtonUp="OnZoneMouseUp"/>
+                    <Border x:Name="LeftZone" Tag="Left" Cursor="SizeAll"
+                            Background="#33E53935" BorderBrush="#FFE53935" BorderThickness="1"
+                            CornerRadius="2" HorizontalAlignment="Left" VerticalAlignment="Top"
+                            MouseLeftButtonDown="OnZoneMouseDown" MouseMove="OnZoneMouseMove"
+                            MouseLeftButtonUp="OnZoneMouseUp"/>
+                    <Border x:Name="RightZone" Tag="Right" Cursor="SizeAll"
+                            Background="#33E53935" BorderBrush="#FFE53935" BorderThickness="1"
+                            CornerRadius="2" HorizontalAlignment="Right" VerticalAlignment="Top"
+                            MouseLeftButtonDown="OnZoneMouseDown" MouseMove="OnZoneMouseMove"
+                            MouseLeftButtonUp="OnZoneMouseUp"/>
+                </Grid>
+            </Border>
+
+            <!-- 四条边的配置行 -->
+            <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                <Grid Margin="0,0,0,10">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <CheckBox Grid.Column="0" Content="上边" FontSize="12" VerticalAlignment="Center"
+                              IsChecked="{Binding Settings.ScreenshotTrigger.Top.Enabled}"
+                              Checked="OnEdgeToggleChanged" Unchecked="OnEdgeToggleChanged"/>
+                    <TextBlock Grid.Column="1" Text="厚度" Style="{StaticResource FieldLabel}"/>
+                    <TextBox Grid.Column="2" Style="{StaticResource NumberBox}"
+                             Text="{Binding Settings.ScreenshotTrigger.Top.Thickness, UpdateSourceTrigger=LostFocus}"
+                             LostFocus="OnNumericBoxLostFocus"/>
+                    <TextBlock Grid.Column="3" Text="长度" Style="{StaticResource FieldLabel}"/>
+                    <TextBox Grid.Column="4" Style="{StaticResource NumberBox}"
+                             Text="{Binding Settings.ScreenshotTrigger.Top.Length, UpdateSourceTrigger=LostFocus}"
+                             LostFocus="OnNumericBoxLostFocus"/>
+                </Grid>
+                <Grid Margin="0,0,0,10">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <CheckBox Grid.Column="0" Content="下边" FontSize="12" VerticalAlignment="Center"
+                              IsChecked="{Binding Settings.ScreenshotTrigger.Bottom.Enabled}"
+                              Checked="OnEdgeToggleChanged" Unchecked="OnEdgeToggleChanged"/>
+                    <TextBlock Grid.Column="1" Text="厚度" Style="{StaticResource FieldLabel}"/>
+                    <TextBox Grid.Column="2" Style="{StaticResource NumberBox}"
+                             Text="{Binding Settings.ScreenshotTrigger.Bottom.Thickness, UpdateSourceTrigger=LostFocus}"
+                             LostFocus="OnNumericBoxLostFocus"/>
+                    <TextBlock Grid.Column="3" Text="长度" Style="{StaticResource FieldLabel}"/>
+                    <TextBox Grid.Column="4" Style="{StaticResource NumberBox}"
+                             Text="{Binding Settings.ScreenshotTrigger.Bottom.Length, UpdateSourceTrigger=LostFocus}"
+                             LostFocus="OnNumericBoxLostFocus"/>
+                </Grid>
+                <Grid Margin="0,0,0,10">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <CheckBox Grid.Column="0" Content="左边" FontSize="12" VerticalAlignment="Center"
+                              IsChecked="{Binding Settings.ScreenshotTrigger.Left.Enabled}"
+                              Checked="OnEdgeToggleChanged" Unchecked="OnEdgeToggleChanged"/>
+                    <TextBlock Grid.Column="1" Text="厚度" Style="{StaticResource FieldLabel}"/>
+                    <TextBox Grid.Column="2" Style="{StaticResource NumberBox}"
+                             Text="{Binding Settings.ScreenshotTrigger.Left.Thickness, UpdateSourceTrigger=LostFocus}"
+                             LostFocus="OnNumericBoxLostFocus"/>
+                    <TextBlock Grid.Column="3" Text="长度" Style="{StaticResource FieldLabel}"/>
+                    <TextBox Grid.Column="4" Style="{StaticResource NumberBox}"
+                             Text="{Binding Settings.ScreenshotTrigger.Left.Length, UpdateSourceTrigger=LostFocus}"
+                             LostFocus="OnNumericBoxLostFocus"/>
+                </Grid>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <CheckBox Grid.Column="0" Content="右边" FontSize="12" VerticalAlignment="Center"
+                              IsChecked="{Binding Settings.ScreenshotTrigger.Right.Enabled}"
+                              Checked="OnEdgeToggleChanged" Unchecked="OnEdgeToggleChanged"/>
+                    <TextBlock Grid.Column="1" Text="厚度" Style="{StaticResource FieldLabel}"/>
+                    <TextBox Grid.Column="2" Style="{StaticResource NumberBox}"
+                             Text="{Binding Settings.ScreenshotTrigger.Right.Thickness, UpdateSourceTrigger=LostFocus}"
+                             LostFocus="OnNumericBoxLostFocus"/>
+                    <TextBlock Grid.Column="3" Text="长度" Style="{StaticResource FieldLabel}"/>
+                    <TextBox Grid.Column="4" Style="{StaticResource NumberBox}"
+                             Text="{Binding Settings.ScreenshotTrigger.Right.Length, UpdateSourceTrigger=LostFocus}"
+                             LostFocus="OnNumericBoxLostFocus"/>
+                </Grid>
+                <TextBlock Text="示意图按主屏工作区等比绘制；晾衣绳只驻留在主屏，触发区域也只在主屏生效。"
+                           Style="{StaticResource Caption}" Margin="0,12,0,0"/>
+            </StackPanel>
+        </Grid>
+    </StackPanel>
+</UserControl>
