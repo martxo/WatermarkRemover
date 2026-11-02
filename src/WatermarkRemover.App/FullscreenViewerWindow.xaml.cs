@@ -23,6 +23,9 @@ public partial class FullscreenViewerWindow : System.Windows.Window
         DataContext = strip;
         strip.RequestClose += OnStripRequestClose;
         Closed += (_, _) => strip.RequestClose -= OnStripRequestClose;
+        // 窗口尺寸在 Show 之后才最终落定：布局稳定后再适应一次，页面不会按"中间某个更矮的
+        // 视口"缩放后停在窗口外（用户看到的就是下半页被裁掉）。
+        Loaded += (_, _) => PageView.FitPage();
     }
 
     /// <summary>The viewer's close button — the strip asks to leave, the window obliges.</summary>

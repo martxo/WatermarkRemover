@@ -8,6 +8,7 @@
         Background="#C8000000"
         ResizeMode="NoResize"
         ShowInTaskbar="False"
+        Topmost="True"
         PreviewKeyDown="OnPreviewKeyDown">
 
     <!-- Screen-level image viewer: a dark veil over the entire screen (not just the app

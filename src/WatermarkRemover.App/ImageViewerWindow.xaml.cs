@@ -47,6 +47,8 @@ public partial class ImageViewerWindow : Window
     {
         InitializeComponent();
         RailList.ItemsSource = _rail;
+        // 布局稳定后再适应一次：窗口尺寸在 Show 之后才最终落定，避免按中间尺寸缩放。
+        Loaded += (_, _) => Surface.Fit();
     }
 
     /// <summary>Opens <paramref name="path"/> in the single viewer window and brings it forward.</summary>

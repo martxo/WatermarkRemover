@@ -3,6 +3,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using WatermarkRemover.App.Logging;
 
 namespace WatermarkRemover.App.Controls;
 
@@ -175,6 +176,8 @@ public partial class ImageSurface : UserControl
         _scale = 1;
         CheckerViewport();
         Apply();
+        AppLog.Debug($"看图平面装载：图片 {_pixelWidth}×{_pixelHeight}，视口 " +
+                     $"{Viewport.ActualWidth:0}×{Viewport.ActualHeight:0}，缩放 {_scale:0.###}，模式 {ModeName}");
     }
 
     private void Apply()
@@ -213,7 +216,13 @@ public partial class ImageSurface : UserControl
         _offsetY = Math.Clamp(_offsetY, -limitY, limitY);
     }
 
-    private void OnViewportSizeChanged(object sender, SizeChangedEventArgs e) => Apply();
+    private void OnViewportSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        Apply();
+        AppLog.Debug($"看图平面视口变化：{Viewport.ActualWidth:0}×{Viewport.ActualHeight:0}，" +
+                     $"图片 {_pixelWidth}×{_pixelHeight}，缩放 {_scale:0.###}，模式 {ModeName}，" +
+                     $"位移 ({_offsetX:0},{_offsetY:0})");
+    }
 
     // --- Zoom & pan --------------------------------------------------------------
 
