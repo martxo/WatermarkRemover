@@ -95,11 +95,15 @@ public static class PdfDocumentBuilder
     /// <summary>
     /// Assembles a document whose pages were already encoded by the capture path. The caller
     /// keeps only the small payloads, so a long scan never needs every raw frame in memory.
+    /// <paramref name="clockwiseQuarterTurns"/> bakes the scan's early orientation verdict into
+    /// the file as /Rotate metadata (v1.16.83) — the preview's auto-orient pass then finds the
+    /// pages already upright instead of voting and rewriting after the fact.
     /// </summary>
     public static byte[] Build(
         ScanDocument document,
         PdfBuildOptions options,
-        IReadOnlyList<EncodedScanPage> encodedPages)
+        IReadOnlyList<EncodedScanPage> encodedPages,
+        int clockwiseQuarterTurns = 0)
     {
         ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(options);
@@ -113,7 +117,8 @@ public static class PdfDocumentBuilder
             document.BaseName ?? string.Empty,
             options,
             ResolveDpi(document.Settings),
-            MapPages(document, encodedPages));
+            MapPages(document, encodedPages),
+            clockwiseQuarterTurns);
         if (options.Encrypted && !CanOpenWithPassword(bytes, options.UserPassword))
         {
             throw new InvalidOperationException("加密 PDF 生成后无法用密码回读，已中止输出以免写出无法打开的文件。");
@@ -212,7 +217,8 @@ public static class PdfDocumentBuilder
         string title,
         PdfBuildOptions options,
         double dpi,
-        IReadOnlyList<PdfPageContent> pages)
+        IReadOnlyList<PdfPageContent> pages,
+        int clockwiseQuarterTurns = 0)
     {
         // --- Assemble the document single-threaded ---
         // PdfSharp's object graph is not thread-safe, so the assembly just consumes the finished
@@ -233,6 +239,10 @@ public static class PdfDocumentBuilder
             var page = pdf.AddPage();
             page.Width = XUnit.FromPoint(encoded.WidthPt);
             page.Height = XUnit.FromPoint(encoded.HeightPt);
+            // Same turn convention as PdfPageRotator.RotateAll: N clockwise quarter turns land
+            // as /Rotate 90·N. 0 stays unwritten so the default scan PDF keeps its exact shape.
+            if (clockwiseQuarterTurns % 4 != 0)
+                page.Rotate = 90 * (((clockwiseQuarterTurns % 4) + 4) % 4);
 
             // Bilevel frames (engine 黑白 mode) take the official-software route: a raw CCITT G4
             // image XObject, never decoded back to a bitmap in between.

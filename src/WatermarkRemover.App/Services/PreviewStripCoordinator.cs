@@ -74,11 +74,15 @@ public sealed class PreviewStripCoordinator
     /// wants to look at, so no extra click is needed; every other row folds via
     /// <see cref="ReleaseOtherStrips"/>. <paramref name="seedThumbnails"/> are the pages already
     /// shown live during the scan: the strip starts with them so it never flashes an empty grid
-    /// and then a second set of tiles.
+    /// and then a second set of tiles. <paramref name="skipScanPostProcess"/> marks a scan whose
+    /// orientation was settled and whose blank pages were filtered at capture time (v1.16.83):
+    /// the strip's automatic orient/blank passes would only repeat that work, so they stay off
+    /// (the manual buttons remain).
     /// </summary>
     public void Open(
         FileJobViewModel job,
-        IReadOnlyList<ImageSource>? seedThumbnails = null)
+        IReadOnlyList<ImageSource>? seedThumbnails = null,
+        bool skipScanPostProcess = false)
     {
         string? path = job.OutputPath;
         if (string.IsNullOrWhiteSpace(path) || !File.Exists(path) ||
@@ -97,9 +101,9 @@ public sealed class PreviewStripCoordinator
                 $"确定要删除第 {index + 1} 页吗？\n\n该页将从 PDF 中移除并立即保存，删除后无法恢复。",
                 "删除确认"),
             ocrEngine: _ocr,
-            autoOrient: scanRow,
+            autoOrient: scanRow && !skipScanPostProcess,
             onRelocated: job.UpdateRenamed, // a renamed file is tracked, the row follows
-            autoCleanBlank: scanRow, // duplex scans drop their blank back sides by themselves
+            autoCleanBlank: scanRow && !skipScanPostProcess, // duplex scans drop their blank back sides by themselves
             scanProvider: scanRow ? _scanIntoStrip : null, // scan rows can insert scans into gaps
             seedThumbnails: seedThumbnails);
         strip.EnlargeRequested += (_, _) => EnlargeRequested(strip);

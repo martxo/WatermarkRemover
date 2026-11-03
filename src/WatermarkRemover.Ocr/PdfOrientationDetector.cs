@@ -118,6 +118,17 @@ public sealed class PdfOrientationDetector
         return steps is null or 0 ? pagePng : Rotate(pagePng, steps.Value);
     }
 
+    /// <summary>
+    /// Applies an ALREADY-DECIDED verdict (the scan's page-1 vote shared with the naming chain,
+    /// v1.16.83): the decision was made once during the scan, so the consumer must not pay a
+    /// second OCR vote — it only turns the pixels. 0 (or a full circle) returns the input as-is.
+    /// </summary>
+    public static byte[] ApplyTurns(byte[] pagePng, int quarterTurns)
+    {
+        int turns = ((quarterTurns % 4) + 4) % 4;
+        return turns == 0 ? pagePng : Rotate(pagePng, turns);
+    }
+
     /// <summary>Geometry channel: read the candidate upright and score its line-box layout.</summary>
     private async Task<double> GeometryScoreAsync(IBoundedOcrEngine bounded, byte[] candidate)
     {

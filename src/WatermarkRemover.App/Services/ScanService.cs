@@ -9,13 +9,18 @@ using WatermarkRemover.Scan.Core.Models;
 using WatermarkRemover.Scan.Core.Pipeline;
 using WatermarkRemover.Scan.Engine;
 using WatermarkRemover.Scan.Engine.BrotherEngine;
+using WatermarkRemover.Imaging;
 using WatermarkRemover.Pdf;
 
 namespace WatermarkRemover.App.Services;
 
 /// <summary>One scan attempt's outcome; <see cref="Success"/> carries the written PDF.
 /// <see cref="Warning"/> means the document was saved, but not where it was asked to go — the
-/// host shows it verbatim so the user knows what to fix and where the pages are.</summary>
+/// host shows it verbatim so the user knows what to fix and where the pages are.
+/// <see cref="SkippedBlankPages"/> reports the pages the capture-time pixel probe filtered out
+/// (v1.16.83); <see cref="OrientationTurns"/> is the page-1 vote the PDF was assembled with —
+/// non-null means the file on disk is already upright and the preview's automatic passes can
+/// skip, null keeps the old strip-side auto-orient as the safety net.</summary>
 public sealed record ScanOutcome(
     bool Success,
     string? OutputPath,
@@ -25,7 +30,9 @@ public sealed record ScanOutcome(
     string? ErrorDetails,
     bool Cancelled = false,
     string? Warning = null,
-    string? Interruption = null);
+    string? Interruption = null,
+    int SkippedBlankPages = 0,
+    int? OrientationTurns = null);
 
 /// <summary>One page just pulled from the device, delivered while the scan is still running.
 /// The final PDF does not exist yet; the small PNG lets the row show the page immediately.</summary>
@@ -74,9 +81,12 @@ public sealed class ScanService
     /// <param name="duplex">Page layout chosen on the scan page (single / duplex long / short edge).</param>
     /// <param name="color">Colour mode chosen on the scan page (auto / colour / gray / black-white).</param>
     /// <param name="progress">Human-readable stage text for the scan panel.</param>
+    /// <param name="orientationVote">The host's page-1 orientation vote, started while the scanner
+    /// fed the remaining pages; awaited (it is normally already done) before assembly so the turn
+    /// lands as /Rotate metadata. Null or a null verdict keeps the preview's auto-orient as before.</param>
     public async Task<ScanOutcome> ScanAsync(
         DuplexMode duplex, ColorMode color, IProgress<string> progress, CancellationToken cancellationToken,
-        IProgress<ScannedPageInfo>? pageProgress = null)
+        IProgress<ScannedPageInfo>? pageProgress = null, Task<int?>? orientationVote = null)
     {
         // A scan is long by nature; the slow-operation warning would fire on every healthy run,
         // so the threshold is disabled and the per-page steps below carry the useful numbers.
@@ -91,7 +101,7 @@ public sealed class ScanService
             // whole session belongs on a worker thread; progress text still marshals back
             // through the IProgress<string>, and there is no WIA dialog to pin to an STA.
             ScanOutcome outcome = await Task.Run(
-                () => RunAsync(duplex, color, progress, cancellationToken, pageProgress, op));
+                () => RunAsync(duplex, color, progress, cancellationToken, pageProgress, orientationVote, op));
 
             if (outcome.Success)
             {
@@ -126,7 +136,7 @@ public sealed class ScanService
 
     private async Task<ScanOutcome> RunAsync(
         DuplexMode duplex, ColorMode color, IProgress<string> progress, CancellationToken cancellationToken,
-        IProgress<ScannedPageInfo>? pageProgress, OperationScope op)
+        IProgress<ScannedPageInfo>? pageProgress, Task<int?>? orientationVote, OperationScope op)
     {
         // Engine channel chain: Brother official first, WIA compatibility fallback second.
         IScanSource[] sources = { new BrotherEngineScanSource(AppLog.Trace), new WiaScanSource(AppLog.Trace) };
@@ -189,7 +199,9 @@ public sealed class ScanService
         // Pages are encoded as they arrive and their raw frames dropped; a thick stack therefore
         // holds N small payloads instead of N ~35 MB bitmaps. A depth-2 queue keeps the encode
         // overlapped with the next page read without ever holding the whole document in memory.
-        var encodedPages = new List<EncodedScanPage>();
+        // (v1.16.83 P2: the blank-page pixel probe rides in the SAME task — the queue never
+        // deepens and blank duplex backs skip encoding entirely.)
+        var completedPages = new Dictionary<int, TimedEncode>();
         var pendingEncodes = new Queue<Task<TimedEncode>>();
         double dpi = PdfDocumentBuilder.ResolveDpi(settings);
         int captured = 0;
@@ -218,18 +230,21 @@ public sealed class ScanService
                 pendingEncodes.Enqueue(Task.Run(() =>
                 {
                     var encode = Stopwatch.StartNew();
-                    EncodedScanPage payload = PdfDocumentBuilder.EncodePage(
-                        new ScannedPage { Image = page }, ScanPdfOptions, ThumbnailEncoder, dpi);
-                    return new TimedEncode(payload, encode.ElapsedMilliseconds, pageNumber, width, height, readMs);
+                    bool isBlank = IsBlankPage(page);
+                    // A blank page enters no encode and no PDF; the FIRST captured page is always
+                    // encoded so the all-blank keep-first rule always has something to keep.
+                    EncodedScanPage? payload = isBlank && pageNumber > 1
+                        ? null
+                        : PdfDocumentBuilder.EncodePage(
+                            new ScannedPage { Image = page }, ScanPdfOptions, ThumbnailEncoder, dpi);
+                    return new TimedEncode(payload, encode.ElapsedMilliseconds, pageNumber, width, height, readMs, isBlank);
                 }));
 
                 if (pendingEncodes.Count >= 2)
                 {
                     TimedEncode done = await pendingEncodes.Dequeue();
-                    encodedPages.Add(done.Payload);
-                    op.Step($"第 {done.PageNumber} 页",
-                        $"{done.Width}×{done.Height}，读取 {done.ReadMs} ms，编码 {done.EncodeMs} ms，" +
-                        $"{PayloadKb(done.Payload)} KB");
+                    completedPages[done.PageNumber] = done;
+                    LogPageStep(done, op);
                 }
             }
         }
@@ -272,13 +287,62 @@ public sealed class ScanService
                     op.Step("页面编码失败", ex.Message);
                     continue;
                 }
-                encodedPages.Add(done.Payload);
-                op.Step($"第 {done.PageNumber} 页编码（收尾）",
-                    $"{done.Width}×{done.Height}，编码 {done.EncodeMs} ms，{PayloadKb(done.Payload)} KB");
+                completedPages[done.PageNumber] = done;
+                LogPageStep(done, op, settling: true);
             }
         }
 
-        if (encodedPages.Count == 0)
+        // P1: the page-1 orientation vote ran while the scanner fed the remaining pages, so it
+        // is normally already settled here; a one-page scan waits out its last ~2 seconds — the
+        // same time the old flow later paid inside the preview's probe, now spent before the
+        // file even exists. Null (unusable engine / host without the hook) keeps the old
+        // preview-side auto-orient as the safety net.
+        int? orientationTurns = null;
+        if (orientationVote is not null)
+        {
+            try
+            {
+                orientationTurns = await orientationVote.ConfigureAwait(false);
+            }
+            catch
+            {
+                orientationTurns = null; // a failed vote must never fail the scan
+            }
+            op.Step("方向裁决", orientationTurns is { } turns
+                ? $"第 1 页顺时针 {turns * 90}°（扫描中完成，写入 /Rotate）"
+                : "无裁决，交由预览自动摆正");
+        }
+
+        progress.Report(cancelled
+            ? "已取消，正在保存已扫描的页面…"
+            : readError is not null ? "扫描中断，正在保存已读取的页面…" : "正在生成 PDF…");
+
+        // Reorder finished captures (not raw rasters) into reading order. The order math uses
+        // the FULL captured count — the manual flip-the-stack interleave needs it even when
+        // some pages later drop out as blank or failed.
+        var byIndex = new TimedEncode?[captured];
+        foreach (var done in completedPages.Values) byIndex[done.PageNumber - 1] = done;
+        var readingOrder = PageOrderNormalizer.NormalizeOrder(captured, settings)
+            .Select(i => byIndex[i])
+            .ToList();
+
+        (List<EncodedScanPage> kept, int skippedBlanks) = SelectPagesForPdf(readingOrder);
+        var pages = new List<ScannedPage>(kept.Count);
+        for (var index = 0; index < kept.Count; index++)
+        {
+            var (sheetIndex, isBackSide) = PageOrderNormalizer.ClassifyPage(index, duplex);
+            pages.Add(new ScannedPage
+            {
+                Index = index,
+                SheetIndex = sheetIndex,
+                IsBackSide = isBackSide,
+            });
+        }
+        op.Step("页面排序", $"{kept.Count} 页（采集 {captured} 页），{duplex}");
+        if (skippedBlanks > 0)
+            op.Step("空白页过滤", $"采集期判定，跳过 {skippedBlanks} 页空白页");
+
+        if (kept.Count == 0)
         {
             if (readError is not null)
             {
@@ -292,27 +356,6 @@ public sealed class ScanService
                     "未读取到任何页面，请确认原稿已正确放入。", null);
         }
 
-        progress.Report(cancelled
-            ? "已取消，正在保存已扫描的页面…"
-            : readError is not null ? "扫描中断，正在保存已读取的页面…" : "正在生成 PDF…");
-
-        // Reorder finished payloads (not raw rasters) into reading order.
-        IReadOnlyList<int> order = PageOrderNormalizer.NormalizeOrder(encodedPages.Count, settings);
-        var pages = new List<ScannedPage>(order.Count);
-        var orderedEncoded = new List<EncodedScanPage>(order.Count);
-        for (var index = 0; index < order.Count; index++)
-        {
-            var (sheetIndex, isBackSide) = PageOrderNormalizer.ClassifyPage(index, duplex);
-            pages.Add(new ScannedPage
-            {
-                Index = index,
-                SheetIndex = sheetIndex,
-                IsBackSide = isBackSide,
-            });
-            orderedEncoded.Add(encodedPages[order[index]]);
-        }
-        op.Step("页面排序", $"{pages.Count} 页，{duplex}");
-
         string directory = OutputDirectoryResolver.Resolve(_settings.ScanOutputDirectory, AppFolders.Root);
         string fileName = ScanFileName.Create(DateTime.Now);
         string path = OutputNameGenerator.FindAvailablePath(directory, fileName);
@@ -325,8 +368,10 @@ public sealed class ScanService
             SourceName = device.Name,
         };
         // Cancellation stops page capture, not the save: the pages already read must still land
-        // as a partial PDF, so the assembly and write deliberately ignore the token.
-        byte[] pdf = await Task.Run(() => PdfDocumentBuilder.Build(document, ScanPdfOptions, orderedEncoded));
+        // as a partial PDF, so the assembly and write deliberately ignore the token. The early
+        // orientation verdict rides along as /Rotate metadata (v1.16.83 P1).
+        byte[] pdf = await Task.Run(() =>
+            PdfDocumentBuilder.Build(document, ScanPdfOptions, kept, orientationTurns ?? 0));
         op.Step("生成 PDF", $"{pages.Count} 页，{pdf.Length / 1024.0:0} KB");
 
         // A failed write used to discard the whole document — the pages were already pulled off
@@ -358,12 +403,70 @@ public sealed class ScanService
             : $"扫描完成：{path}（{pages.Count} 页，{pdf.Length / 1024.0:0} KB，来源 {device.Name}，版面 {duplex}）");
         if (readError is not null)
             AppLog.Warn($"扫描中断但已保存 {pages.Count} 页：{path}，原因：{readError}");
-        return new ScanOutcome(true, path, pages.Count, device.Name, null, null, cancelled, warning, readError);
+        return new ScanOutcome(true, path, pages.Count, device.Name, null, null, cancelled, warning, readError,
+            SkippedBlankPages: skippedBlanks, OrientationTurns: orientationTurns);
     }
 
-    /// <summary>One page's finished payload plus the per-page numbers the log step reports.</summary>
-    private sealed record TimedEncode(
-        EncodedScanPage Payload, long EncodeMs, int PageNumber, int Width, int Height, long ReadMs);
+    /// <summary>One page's finished capture: the payload (null when the page was blank and not
+    /// the first, or when encoding failed) plus the per-page numbers the log step reports.</summary>
+    internal sealed record TimedEncode(
+        EncodedScanPage? Payload, long EncodeMs, int PageNumber, int Width, int Height, long ReadMs, bool IsBlank);
+
+    /// <summary>
+    /// P2's pure core: pages in reading order → what enters the PDF. Blank pages (judged at
+    /// capture time from the raw frame) and unencodable pages are skipped; an all-blank capture
+    /// keeps its first page rather than turning into nothing. The order of survivors is the
+    /// reading order — nothing here can shuffle pages.
+    /// </summary>
+    internal static (List<EncodedScanPage> Payloads, int SkippedBlanks) SelectPagesForPdf(
+        IReadOnlyList<TimedEncode?> readingOrder)
+    {
+        var payloads = new List<EncodedScanPage>();
+        int skippedBlanks = 0;
+        // All-blank keep-first: every entry blank-or-missing means only the first page (always
+        // encoded) carries the document.
+        bool keepFirstOnly = readingOrder.All(t => t is null or { IsBlank: true });
+        foreach (TimedEncode? page in readingOrder)
+        {
+            if (page is null) continue; // encode task faulted — already logged where it threw
+            if (page.Payload is null)
+            {
+                if (page.IsBlank) skippedBlanks++;
+                continue;
+            }
+            if (keepFirstOnly && payloads.Count >= 1) break;
+            payloads.Add(page.Payload);
+        }
+        return (payloads, skippedBlanks);
+    }
+
+    /// <summary>
+    /// P2: the capture-time blank verdict. The raw frame is downsampled to 256 px (the thumbnail
+    /// scale) and judged by pixel statistics — no OCR, milliseconds, same detector the preview's
+    /// pass used on rendered pages. Any probe failure counts as content:宁可留页，不误删。
+    /// </summary>
+    private static bool IsBlankPage(RasterImage page)
+    {
+        try
+        {
+            byte[] small = ThumbnailEncoder.Encode(ThumbnailEncoder.Resize(page, 256), "png");
+            return BlankPageDetector.IsBlank(small);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>Per-page log step; blank pages say so instead of reporting an encode.</summary>
+    private static void LogPageStep(TimedEncode done, OperationScope op, bool settling = false)
+    {
+        string stage = settling ? $"第 {done.PageNumber} 页编码（收尾）" : $"第 {done.PageNumber} 页";
+        op.Step(stage, done.Payload is null
+            ? $"{done.Width}×{done.Height}，读取 {done.ReadMs} ms，空白页（编码跳过）"
+            : $"{done.Width}×{done.Height}，读取 {done.ReadMs} ms，编码 {done.EncodeMs} ms，" +
+              $"{PayloadKb(done.Payload)} KB");
+    }
 
     private static int PayloadKb(EncodedScanPage page) =>
         (page.Ccitt?.Length ?? page.Bytes?.Length ?? 0) / 1024;

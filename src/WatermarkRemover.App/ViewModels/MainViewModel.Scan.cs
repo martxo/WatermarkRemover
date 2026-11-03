@@ -78,6 +78,10 @@ public sealed partial class MainViewModel
         FileJobViewModel job = AddScanningJob();
         bool scanFinished = false;
         Task<AutoNameResult?>? earlyNaming = null;
+        // P1 (v1.16.83): page 1's orientation vote is made ONCE and shared — the naming chain
+        // consumes it instead of voting again, and the scan assembly awaits the same task to
+        // bake the turn into /Rotate. The TaskCompletionSource bridges the callback to the scan.
+        var orientationVote = new TaskCompletionSource<int?>(TaskCreationOptions.RunContinuationsAsynchronously);
         // Every scan message (connecting / opening session / reading page N) lands on the row
         // itself; that is the only status surface for a scan.
         var stageProgress = new Progress<string>(job.ReportStage);
@@ -88,19 +92,24 @@ public sealed partial class MainViewModel
                          $"{page.Width}×{page.Height}，缩略图 {page.ThumbnailPng.Length / 1024} KB");
 
             // Page 1 carries a naming-resolution image: OCR it now, while the scanner keeps
-            // feeding the remaining pages, instead of after the finished PDF.
+            // feeding the remaining pages, instead of after the finished PDF. The orientation
+            // vote rides the same image and completes into the shared verdict.
             if (!scanFinished && earlyNaming is null && page.NamingImage is { Length: > 0 } namingImage)
             {
                 AppLog.Debug($"扫描页到达：第 {page.PageNumber} 页附带命名图，" +
-                             $"{namingImage.Length / 1024} KB，开始首屏命名");
-                earlyNaming = SuggestEarlyAsync(namingImage, job, () => !scanFinished);
+                             $"{namingImage.Length / 1024} KB，开始首屏命名与方向投票");
+                Task<int?> voteTask = _naming.DetectOrientationAsync(namingImage);
+                _ = voteTask.ContinueWith(
+                    t => orientationVote.TrySetResult(t.Status == TaskStatus.RanToCompletion ? t.Result : null),
+                    CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+                earlyNaming = SuggestEarlyAsync(namingImage, voteTask, job, () => !scanFinished);
             }
         });
 
         ScanOutcome outcome;
         try
         {
-            outcome = await _scan.ScanOnceAsync(stageProgress, pageProgress).ConfigureAwait(true);
+            outcome = await _scan.ScanOnceAsync(stageProgress, pageProgress, orientationVote.Task).ConfigureAwait(true);
         }
         catch (ScannerBusyException ex)
         {
@@ -151,11 +160,14 @@ public sealed partial class MainViewModel
         // row's file name (delete prompt, diagnostics) consistent with what landed on disk.
         string path = outcome.OutputPath!;
         job.AdoptSource(path);
+        string blankNote = outcome.SkippedBlankPages > 0
+            ? $"，已跳过 {outcome.SkippedBlankPages} 页空白页"
+            : string.Empty;
         string summary = outcome.Cancelled
-            ? $"已取消，保留 {outcome.PageCount} 页"
+            ? $"已取消，保留 {outcome.PageCount} 页{blankNote}"
             : outcome.Interruption is { Length: > 0 }
-                ? $"扫描中断，已保存 {outcome.PageCount} 页"
-                : $"扫描 {outcome.PageCount} 页";
+                ? $"扫描中断，已保存 {outcome.PageCount} 页{blankNote}"
+                : $"扫描 {outcome.PageCount} 页{blankNote}";
         job.Apply(FeatureResult.Success(path, path, summary, outcome.PageCount));
         // A device failure mid-document (paper jam, cable) used to lose every page already
         // pulled off the hardware. The partial PDF is saved now, and the row offers
@@ -188,11 +200,15 @@ public sealed partial class MainViewModel
 
         // The scan that just landed unfolds its own strip, seeded with the pages shown live, so
         // the user sees the result without clicking 预览. Older rows fold (accordion), keeping
-        // just one document's pixels resident.
+        // just one document's pixels resident. With a settled orientation verdict the file is
+        // already upright (and blank pages never entered it), so the strip's automatic passes
+        // are skipped entirely — the manual buttons stay.
         var livePages = job.LiveThumbnails.ToArray();
-        _preview.Open(job, livePages);
+        int? settledTurns = earlyNaming is null ? null : await orientationVote.Task.ConfigureAwait(true);
+        _preview.Open(job, livePages, skipScanPostProcess: settledTurns is not null);
         job.ClearLiveThumbnails();
-        op.Step("记录已展开", $"{Path.GetFileName(path)}，{livePages.Length} 页缩略图");
+        op.Step("记录已展开", $"{Path.GetFileName(path)}，{livePages.Length} 页缩略图，" +
+                             (settledTurns is not null ? "方向已裁决，跳过自动后处理" : "保留预览自动后处理"));
 
         // Naming may already have finished from page 1 while the scan continued; the rename
         // still waits for the PDF (and the strip's writes) before moving the file.
@@ -209,12 +225,15 @@ public sealed partial class MainViewModel
     /// <summary>
     /// 首屏命名在扫描还在读后面几页时就出结果。把名字立刻写到行上，用户不用等整份文档扫完
     /// 才看到「识别到什么」；真正改名仍要等 PDF 落盘、且预览的自动摆正/清空白页写完。
+    /// P1：方向投票已由 <paramref name="orientationVote"/> 在扫描途中完成，命名直接复用裁决。
     /// </summary>
     private async Task<AutoNameResult?> SuggestEarlyAsync(
-        byte[] namingImage, FileJobViewModel job, Func<bool> stillScanning)
+        byte[] namingImage, Task<int?> orientationVote, FileJobViewModel job, Func<bool> stillScanning)
     {
+        int? preOrientedSteps = await orientationVote.ConfigureAwait(true); // Detect 内部吞异常，绝不抛出
+
         AutoNameResult? suggestion = await _naming
-            .TrySuggestFromImageAsync(namingImage)
+            .TrySuggestFromImageAsync(namingImage, preOrientedSteps)
             .ConfigureAwait(true);
 
         // 扫描已经落盘时，行上的命名状态由后台命名接手；这份「扫描结束后改名」的旧话不能再写，

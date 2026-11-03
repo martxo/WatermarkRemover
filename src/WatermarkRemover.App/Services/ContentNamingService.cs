@@ -142,8 +142,11 @@ public sealed class ContentNamingService
     /// <summary>
     /// Suggests a name from one already-captured page image (PNG). Used while a scan is still
     /// running, so naming overlaps the remaining pages instead of waiting for the PDF.
+    /// <paramref name="preOrientedSteps"/> carries the orientation verdict the scan already made
+    /// for this page (v1.16.83): the vote is shared, not repeated — the chain only turns the
+    /// pixels. Null keeps the old behaviour (detect inside this call).
     /// </summary>
-    public async Task<AutoNameResult?> TrySuggestFromImageAsync(byte[] imageBytes)
+    public async Task<AutoNameResult?> TrySuggestFromImageAsync(byte[] imageBytes, int? preOrientedSteps = null)
     {
         if (!_settings.AutoNameByContent || imageBytes.Length == 0) return null;
 
@@ -152,8 +155,8 @@ public sealed class ContentNamingService
 
         try
         {
-            AutoNameResult? suggestion = await SuggestFromPageAsync(imageBytes, pageIndex: 0, pageCount: 1, op)
-                .ConfigureAwait(true);
+            AutoNameResult? suggestion = await SuggestFromPageAsync(
+                imageBytes, pageIndex: 0, pageCount: 1, op, preOrientedSteps).ConfigureAwait(true);
             op.Complete(suggestion is null ? "未识别出可信名称" : $"识别为 {suggestion.SuggestedStem}");
             return suggestion;
         }
@@ -161,6 +164,26 @@ public sealed class ContentNamingService
         {
             AppLog.Trace("命名：首屏自动命名异常，保留时间戳命名", ex);
             op.Fail("首屏自动命名异常，保留时间戳命名", ex);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// The scan's page-1 orientation vote (v1.16.83): decided once while the scanner feeds the
+    /// remaining pages, then shared with the PDF assembly (/Rotate) and this naming chain. Never
+    /// throws — an unusable engine returns null and the preview's auto-orient stays the safety
+    /// net, exactly like the strip's own probe contract.
+    /// </summary>
+    public async Task<int?> DetectOrientationAsync(byte[] pagePng)
+    {
+        try
+        {
+            return await new PdfOrientationDetector(_ocr)
+                .DetectClockwiseStepsAsync(pagePng).ConfigureAwait(true);
+        }
+        catch (Exception ex)
+        {
+            AppLog.Trace("命名：方向裁决失败，交由预览自动摆正", ex);
             return null;
         }
     }
@@ -213,9 +236,11 @@ public sealed class ContentNamingService
         }
     }
 
-    /// <summary>Orientation + fixed-region fast path + full OCR for one page image.</summary>
+    /// <summary>Orientation + fixed-region fast path + full OCR for one page image.
+    /// <paramref name="preOrientedSteps"/>: a verdict decided upstream (the scan's shared vote);
+    /// when present the detection pass is skipped and the turn applied directly.</summary>
     private async Task<AutoNameResult?> SuggestFromPageAsync(
-        byte[] image, int pageIndex, int pageCount, OperationScope op)
+        byte[] image, int pageIndex, int pageCount, OperationScope op, int? preOrientedSteps = null)
     {
         // A blank page cannot name anything, but it used to pay the orientation vote (four OCR
         // passes) plus a full-page OCR — the slow "空白页也在识别" the scanner reported. The pixel
@@ -228,9 +253,15 @@ public sealed class ContentNamingService
         }
 
         // 摆正后再识别：ADF 躺倒页在方向检测完成前就进命名链会取错字（横版画布守卫不受影响）。
-        image = await new PdfOrientationDetector(_ocr).OrientAsync(image).ConfigureAwait(true);
-        AppLog.Trace($"命名：第 {pageIndex + 1}/{pageCount} 页渲染 {image.Length / 1024} KB", null);
-        op.Step($"第 {pageIndex + 1}/{pageCount} 页方向校正", $"{image.Length / 1024} KB");
+        // P1：扫描期已对这一页投过票时复用裁决，方向检测的 2-4 个 OCR pass 不再重复付。
+        image = preOrientedSteps is { } steps
+            ? PdfOrientationDetector.ApplyTurns(image, steps)
+            : await new PdfOrientationDetector(_ocr).OrientAsync(image).ConfigureAwait(true);
+        AppLog.Trace(
+            $"命名：第 {pageIndex + 1}/{pageCount} 页方向{(preOrientedSteps is null ? "检测" : "复用扫描期裁决")}，{image.Length / 1024} KB",
+            null);
+        op.Step($"第 {pageIndex + 1}/{pageCount} 页方向校正",
+            $"{(preOrientedSteps is null ? "检测" : "复用裁决")}，{image.Length / 1024} KB");
 
         // Fast path for fixed-layout types: locate the name cell geometrically and
         // recognise only that crop — no full-page OCR, no text-order guessing.

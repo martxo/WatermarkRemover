@@ -33,11 +33,14 @@ public sealed class ScanCoordinator
     /// <summary>
     /// Runs one scan with the layout/colour chosen on the scan page, mirroring progress into the
     /// status line and (when given) the caller's sink. Throws <see cref="ScannerBusyException"/>
-    /// when another scan still holds the hardware.
+    /// when another scan still holds the hardware. <paramref name="orientationVote"/> is the
+    /// page-1 verdict the host started during the scan (v1.16.83): the assembly waits for it and
+    /// bakes the turn into /Rotate instead of leaving orientation to the preview pass.
     /// </summary>
     public async Task<ScanOutcome> ScanOnceAsync(
         IProgress<string>? progressSink,
-        IProgress<ScannedPageInfo>? pageSink = null)
+        IProgress<ScannedPageInfo>? pageSink = null,
+        Task<int?>? orientationVote = null)
     {
         if (!await _gate.WaitAsync(0).ConfigureAwait(true))
         {
@@ -58,7 +61,7 @@ public sealed class ScanCoordinator
         try
         {
             var (duplex, color) = ScanModes();
-            return await _scanService.ScanAsync(duplex, color, progress, cts.Token, pageSink)
+            return await _scanService.ScanAsync(duplex, color, progress, cts.Token, pageSink, orientationVote)
                 .ConfigureAwait(true);
         }
         finally
