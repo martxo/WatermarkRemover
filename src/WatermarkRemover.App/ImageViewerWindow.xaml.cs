@@ -13,6 +13,8 @@ using WatermarkRemover.App.Editing;
 using WatermarkRemover.App.Logging;
 using WatermarkRemover.App.Services;
 using WatermarkRemover.Core.Features.Screenshot;
+using WatermarkRemover.Core.Settings;
+using WatermarkRemover.Imaging.Encoding;
 using WatermarkRemover.Imaging.Screenshot;
 
 namespace WatermarkRemover.App;
@@ -64,6 +66,9 @@ public partial class ImageViewerWindow : Window
     /// <summary>标注合成底图：与当前显示图同尺寸（原图不动，标注只烧进另存的副本）。</summary>
     private SKBitmap? _editBase;
 
+    /// <summary>截图导出设置（格式/质量）：标注副本按它编码，默认 PNG。</summary>
+    private AppSettings _settings = new();
+
     private bool _editing;
 
     private ImageViewerWindow()
@@ -76,18 +81,19 @@ public partial class ImageViewerWindow : Window
     }
 
     /// <summary>Opens <paramref name="path"/> in the single viewer window and brings it forward.</summary>
-    public static void ShowFor(string path)
+    public static void ShowFor(string path, AppSettings? settings = null)
     {
         if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) return;
 
         if (_current is { } existing)
         {
+            existing._settings = settings ?? existing._settings;
             existing.Load(path);
             existing.RestoreAndActivate();
             return;
         }
 
-        var window = new ImageViewerWindow();
+        var window = new ImageViewerWindow { _settings = settings ?? new AppSettings() };
         _current = window;
         window.Closed += (_, _) =>
         {
@@ -546,21 +552,25 @@ public partial class ImageViewerWindow : Window
             string directory = Path.GetDirectoryName(_path) ?? AppContext.BaseDirectory;
             Directory.CreateDirectory(directory);
             string stem = Path.GetFileNameWithoutExtension(_path);
-            string fileName = ScreenshotNaming.EnsureUnique(
-                directory, $"{stem}_标注_{DateTime.Now:HHmmss}.png");
-            string target = Path.Combine(directory, fileName);
 
-            using SKImage image = SKImage.FromBitmap(composed);
-            using SKData? data = image.Encode(SKEncodedImageFormat.Png, 100);
-            if (data is null) throw new InvalidOperationException("PNG 编码失败");
-            File.WriteAllBytes(target, data.ToArray());
+            // 导出格式/质量跟随截图设置（默认 PNG；WebP/JPEG 见设置页），失败自动回退 PNG。
+            ImageEncodeResult encoded = ImageEncoderService.Default.Encode(
+                composed,
+                ImageExportFormats.ParseOrDefault(_settings.ScreenshotImageFormat),
+                _settings.ScreenshotImageQuality);
+            string fileName = ScreenshotNaming.EnsureUnique(
+                directory, $"{stem}_标注_{DateTime.Now:HHmmss}{encoded.FileExtension}");
+            string target = Path.Combine(directory, fileName);
+            File.WriteAllBytes(target, encoded.Bytes);
 
             string saved = target;
             // 副本已含全部标注：清会话避免二次叠加，然后切到副本（胶片轨/标题随之刷新，
             // Load 里的换图守卫会顺带退出标注态）。
             _edit.Clear();
             Load(saved);
-            ShowToast($"已标注并保存副本：{Path.GetFileName(saved)}");
+            ShowToast(encoded.Note is { Length: > 0 } note
+                ? note
+                : $"已标注并保存副本：{Path.GetFileName(saved)}");
             AppLog.Info($"看图标注已保存：{saved}");
         }
         catch (Exception ex)

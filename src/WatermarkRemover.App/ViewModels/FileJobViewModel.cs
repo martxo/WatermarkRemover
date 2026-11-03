@@ -234,14 +234,8 @@ public sealed class FileJobViewModel : ObservableObject
 
         try
         {
-            var image = new BitmapImage();
-            image.BeginInit();
-            image.CacheOption = BitmapCacheOption.OnLoad;
-            image.DecodePixelWidth = 160;
-            image.UriSource = new Uri(path!);
-            image.EndInit();
-            image.Freeze();
-            Thumbnail = image;
+            // WebP/AVIF 等 WPF 没有编解码器的格式由 SkiaSharp 回退（截图导出可选 WebP）。
+            Thumbnail = SkiaBitmapBridge.LoadBitmapSource(path!, decodePixelWidth: 160);
         }
         catch (Exception ex)
         {
@@ -260,16 +254,8 @@ public sealed class FileJobViewModel : ObservableObject
 
         try
         {
-            var image = new BitmapImage();
-            using (var stream = File.OpenRead(path))
-            {
-                image.BeginInit();
-                image.CacheOption = BitmapCacheOption.OnLoad;
-                image.StreamSource = stream;
-                image.EndInit();
-            }
-
-            image.Freeze();
+            // 走带回退的加载器：WebP 截图也能复制（WPF 无 WebP 编解码器，SkiaSharp 兜底）。
+            if (SkiaBitmapBridge.LoadBitmapSource(path) is not { } image) return;
             Clipboard.SetImage(image);
             ShowTransientNameNote("图片已复制到剪贴板");
         }

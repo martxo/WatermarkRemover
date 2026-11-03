@@ -8,6 +8,8 @@ using WatermarkRemover.App.Controls;
 using WatermarkRemover.App.Editing;
 using WatermarkRemover.App.Services;
 using WatermarkRemover.Core.Features.Screenshot;
+using WatermarkRemover.Core.Settings;
+using WatermarkRemover.Imaging.Encoding;
 using WatermarkRemover.Imaging.Screenshot;
 
 namespace WatermarkRemover.App;
@@ -15,14 +17,16 @@ namespace WatermarkRemover.App;
 /// <summary>
 /// Markup editor for an already-saved screenshot (Tendedero's long-press action). It reuses the
 /// same annotation model/composer as the live overlay, so colours, widths, multi-line text and
-/// mosaic match the PNG produced during normal capture. Saving always writes a NEW file and
-/// leaves the original untouched.
+/// mosaic match the image produced during normal capture. Saving always writes a NEW file and
+/// leaves the original untouched; the file format follows the screenshot export setting
+/// (PNG by default, WebP/JPEG selectable in 截图设置).
 /// </summary>
 public partial class ImageMarkupWindow : Window
 {
     private readonly string _sourcePath;
     private readonly SKBitmap _original;
     private readonly Action<string, int, int> _saved;
+    private readonly AppSettings _settings;
 
     // 画布坐标 = 原图像素；粗细/字号按显示缩放换算回图像素（/ _scale）。
     private readonly AnnotationEditSession _edit = new()
@@ -36,10 +40,11 @@ public partial class ImageMarkupWindow : Window
     private double _scale = 1;
     private bool _drawing;
 
-    public ImageMarkupWindow(string sourcePath, Action<string, int, int> saved)
+    public ImageMarkupWindow(string sourcePath, Action<string, int, int> saved, AppSettings? settings = null)
     {
         _sourcePath = sourcePath;
         _saved = saved ?? throw new ArgumentNullException(nameof(saved));
+        _settings = settings ?? new AppSettings();
 
         SKBitmap? decoded = SKBitmap.Decode(sourcePath);
         if (decoded is null) throw new InvalidOperationException("无法读取图片");
@@ -255,16 +260,20 @@ public partial class ImageMarkupWindow : Window
             string directory = Path.GetDirectoryName(_sourcePath) ?? AppContext.BaseDirectory;
             Directory.CreateDirectory(directory);
             string stem = Path.GetFileNameWithoutExtension(_sourcePath);
-            string fileName = ScreenshotNaming.EnsureUnique(
-                directory, $"{stem}_标注_{DateTime.Now:HHmmss}.png");
-            string target = Path.Combine(directory, fileName);
 
-            using SKImage image = SKImage.FromBitmap(composed);
-            using SKData? data = image.Encode(SKEncodedImageFormat.Png, 100);
-            if (data is null) throw new InvalidOperationException("PNG 编码失败");
-            File.WriteAllBytes(target, data.ToArray());
+            // 导出格式/质量跟随截图设置（默认 PNG；WebP/JPEG 见设置页）。编码失败自动回退
+            // PNG，Note 非空时在状态行说明，不静默换格式。
+            ImageEncodeResult encoded = ImageEncoderService.Default.Encode(
+                composed,
+                ImageExportFormats.ParseOrDefault(_settings.ScreenshotImageFormat),
+                _settings.ScreenshotImageQuality);
+            string fileName = ScreenshotNaming.EnsureUnique(
+                directory, $"{stem}_标注_{DateTime.Now:HHmmss}{encoded.FileExtension}");
+            string target = Path.Combine(directory, fileName);
+            File.WriteAllBytes(target, encoded.Bytes);
 
             _saved(target, composed.Width, composed.Height);
+            if (encoded.Note is { Length: > 0 } note) StatusText.Text = note;
             Close();
         }
         catch (Exception ex)

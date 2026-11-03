@@ -2,6 +2,7 @@ using System.IO;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using SkiaSharp;
+using WatermarkRemover.App.Services;
 using WatermarkRemover.Imaging;
 
 namespace WatermarkRemover.App.ViewModels;
@@ -144,7 +145,16 @@ public sealed class ComposeSourceViewModel : ObservableObject
         }
         catch
         {
-            return null;
+            // 手机传来的可能是 WebP/HEIC：WPF 没有对应编解码器，SkiaSharp 兜底。
+            try
+            {
+                using var bitmap = SkiaSharp.SKBitmap.Decode(bytes);
+                return bitmap is null ? null : SkiaBitmapBridge.ToBitmapSource(bitmap);
+            }
+            catch
+            {
+                return null;
+            }
         }
     }
 }

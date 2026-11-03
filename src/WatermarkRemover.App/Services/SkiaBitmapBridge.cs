@@ -75,4 +75,43 @@ internal static class SkiaBitmapBridge
             return null;
         }
     }
+
+    /// <summary>
+    /// 从任意图片文件加载 <see cref="BitmapSource"/>：先走 WPF 编解码器（快、保留元数据），
+    /// WPF 不认识的格式（WebP/AVIF/HEIC 与部分相机 RAW）回退 SkiaSharp——与看图窗口同一套
+    /// 行为。截图导出选了 WebP 之后，任务看板缩略图/剪贴板/固定窗/传输预览都走这里，
+    /// 不会因为 WPF 没有 WebP 编解码器而静默变空白。
+    /// </summary>
+    public static BitmapSource? LoadBitmapSource(string path, int? decodePixelWidth = null)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+
+        try
+        {
+            var image = new BitmapImage();
+            image.BeginInit();
+            image.CacheOption = BitmapCacheOption.OnLoad;
+            if (decodePixelWidth is > 0) image.DecodePixelWidth = decodePixelWidth.Value;
+            image.UriSource = new Uri(path);
+            image.EndInit();
+            if (!image.IsFrozen) image.Freeze();
+            return image;
+        }
+        catch (Exception ex)
+        {
+            try
+            {
+                using SKBitmap? bitmap = SKBitmap.Decode(path);
+                if (bitmap is not null) return ToBitmapSource(bitmap);
+            }
+            catch (Exception inner)
+            {
+                AppLog.Warn($"图片解码失败：{path}（{inner.Message}）");
+                return null;
+            }
+
+            AppLog.Warn($"图片解码失败：{path}（{ex.Message}）");
+            return null;
+        }
+    }
 }

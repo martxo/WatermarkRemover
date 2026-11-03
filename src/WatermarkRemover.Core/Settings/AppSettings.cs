@@ -126,6 +126,17 @@ public sealed class AppSettings
     public bool ScreenshotAutoSave { get; set; } = true;
 
     /// <summary>
+    /// 截图 / 标注导出的图片格式：png（默认，无损、兼容性最好）/ webp / jpeg。
+    /// WebP 走 SkiaSharp 内置的 libwebp（与 Squoosh 同源的编码器），实测同画质下
+    /// 体积约为 PNG 的 1/4~1/2；PDF 内部渲染缓存与 PDF 内嵌图不走这项（保持 PNG/JPEG，
+    /// 保证 PDFium 与阅读器可解码）。
+    /// </summary>
+    public string ScreenshotImageFormat { get; set; } = "png";
+
+    /// <summary>有损格式的质量档位（1-100），PNG 无损忽略。默认 90（实测文档页 PSNR 47-50dB）。</summary>
+    public int ScreenshotImageQuality { get; set; } = 90;
+
+    /// <summary>
     /// 最近截图晾衣绳的触发区域（截图设置）：四条边各自独立启用、可调厚度/长度/位置，
     /// 重启后保留。默认上边、居中——与旧版顶部 32px 热区一致，只是可配。
     /// </summary>
@@ -178,6 +189,8 @@ public sealed class AppSettings
         ScreenshotOutputDirectory = ScreenshotOutputDirectory,
         ScreenshotAutoCopy = ScreenshotAutoCopy,
         ScreenshotAutoSave = ScreenshotAutoSave,
+        ScreenshotImageFormat = ScreenshotImageFormat,
+        ScreenshotImageQuality = ScreenshotImageQuality,
         ScreenshotTrigger = ScreenshotTrigger.Clone(),
         MinimizeToTrayOnClose = MinimizeToTrayOnClose,
         NetdiskAccounts = NetdiskAccounts.ToList(),

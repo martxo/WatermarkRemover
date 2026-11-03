@@ -523,7 +523,7 @@
                         <TextBlock Text="全局快捷键" Style="{StaticResource SectionTitle}" Margin="0,0,0,8"/>
                         <Border Style="{StaticResource InsetCard}">
                             <StackPanel>
-                                <TextBlock Text="软件在后台（包括最小化时）也能用这些组合键。点击下面的输入框后直接按下组合键即可修改，至少需要包含 Ctrl / Alt / Shift / Win 中的一个。"
+                                <TextBlock Text="软件在后台（包括最小化时）也能用这些快捷键。点击下面的输入框后直接按下组合键（或单个 F1 / 字母键）即可修改；单键会抢占该按键，保存时会提醒一次。"
                                            Style="{StaticResource RowCaption}"
                                            Margin="0,0,0,10"/>
                                 <Grid>
@@ -598,7 +598,7 @@
                         <TextBlock Text="保存位置" Style="{StaticResource SectionTitle}" Margin="0,16,0,0"/>
                         <Border Style="{StaticResource InsetCard}">
                             <StackPanel>
-                                <TextBlock Text="截图会自动复制到剪贴板，同时保存一份 PNG 到这里；留空则保存到系统「图片」文件夹下的 Screenshots 子目录。改动随「返回应用」保存生效。"
+                                <TextBlock Text="截图会自动复制到剪贴板，同时保存一份图片到这里（格式见下方「图片格式」）；留空则保存到系统「图片」文件夹下的 Screenshots 子目录。改动随「返回应用」保存生效。"
                                            Style="{StaticResource RowCaption}"
                                            Margin="0,0,0,10"/>
                                 <Grid>
@@ -626,12 +626,69 @@
                                 <CheckBox Content="完成后自动复制到剪贴板"
                                           IsChecked="{Binding Settings.ScreenshotAutoCopy}"
                                           FontSize="13"/>
-                                <CheckBox Content="完成后自动保存 PNG 文件"
+                                <CheckBox Content="完成后自动保存文件"
                                           IsChecked="{Binding Settings.ScreenshotAutoSave}"
                                           FontSize="13" Margin="0,8,0,0"/>
                                 <TextBlock Text="两项至少开启一项；只复制不保存适合临时粘贴，只保存不复制适合批量留档。"
                                            Style="{StaticResource RowCaption}"
                                            Margin="22,6,0,0"/>
+                            </StackPanel>
+                        </Border>
+
+                        <TextBlock Text="图片格式" Style="{StaticResource SectionTitle}" Margin="0,16,0,0"/>
+                        <Border Style="{StaticResource InsetCard}">
+                            <StackPanel>
+                                <TextBlock Text="截图与标注副本按这里的格式写出（原图永远不动）。三种格式都由 SkiaSharp 内置编码器产出——也就是 Squoosh 背后同一批库（libpng / libjpeg-turbo / libwebp），没有额外组件。实测同画质下 WebP 高画质档体积约为 PNG 的 1/4~1/2（文档页 27%~37%，含文字的截图约 37%）。"
+                                           Style="{StaticResource RowCaption}"
+                                           Margin="0,0,0,10"/>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="88"/>
+                                        <ColumnDefinition Width="140"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="导出格式"
+                                               FontSize="12" VerticalAlignment="Center"
+                                               Foreground="{StaticResource TextSecondaryBrush}"
+                                               Margin="0,0,12,0"/>
+                                    <ComboBox Grid.Column="1" FontSize="13" Padding="8,6"
+                                              SelectedIndex="{Binding ScreenshotImageFormatIndex}"
+                                              VerticalContentAlignment="Center">
+                                        <ComboBoxItem Content="PNG（无损）"/>
+                                        <ComboBoxItem Content="WebP（推荐）"/>
+                                        <ComboBoxItem Content="JPEG"/>
+                                    </ComboBox>
+                                    <TextBlock Grid.Column="2" FontSize="11" VerticalAlignment="Center"
+                                               Foreground="{StaticResource TextSecondaryBrush}"
+                                               Margin="10,0,0,0"
+                                               Text="PNG 任何设备都能直接打开；WebP 需 Win10 1903+ / 现代办公软件支持"/>
+                                </Grid>
+                                <Grid Margin="0,8,0,0"
+                                      Visibility="{Binding ScreenshotImageQualityVisible, Converter={StaticResource BoolToVis}}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="88"/>
+                                        <ColumnDefinition Width="140"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="质量档位"
+                                               FontSize="12" VerticalAlignment="Center"
+                                               Foreground="{StaticResource TextSecondaryBrush}"
+                                               Margin="0,0,12,0"/>
+                                    <ComboBox Grid.Column="1" FontSize="13" Padding="8,6"
+                                              SelectedIndex="{Binding ScreenshotImageQualityIndex}"
+                                              VerticalContentAlignment="Center">
+                                        <ComboBoxItem Content="高（90）"/>
+                                        <ComboBoxItem Content="均衡（80）"/>
+                                        <ComboBoxItem Content="紧凑（70）"/>
+                                    </ComboBox>
+                                    <TextBlock Grid.Column="2" FontSize="11" VerticalAlignment="Center"
+                                               Foreground="{StaticResource TextSecondaryBrush}"
+                                               Margin="10,0,0,0"
+                                               Text="档位越低体积越小；「高」档实测文档页 PSNR 47-50dB，肉眼几乎无差"/>
+                                </Grid>
+                                <TextBlock Text="PDF 内部渲染缓存与 PDF 内嵌图不走这项（保持 PNG/JPEG，保证 PDFium 与阅读器可解码）；「导出图片型 PDF」会整体光栅化，与这里的格式无关。"
+                                           Style="{StaticResource RowCaption}"
+                                           Margin="0,8,0,0"/>
                             </StackPanel>
                         </Border>
 

@@ -24,6 +24,27 @@ public sealed class ScreenshotNamingTests : IDisposable
         Assert.EndsWith(".png", name);
     }
 
+    [Theory]
+    [InlineData(".png", "截图_20261031_143512.png")]
+    [InlineData(".webp", "截图_20261031_143512.webp")]
+    [InlineData(".jpg", "截图_20261031_143512.jpg")]
+    public void File_name_follows_the_encoded_format(string extension, string expected)
+    {
+        Assert.Equal(expected,
+            ScreenshotNaming.BuildFileName(new DateTime(2026, 10, 31, 14, 35, 12), extension));
+    }
+
+    [Fact]
+    public void Image_export_settings_default_to_lossless_png_and_high_quality()
+    {
+        var settings = new AppSettings();
+
+        Assert.Equal("png", settings.ScreenshotImageFormat);
+        Assert.Equal(90, settings.ScreenshotImageQuality);
+        Assert.Equal("png", settings.Clone().ScreenshotImageFormat);
+        Assert.Equal(90, settings.Clone().ScreenshotImageQuality);
+    }
+
     [Fact]
     public void A_configured_directory_wins_and_empty_falls_back_to_pictures()
     {

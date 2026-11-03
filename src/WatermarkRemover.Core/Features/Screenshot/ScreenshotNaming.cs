@@ -11,6 +11,7 @@ public static class ScreenshotNaming
     /// <summary>Subfolder created under the user's Pictures when no custom folder is set.</summary>
     public const string DefaultFolderName = "Screenshots";
 
+    /// <summary>默认扩展名（设置项未指定格式时的历史行为：PNG）。</summary>
     public const string Extension = ".png";
 
     /// <summary>
@@ -32,9 +33,10 @@ public static class ScreenshotNaming
         return Path.Combine(pictures, DefaultFolderName);
     }
 
-    /// <summary>「截图_20261031_143512.png」— second-resolution timestamp, sortable at a glance.</summary>
-    public static string BuildFileName(DateTime timestamp) =>
-        $"截图_{timestamp:yyyyMMdd_HHmmss}{Extension}";
+    /// <summary>「截图_20261031_143512.png」— second-resolution timestamp, sortable at a glance.
+    /// 扩展名跟随实际编码格式（png/webp/jpg），由 <see cref="Extension"/> 兜底。</summary>
+    public static string BuildFileName(DateTime timestamp, string? extension = null) =>
+        $"截图_{timestamp:yyyyMMdd_HHmmss}{extension ?? Extension}";
 
     /// <summary>Adds <c>_2</c>, <c>_3</c>… until the name is free in the folder.</summary>
     public static string EnsureUnique(string directory, string fileName)

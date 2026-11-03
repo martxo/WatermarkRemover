@@ -13,6 +13,7 @@ using WatermarkRemover.Core.Features.Ocr;
 using WatermarkRemover.Core.Logging;
 using WatermarkRemover.Core.Recognition;
 using WatermarkRemover.Core.Settings;
+using WatermarkRemover.Imaging.Encoding;
 using WatermarkRemover.Netdisk;
 
 namespace WatermarkRemover.App.ViewModels;
@@ -455,6 +456,33 @@ public sealed class SettingsViewModel : ObservableObject
         }
     }
 
+    /// <summary>截图/标注导出的图片格式：0 = PNG 无损 / 1 = WebP / 2 = JPEG。</summary>
+    public int ScreenshotImageFormatIndex
+    {
+        get => ImageExportFormats.IndexFromSettings(Settings.ScreenshotImageFormat);
+        set
+        {
+            Settings.ScreenshotImageFormat = ImageExportFormats.SettingsValueFromIndex(value);
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(ScreenshotImageQualityVisible));
+        }
+    }
+
+    /// <summary>有损格式的质量档位：0 = 高(90) / 1 = 均衡(80) / 2 = 紧凑(70)。PNG 无损时隐藏。</summary>
+    public int ScreenshotImageQualityIndex
+    {
+        get => ImageExportQualities.IndexFromQuality(Settings.ScreenshotImageQuality);
+        set
+        {
+            Settings.ScreenshotImageQuality = ImageExportQualities.QualityFromIndex(value);
+            OnPropertyChanged();
+        }
+    }
+
+    /// <summary>PNG 无损没有质量可调：质量下拉只在有损格式下出现。</summary>
+    public bool ScreenshotImageQualityVisible =>
+        ImageExportFormats.ParseOrDefault(Settings.ScreenshotImageFormat) != ImageExportFormat.Png;
+
     /// <summary>The 0-based log range choice: 1 hour / 24 hours / 7 days.</summary>
     public int LogRangeIndex
     {
@@ -710,6 +738,8 @@ public sealed class SettingsViewModel : ObservableObject
         _target.ScreenshotOutputDirectory = Settings.ScreenshotOutputDirectory?.Trim() ?? string.Empty;
         _target.ScreenshotAutoCopy = Settings.ScreenshotAutoCopy;
         _target.ScreenshotAutoSave = Settings.ScreenshotAutoSave;
+        _target.ScreenshotImageFormat = ImageExportFormats.ParseOrDefault(Settings.ScreenshotImageFormat).ToSettingsValue();
+        _target.ScreenshotImageQuality = Math.Clamp(Settings.ScreenshotImageQuality, 1, 100);
         _target.ScreenshotTrigger = Settings.ScreenshotTrigger;
         _target.MinimizeToTrayOnClose = Settings.MinimizeToTrayOnClose;
         _target.NetdiskUploadDrive = Settings.NetdiskUploadDrive?.Trim() ?? string.Empty;

@@ -6,6 +6,7 @@ using System.Windows.Input;
 using System.Windows.Media.Imaging;
 using Microsoft.Win32;
 using WatermarkRemover.App.Logging;
+using WatermarkRemover.App.Services;
 
 namespace WatermarkRemover.App;
 
@@ -21,7 +22,7 @@ public partial class PinnedImageWindow : Window
 
     private readonly string _sourcePath;
 
-    private PinnedImageWindow(string path, BitmapImage image)
+    private PinnedImageWindow(string path, BitmapSource image)
     {
         _sourcePath = path;
         InitializeComponent();
@@ -45,12 +46,8 @@ public partial class PinnedImageWindow : Window
     {
         try
         {
-            var image = new BitmapImage();
-            image.BeginInit();
-            image.CacheOption = BitmapCacheOption.OnLoad;
-            image.UriSource = new Uri(path);
-            image.EndInit();
-            image.Freeze();
+            // 带回退的加载器：WebP 截图贴图也能开（WPF 无 WebP 编解码器，SkiaSharp 兜底）。
+            if (SkiaBitmapBridge.LoadBitmapSource(path) is not { } image) return null;
 
             var window = new PinnedImageWindow(path, image);
             window.Show();

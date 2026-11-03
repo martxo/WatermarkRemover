@@ -6,6 +6,7 @@ using WatermarkRemover.App.Editing;
 using WatermarkRemover.App.Logging;
 using WatermarkRemover.Core.Features.Screenshot;
 using WatermarkRemover.Core.Settings;
+using WatermarkRemover.Imaging.Encoding;
 using WatermarkRemover.Imaging.Screenshot;
 
 namespace WatermarkRemover.App.Services;
@@ -652,14 +653,23 @@ public sealed class ScreenshotOverlaySession
             {
                 string directory = ScreenshotNaming.ResolveDirectory(settings);
                 Directory.CreateDirectory(directory);
-                string fileName = ScreenshotNaming.EnsureUnique(
-                    directory, ScreenshotNaming.BuildFileName(DateTime.Now));
-                savedPath = Path.Combine(directory, fileName);
 
-                using SKImage image = SKImage.FromBitmap(output);
-                using SKData? data = image.Encode(SKEncodedImageFormat.Png, 100);
-                if (data is null) throw new InvalidOperationException("PNG 编码失败");
-                File.WriteAllBytes(savedPath, data.ToArray());
+                // 编码格式/质量来自设置（默认 PNG 无损，可选 WebP/JPEG）；编码失败会自动
+                // 回退 PNG 并把原因写进 saveError 告知用户——不静默换格式。
+                ImageEncodeResult encoded = ImageEncoderService.Default.Encode(
+                    output,
+                    ImageExportFormats.ParseOrDefault(settings.ScreenshotImageFormat),
+                    settings.ScreenshotImageQuality);
+                string fileName = ScreenshotNaming.EnsureUnique(
+                    directory, ScreenshotNaming.BuildFileName(DateTime.Now, encoded.FileExtension));
+                savedPath = Path.Combine(directory, fileName);
+                File.WriteAllBytes(savedPath, encoded.Bytes);
+
+                if (encoded.Note is { Length: > 0 } note)
+                {
+                    saveError = note;
+                    AppLog.Warn($"截图编码回退：{note}");
+                }
             }
             catch (Exception ex)
             {
