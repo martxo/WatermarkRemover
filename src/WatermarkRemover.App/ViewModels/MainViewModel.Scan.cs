@@ -205,10 +205,11 @@ public sealed partial class MainViewModel
         // are skipped entirely — the manual buttons stay.
         var livePages = job.LiveThumbnails.ToArray();
         int? settledTurns = earlyNaming is null ? null : await orientationVote.Task.ConfigureAwait(true);
-        _preview.Open(job, livePages, skipScanPostProcess: settledTurns is not null);
+        bool orientationSettled = outcome.OrientationPerPage || settledTurns is not null;
+        _preview.Open(job, livePages, skipScanPostProcess: orientationSettled);
         job.ClearLiveThumbnails();
         op.Step("记录已展开", $"{Path.GetFileName(path)}，{livePages.Length} 页缩略图，" +
-                             (settledTurns is not null ? "方向已裁决，跳过自动后处理" : "保留预览自动后处理"));
+                             (orientationSettled ? "方向已裁决，跳过自动后处理" : "保留预览自动后处理"));
 
         // Naming may already have finished from page 1 while the scan continued; the rename
         // still waits for the PDF (and the strip's writes) before moving the file.

@@ -203,9 +203,10 @@ public class ScanCapturePipelineTests : IDisposable
             Entry(1, blank: false), Entry(2, blank: true), Entry(3, blank: false), Entry(4, blank: true),
         };
 
-        (var payloads, int skipped) = ScanService.SelectPagesForPdf(readingOrder);
+        (var kept, int skipped) = ScanService.SelectPagesForPdf(readingOrder);
 
-        Assert.Equal(2, payloads.Count);
+        Assert.Equal(2, kept.Count);
+        Assert.All(kept, t => Assert.NotNull(t.Payload));
         Assert.Equal(2, skipped);
     }
 
@@ -216,9 +217,9 @@ public class ScanCapturePipelineTests : IDisposable
             .Select(n => (ScanService.TimedEncode?)Entry(n, blank: true))
             .ToList();
 
-        (var payloads, int skipped) = ScanService.SelectPagesForPdf(readingOrder);
+        (var kept, int skipped) = ScanService.SelectPagesForPdf(readingOrder);
 
-        Assert.Single(payloads); // 第 1 页始终被编码，保底不空手
+        Assert.Single(kept); // 第 1 页始终被编码，保底不空手
         Assert.Equal(4, skipped);
     }
 
@@ -230,9 +231,9 @@ public class ScanCapturePipelineTests : IDisposable
             null, Entry(2, blank: false), Entry(3, blank: false, faulted: true), Entry(4, blank: false),
         };
 
-        (var payloads, int skipped) = ScanService.SelectPagesForPdf(readingOrder);
+        (var kept, int skipped) = ScanService.SelectPagesForPdf(readingOrder);
 
-        Assert.Equal(2, payloads.Count);
+        Assert.Equal(2, kept.Count);
         Assert.Equal(0, skipped);
     }
 
