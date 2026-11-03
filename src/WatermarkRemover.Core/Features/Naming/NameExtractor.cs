@@ -45,14 +45,20 @@ public static class NameExtractor
         {
             if (best is not null) return; // first confident candidate wins
 
+            // Document words never belong to a name: OCR glues the title onto the value
+            // (「征信庞结」/「庞结征信」), so trim them off the edges first — a candidate that
+            // is nothing but document words (征信) is a title, not a name.
+            string? cleaned = DocumentWordFilter.StripName(candidate);
+            if (cleaned is null) return;
+
             // A candidate that still contains a field word ("被查询者", "本人查询") is a
             // label fragment, not a name — reject it whatever its shape.
-            if (FieldWords.Any(w => candidate.Contains(w, StringComparison.Ordinal))) return;
+            if (FieldWords.Any(w => cleaned.Contains(w, StringComparison.Ordinal))) return;
 
             // A name is CJK ideographs only; anything else is OCR noise that survived cleaning.
-            if (candidate.Any(c => c is < (char)0x4E00 or > (char)0x9FFF)) return;
+            if (cleaned.Any(c => c is < (char)0x4E00 or > (char)0x9FFF)) return;
 
-            best = candidate;
+            best = cleaned;
         }
 
         // Cleans one captured run: strips a leading field word ("姓名张三") and trims a

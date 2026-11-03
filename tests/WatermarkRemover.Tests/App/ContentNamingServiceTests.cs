@@ -64,6 +64,24 @@ public sealed class ContentNamingServiceTests : IDisposable
         Assert.True(File.Exists(occupied), "the existing file must never be overwritten");
     }
 
+    [Fact]
+    public async Task A_credit_report_is_filed_under_the_person_name_alone()
+    {
+        // 用户反馈：庞结征信.pdf → 庞结.pdf。征信定位通道的出口就是这一句 Create，
+        // 类型短名「征信」是文档类词，不再拼进文件名。
+        string source = Path.Combine(_dir, "扫描 20260101-120000.pdf");
+        File.WriteAllBytes(source, Array.Empty<byte>());
+        string occupied = Path.Combine(_dir, "庞结.pdf");
+        File.WriteAllBytes(occupied, Array.Empty<byte>());
+
+        var service = Create(new AppSettings { AutoNameByContent = true });
+        string moved = await service.ApplyAsync(source, AutoNameResult.Create("庞结", "征信"));
+
+        Assert.Equal(Path.Combine(_dir, "庞结 (2).pdf"), moved);
+        Assert.True(File.Exists(moved));
+        Assert.True(File.Exists(occupied), "重名冲突沿用既有规则：不覆盖已有文件");
+    }
+
     /// <summary>A genuinely blank sheet: white, ink-free pixels.</summary>
     private static byte[] WhitePng(int width, int height)
     {

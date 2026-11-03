@@ -55,7 +55,9 @@ public static class SmartNamingService
         {
             // Placeholder naming: this type's subject (a person) is not reliably extractable,
             // so skip every strategy and hand the user an obvious stem to rename by hand.
-            var placeholderResult = AutoNameResult.Create(placeholder, profile.TypeShortName);
+            // The placeholder keeps its type hint — document-word trimming is for extracted
+            // names, not for this deliberate marker (谁的企业征信).
+            var placeholderResult = AutoNameResult.CreatePlaceholder(placeholder, profile.TypeShortName);
             trace?.Invoke($"命名：类型={profile.TypeShortName} 按占位命名 → {placeholderResult.SuggestedStem}（待人工改名）", null);
             return placeholderResult;
         }

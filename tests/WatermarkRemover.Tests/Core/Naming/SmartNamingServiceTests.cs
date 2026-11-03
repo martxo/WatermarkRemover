@@ -535,3 +535,152 @@ public class EnterpriseCreditReportNamingTests
         Assert.Equal("谁的企业征信", hongya?.SuggestedStem);
     }
 }
+
+/// <summary>
+/// Document-word cleaning (v1.16.82 field feedback: 「OCR 识别到的名字里带征信」). The credit
+/// report filed every scan as 庞结征信.pdf — the located name was clean, the type short name
+/// 征信 was concatenated onto the stem. Words are trimmed only from the edges and only from
+/// the known list, so a name's own characters never move.
+/// </summary>
+public class DocumentWordFilterTests
+{
+    [Theory]
+    [InlineData("征信庞结", "庞结")]        // 前缀：标题词粘在名字前
+    [InlineData("庞结征信", "庞结")]        // 后缀：标题词粘在名字后
+    [InlineData("庞结", "庞结")]            // 纯人名：一字不动
+    [InlineData("欧阳晴岚", "欧阳晴岚")]    // 四字人名同样不动
+    [InlineData("庞信征", "庞信征")]        // 边缘对不上（顺序也不对）绝不动
+    [InlineData("庞征信明", "庞征信明")]    // 文档词在名字内部：只剥边缘，不剥内部
+    [InlineData("李报恩", "李报恩")]        // 「报告」整词匹配，不拆人名用字
+    [InlineData("个人征信庞结", "庞结")]    // 复合前缀一次剥净
+    [InlineData("庞结征信报告", "庞结")]    // 多个后缀循环剥到稳定
+    [InlineData("查询庞结明细", "庞结")]
+    public void Only_known_document_words_are_trimmed_from_the_edges(string input, string expected) =>
+        Assert.Equal(expected, DocumentWordFilter.StripName(input));
+
+    [Theory]
+    [InlineData("征信")]
+    [InlineData("个人")]
+    [InlineData("征信报告")]
+    [InlineData("查询明细")]
+    [InlineData("个人信用报告")]
+    public void A_candidate_that_is_all_document_words_is_not_a_name(string input) =>
+        Assert.Null(DocumentWordFilter.StripName(input));
+
+    [Fact]
+    public void A_trim_that_would_eat_the_name_is_refused_rather_than_truncated() =>
+        // 王明细 → 王：剥净了也不成名字，宁可回退默认命名，也不留下半个名字。
+        Assert.Null(DocumentWordFilter.StripName("王明细"));
+}
+
+/// <summary>
+/// The stem rule shared by every naming channel: document-word types (征信) stem to the
+/// person name alone, other type markers stay, placeholders keep their rename-me hint.
+/// </summary>
+public class AutoNameResultTests
+{
+    [Fact]
+    public void The_credit_report_stems_to_the_person_name_alone()
+    {
+        // 旧行为实证（app-20261102.log）：征信定位 → 庞结，SuggestedStem = 庞结 + 征信。
+        var result = AutoNameResult.Create("庞结", "征信");
+
+        Assert.Equal("庞结", result.PersonName);
+        Assert.Equal("征信", result.TypeShortName);
+        Assert.Equal("庞结", result.SuggestedStem);
+    }
+
+    [Theory]
+    [InlineData("征信庞结")]
+    [InlineData("庞结征信")]
+    public void A_title_contaminated_name_stems_to_the_person_alone(string contaminated)
+    {
+        var result = AutoNameResult.Create(contaminated, "征信");
+
+        Assert.Equal("庞结", result.PersonName);
+        Assert.Equal("庞结", result.SuggestedStem);
+    }
+
+    [Theory]
+    [InlineData("林孝明", "执照")]
+    [InlineData("王小明", "身份证")]
+    [InlineData("廖丹", "流水")]
+    public void Type_markers_that_are_not_document_words_stay_on_the_stem(string name, string type) =>
+        Assert.Equal(name + type, AutoNameResult.Create(name, type).SuggestedStem);
+
+    [Fact]
+    public void A_placeholder_stem_keeps_its_type_hint() =>
+        Assert.Equal("谁的企业征信",
+            AutoNameResult.CreatePlaceholder("谁的", "企业征信").SuggestedStem);
+}
+
+/// <summary>
+/// End-to-end naming with a document title glued onto the extracted value (the field report
+/// behind v1.16.82). The fixed-layout credit report is named by the App-side region locator,
+/// so the text-channel cases run through the types whose names DO come from OCR text — every
+/// channel funnels through the same AutoNameResult stem rule.
+/// </summary>
+public class DocumentWordContaminationTests
+{
+    /// <summary>Full business-licence fixture (same anchor set as the real 扫描全能王 sample).</summary>
+    private static string[] LicenseWith(string nameValue) => new[]
+    {
+        "营业执照", "统一社会信用代码", "组成形式个人经营",
+        $"经营者：{nameValue}", "经营范围道路货物运输", "登记机关",
+    };
+
+    [Fact]
+    public void A_title_word_glued_after_the_name_is_trimmed_end_to_end()
+    {
+        var result = SmartNamingService.TryBuildName(LicenseWith("庞结征信"));
+
+        Assert.NotNull(result);
+        Assert.Equal("庞结", result!.PersonName);
+        Assert.Equal("庞结执照", result.SuggestedStem);
+    }
+
+    [Fact]
+    public void A_title_word_glued_before_the_name_is_trimmed_end_to_end()
+    {
+        var result = SmartNamingService.TryBuildName(LicenseWith("征信庞结"));
+
+        Assert.NotNull(result);
+        Assert.Equal("庞结", result!.PersonName);
+        Assert.Equal("庞结执照", result.SuggestedStem);
+    }
+
+    [Fact]
+    public void A_clean_person_name_is_untouched_end_to_end()
+    {
+        var result = SmartNamingService.TryBuildName(LicenseWith("庞结"));
+
+        Assert.NotNull(result);
+        Assert.Equal("庞结", result!.PersonName);
+        Assert.Equal("庞结执照", result.SuggestedStem);
+    }
+
+    [Fact]
+    public void A_title_word_on_a_bank_statement_customer_is_trimmed_end_to_end()
+    {
+        // 流水走整值提取（CompanyLabel）：客户名称里的标题词同样只在边缘剥。
+        var lines = new[]
+        {
+            "存款账户明细查询",
+            "客户名称:征信庞结",
+            "卡号/账号:6231330500012349382",
+            "币种:人民币",
+        };
+
+        var result = SmartNamingService.TryBuildName(lines);
+        Assert.NotNull(result);
+        Assert.Equal("庞结", result!.PersonName);
+        Assert.Equal("庞结流水", result.SuggestedStem);
+    }
+
+    [Fact]
+    public void A_value_that_is_only_a_title_word_yields_no_name_and_keeps_the_default_name()
+    {
+        // 无可识别名字：返回 null，调用方保留时间戳命名（既有回退规则不回归）。
+        Assert.Null(SmartNamingService.TryBuildName(LicenseWith("征信")));
+    }
+}

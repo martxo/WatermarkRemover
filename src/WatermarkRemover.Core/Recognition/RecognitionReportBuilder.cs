@@ -62,7 +62,12 @@ public static class RecognitionReportBuilder
                 : new ClassificationReport(profile.TypeId, profile.TypeShortName, score, runnerUp),
             Fields = fields,
             PersonName = personName,
-            SuggestedStem = personName is null ? null : personName + profile!.TypeShortName,
+            // The same stem rule the naming pipeline applies (AutoNameResult.BuildStem): the
+            // report must suggest the file name the scan would actually produce — document
+            // words trimmed, non-document type markers kept.
+            SuggestedStem = personName is null
+                ? null
+                : AutoNameResult.BuildStem(personName, profile!.TypeShortName),
         };
 
         return report with { Issues = (reviewer ?? DefaultReviewer).Review(report) };
