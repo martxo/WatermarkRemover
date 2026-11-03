@@ -179,6 +179,15 @@ public partial class MainWindow : Window
         // Explorer/double-click launches are usually allowed to take the foreground; calling
         // Activate also covers a launch that started behind an already-open browser window.
         Activate();
+        // 新默认设置的一次性提示（F1 / 全部识别 / 微信 OCR）：只询问，绝不静默覆盖已存选择。
+        try
+        {
+            _viewModel.OfferNewDefaultsOnce();
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("新默认设置提示失败", ex);
+        }
         // The line exists from startup: hovering the top edge must work even before the first
         // screenshot; it stays above the screen until the pointer asks for it.
         EnsureShelf();

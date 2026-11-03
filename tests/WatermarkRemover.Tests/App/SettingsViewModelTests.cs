@@ -219,7 +219,9 @@ public class SettingsViewModelTests
     [Fact]
     public void OcrSectionRegistersAutoPlusEveryEngineAndSelectionPersists()
     {
-        var (vm, _, target) = NewVm();
+        // 显式给「自动选择」：新安装默认已固定到微信 OCR（1.16.81），这里要验的是
+        // 「空偏好 → 自动行选中」这条规则本身。
+        var (vm, _, target) = NewVm(s => s.PreferredOcrEngine = string.Empty);
 
         vm.StartOcrProbe();
 
@@ -248,7 +250,8 @@ public class SettingsViewModelTests
     [Fact]
     public void OcrSelectionIsDiscardedWithoutCommit()
     {
-        var (vm, _, target) = NewVm();
+        // 目标设置的初始引擎偏好显式给空（自动选择）：要验的是「未提交不改动目标」。
+        var (vm, _, target) = NewVm(s => s.PreferredOcrEngine = string.Empty);
 
         vm.StartOcrProbe();
         vm.OcrOptions[1].IsSelected = true;
@@ -259,7 +262,8 @@ public class SettingsViewModelTests
     [Fact]
     public void LayoutSectionRegistersEveryBlockAndSelectionPersists()
     {
-        var (vm, _, target) = NewVm();
+        // 引擎偏好显式给「自动选择」，这样「引擎组不受版面选择影响」才可断言。
+        var (vm, _, target) = NewVm(s => s.PreferredOcrEngine = string.Empty);
 
         vm.StartOcrProbe();
 
@@ -275,6 +279,7 @@ public class SettingsViewModelTests
         pinned.IsSelected = true;
         Assert.False(vm.LayoutOptions[0].IsSelected);
         Assert.Equal(pinned.Name, vm.Settings.PreferredLayoutStage);
+        // 引擎组没被碰过：仍是进入时的偏好（这里显式给「自动选择」）。
         Assert.Equal(string.Empty, vm.Settings.PreferredOcrEngine);
         Assert.True(vm.OcrOptions[0].IsSelected);
 

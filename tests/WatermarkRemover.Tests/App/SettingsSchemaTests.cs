@@ -1,3 +1,4 @@
+using WatermarkRemover.App.Ocr;
 using WatermarkRemover.App.Settings;
 using WatermarkRemover.Core.Settings;
 
@@ -59,5 +60,56 @@ public sealed class SettingsSchemaTests : IDisposable
         // Unknown future fields are ignored, known ones keep working: never refuse to start.
         Assert.Equal("_future", settings.OutputSuffix);
         Assert.Equal(SettingsSchema.CurrentVersion, settings.SchemaVersion);
+    }
+
+    // --- 1.16.81 新默认：只改代码默认，绝不静默覆盖已保存的选择 --------------------
+
+    [Fact]
+    public void A_fresh_install_gets_the_new_defaults()
+    {
+        var settings = new AppSettings();
+
+        Assert.Equal("F1", settings.ScreenshotHotkey);              // 单键热键
+        Assert.False(settings.NameFromFirstPageOnly);               // 全部识别（前 4 页）
+        Assert.Equal(AppSettings.WeChatOcrEngineName, settings.PreferredOcrEngine);
+        Assert.Equal(0, settings.DefaultsNoticeVersion);
+    }
+
+    [Fact]
+    public void An_existing_file_keeps_its_saved_values_over_the_new_defaults()
+    {
+        // 本机 settings JSON 的实况：三项都是旧值且键存在。加载语义必须是「已有值赢」——
+        // 新默认只对缺键/新安装生效，用户保存过的选择永不被悄悄改掉。
+        File.WriteAllText(FilePath,
+            "{ \"ScreenshotHotkey\": \"Ctrl+Alt+A\", \"NameFromFirstPageOnly\": true, " +
+            "\"PreferredOcrEngine\": \"\" }");
+
+        AppSettings settings = SettingsService.Load(FilePath);
+
+        Assert.Equal("Ctrl+Alt+A", settings.ScreenshotHotkey);
+        Assert.True(settings.NameFromFirstPageOnly);
+        Assert.Equal(string.Empty, settings.PreferredOcrEngine);
+    }
+
+    [Fact]
+    public void A_file_missing_the_keys_picks_up_the_new_defaults()
+    {
+        // 缺键 = 没表达过偏好：用当前版本的默认值补齐。
+        File.WriteAllText(FilePath, "{ \"OutputSuffix\": \"_keep\" }");
+
+        AppSettings settings = SettingsService.Load(FilePath);
+
+        Assert.Equal("_keep", settings.OutputSuffix);   // 已有的照样保留
+        Assert.Equal("F1", settings.ScreenshotHotkey);
+        Assert.False(settings.NameFromFirstPageOnly);
+        Assert.Equal(AppSettings.WeChatOcrEngineName, settings.PreferredOcrEngine);
+    }
+
+    [Fact]
+    public void The_wechat_default_matches_the_engine_chain_factory_name()
+    {
+        // Core 里的默认引擎名必须和 App 引擎链里注册的工厂名一致，否则默认值会落空。
+        Assert.Contains(AppSettings.WeChatOcrEngineName,
+            AppOcrEngineChain.Instance.Factories.Select(f => f.Name));
     }
 }

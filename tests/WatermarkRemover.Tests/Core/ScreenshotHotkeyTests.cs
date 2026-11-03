@@ -9,10 +9,13 @@ namespace WatermarkRemover.Tests.Core;
 public sealed class ScreenshotHotkeyTests
 {
     [Fact]
-    public void The_default_gesture_is_ctrl_alt_a()
+    public void The_default_gesture_is_the_single_key_f1()
     {
-        Assert.Equal("Ctrl+Alt+A", ScreenshotHotkey.Default.ToString());
-        Assert.True(ScreenshotHotkey.TryParse("Ctrl+Alt+A", out ScreenshotHotkey parsed));
+        // 1.16.81 起新安装默认 F1（单键）：RegisterHotKey 接受无修饰键（本机实测），
+        // 代价是抢占 F1，由一次性提示与设置页文案说明。
+        Assert.Equal("F1", ScreenshotHotkey.Default.ToString());
+        Assert.False(ScreenshotHotkey.Default.HasModifier);
+        Assert.True(ScreenshotHotkey.TryParse("F1", out ScreenshotHotkey parsed));
         Assert.Equal(ScreenshotHotkey.Default, parsed);
     }
 

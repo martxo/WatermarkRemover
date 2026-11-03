@@ -61,19 +61,29 @@ public sealed class AppSettings
     public bool AutoNameByContent { get; set; } = true;
 
     /// <summary>
-    /// Probe only the first page for content-based naming on multi-page documents (on by
-    /// default): the type and the customer name almost always sit on page one, and serial OCR
-    /// passes over a long document hold the pipeline for seconds. Off = probe up to four
-    /// pages, for scans whose first face is a cover or a blank duplex back.
+    /// Probe only the first page for content-based naming on multi-page documents. Off by
+    /// default since 1.16.81 ("全部识别"): naming quality beats the seconds saved, and the
+    /// probe is capped at four pages so a long document still cannot stall the pipeline.
     /// </summary>
-    public bool NameFromFirstPageOnly { get; set; } = true;
+    public bool NameFromFirstPageOnly { get; set; }
 
     /// <summary>
     /// Name of the OCR engine the user pinned in the settings OCR section (a factory name from
     /// the engine chain). Empty = pick the best available engine automatically. A preference
     /// whose engine is unavailable falls back to the automatic chain at runtime.
+    /// Default since 1.16.81: the WeChat engine (best Chinese document quality); machines
+    /// without WeChat fall back to the bundled PP-OCR automatically, so the default is safe.
     /// </summary>
-    public string PreferredOcrEngine { get; set; } = string.Empty;
+    public string PreferredOcrEngine { get; set; } = WeChatOcrEngineName;
+
+    /// <summary>Factory name of the WeChat engine in the app's OCR engine chain.</summary>
+    public const string WeChatOcrEngineName = "微信 OCR";
+
+    /// <summary>
+    /// 已经提示过「新默认设置」的版本号（1.16.81 = 11681）。0 = 从未提示。用于那次性提示：
+    /// 改动只改代码默认值，绝不在用户不知情时覆盖已保存的选择。
+    /// </summary>
+    public int DefaultsNoticeVersion { get; set; }
 
     /// <summary>
     /// Name of the layout block (first pipeline stage) the user pinned in the settings OCR
@@ -177,6 +187,7 @@ public sealed class AppSettings
         AutoNameByContent = AutoNameByContent,
         NameFromFirstPageOnly = NameFromFirstPageOnly,
         PreferredOcrEngine = PreferredOcrEngine,
+        DefaultsNoticeVersion = DefaultsNoticeVersion,
         PreferredLayoutStage = PreferredLayoutStage,
         ScanDuplex = ScanDuplex,
         ContinuousScan = ContinuousScan,

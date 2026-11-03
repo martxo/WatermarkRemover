@@ -227,6 +227,61 @@ public sealed partial class MainViewModel
         AppLog.Info("设置页更改已放弃");
     }
 
+    /// <summary>
+    /// 「新默认设置」的一次性提示（v1.16.81：截图快捷键 F1、多页文件全部识别、OCR 微信引擎）。
+    /// 默认值只改代码——已保存的选择永不被静默覆盖；这里给用户一个一键应用入口：
+    /// 设置文件已存在且三项里有旧值时询问「应用 / 保持」，全新安装则只告知一次（含 F1 抢占
+    /// 按键的提醒）。提示过一次（<see cref="AppSettings.DefaultsNoticeVersion"/>）不再出现。
+    /// </summary>
+    internal void OfferNewDefaultsOnce()
+    {
+        const int noticeVersion = 11681; // 1.16.81
+        if (Settings.DefaultsNoticeVersion >= noticeVersion) return;
+
+        bool existingUser = File.Exists(SettingsService.SettingsPath);
+        bool alreadyNew =
+            Settings.ScreenshotHotkey == ScreenshotHotkey.Default.ToString() &&
+            Settings.NameFromFirstPageOnly == false &&
+            Settings.PreferredOcrEngine == AppSettings.WeChatOcrEngineName;
+
+        if (existingUser && !alreadyNew)
+        {
+            bool apply = _dialogs.Confirm(
+                "新版调整了三个默认设置：\n\n" +
+                "· 截图快捷键：Ctrl+Alt+A → F1（单键）\n" +
+                "· 多页文件识别范围：只识别第 1 页 → 全部识别（前 4 页，命名更准）\n" +
+                "· OCR 识别引擎：自动选择 → 微信 OCR（中文证照效果最佳，没装微信会自动回退）\n\n" +
+                "注意：F1 是单键全局热键，运行本软件期间其他程序里按 F1 会触发截图，" +
+                "而不是它们自己的功能。\n\n要应用到当前设置吗？",
+                "新默认设置");
+            if (apply)
+            {
+                Settings.ScreenshotHotkey = ScreenshotHotkey.Default.ToString();
+                Settings.NameFromFirstPageOnly = false;
+                Settings.PreferredOcrEngine = AppSettings.WeChatOcrEngineName;
+                SaveSettings(); // 保存即触发热键重注册与 OCR 管线切换
+                AppLog.Info("用户选择应用新默认设置（F1 / 全部识别 / 微信 OCR）");
+            }
+            else
+            {
+                AppLog.Info("用户选择保留现有设置（新默认未应用）");
+            }
+        }
+        else if (!existingUser)
+        {
+            // 全新安装：设置本身就是新默认，只把单键热键的代价说清楚。
+            _dialogs.Warn(
+                "截图快捷键默认是 F1（单键）。\n\n" +
+                "运行本软件期间，其他程序里按 F1 会触发截图，而不是它们自己的功能" +
+                "（例如 F1 在多数软件里是「帮助」）。\n\n" +
+                "需要的话可以在 设置 → 截图设置 → 全局快捷键 里改回组合键。",
+                "截图快捷键");
+        }
+
+        Settings.DefaultsNoticeVersion = noticeVersion;
+        SaveSettings();
+    }
+
     private void CloseSettings()
     {
         IsSettingsOpen = false;

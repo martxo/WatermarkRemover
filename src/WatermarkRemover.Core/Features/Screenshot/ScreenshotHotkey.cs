@@ -9,8 +9,14 @@ namespace WatermarkRemover.Core.Features.Screenshot;
 /// </summary>
 public readonly record struct ScreenshotHotkey(bool Control, bool Alt, bool Shift, bool Windows, string Key)
 {
-    /// <summary>The gesture every new installation starts with (the Snipaste/PixPin habit).</summary>
-    public static readonly ScreenshotHotkey Default = new(true, true, false, false, "A");
+    /// <summary>
+    /// The gesture every new installation starts with: the single key F1 (v1.16.81 起).
+    /// A bare key is a legal global hotkey (RegisterHotKey accepts fsModifiers=0 — verified),
+    /// and F1 is the one screenshot tools train users to press; the trade-off is that it
+    /// steals F1 from other programs while this app runs, so the first launch shows a
+    /// one-time notice and the settings page warns again before saving a single-key gesture.
+    /// </summary>
+    public static readonly ScreenshotHotkey Default = new(false, false, false, false, "F1");
 
     /// <summary>Full-screen capture without the region overlay (截图快捷键).</summary>
     public static readonly ScreenshotHotkey FullScreenDefault = new(true, true, false, false, "F");

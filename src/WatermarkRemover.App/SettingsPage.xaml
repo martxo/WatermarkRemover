@@ -347,11 +347,11 @@
                                 <TextBlock Text="识别文件类型并提取客户姓名，生成「姓名＋类型」文件名；识别不出来时沿用上面的后缀规则。"
                                            Style="{StaticResource RowCaption}"
                                            Margin="22,4,0,0"/>
-                                <CheckBox Content="多页文件只识别第 1 页内容（识别更快，默认开）"
+                                <CheckBox Content="多页文件只识别第 1 页内容（识别更快，默认关）"
                                           IsChecked="{Binding Settings.NameFromFirstPageOnly}"
                                           FontSize="13"
                                           Margin="0,10,0,0"/>
-                                <TextBlock Text="多页文件默认只用第 1 页命名，不逐页识别浪费时间；关闭后最多识别前 4 页，适合首页是封面或双面空白背面的文件。"
+                                <TextBlock Text="默认关闭＝全部识别（前 4 页）：多花几秒但命名更准，适合首页是封面或双面空白背面的文件；开启后只用第 1 页，最快。"
                                            Style="{StaticResource RowCaption}"
                                            Margin="22,4,0,0"/>
                             </StackPanel>
@@ -844,7 +844,7 @@
                         <TextBlock Text="识别引擎" Style="{StaticResource SectionTitle}" Margin="16,16,0,8"/>
                         <Border Style="{StaticResource InsetCard}">
                             <StackPanel>
-                                <TextBlock Text="识别的第二步：每个区域用哪个引擎读字。用于水印文字识别与「按内容自动命名」。默认按注册优先级自动选择可用引擎；指定某个引擎后保存立即生效，其不可用时自动回退。"
+                                <TextBlock Text="识别的第二步：每个区域用哪个引擎读字。用于水印文字识别与「按内容自动命名」。新安装默认选「微信 OCR」（中文证照效果最佳，没装微信的机器会自动回退到内置 PP-OCR）；选「自动选择」则按注册优先级挑可用引擎。指定某个引擎后保存立即生效，其不可用时自动回退。"
                                            Style="{StaticResource RowCaption}"
                                            Margin="0,0,0,12"/>
                                 <ItemsControl ItemsSource="{Binding OcrOptions}">
