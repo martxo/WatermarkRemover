@@ -273,6 +273,11 @@ public sealed class ScanService
                             classifierTurns = vote.QuarterTurns;
                             confidence = vote.Confidence;
                             baseline = ProjectionAxisBaseline.Judge(probe)?.IsHorizontalText;
+                            // 原始票留痕（Debug 级）：决策层的门槛/分组全靠这些数字，现场排查
+                            // 必须能看到每页真实票面——渲染复算与 1bpp 原始帧的票会漂移。
+                            AppLog.Debug(
+                                $"盲扫：第 {pageNumber} 页原始票 turns={vote.QuarterTurns} conf={confidence:0.000} " +
+                                $"baseline={(baseline is null ? "弃权" : baseline.Value ? "横排" : "竖排")} 横版={width > height}");
                         }
                         catch (Exception ex)
                         {
