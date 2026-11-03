@@ -35,7 +35,8 @@ public sealed record ScanOutcome(
     string? Interruption = null,
     int SkippedBlankPages = 0,
     int? OrientationTurns = null,
-    bool OrientationPerPage = false);
+    bool OrientationPerPage = false,
+    int UndecidedPages = 0);
 
 /// <summary>One page just pulled from the device, delivered while the scan is still running.
 /// The final PDF does not exist yet; the small PNG lets the row show the page immediately.</summary>
@@ -388,6 +389,7 @@ public sealed class ScanService
 
         // 盲扫逐页裁决（保守决策层）：每页独立票 + 投影基线交叉 + 整份多数 + 短边奇偶约束。
         IReadOnlyList<int>? perPageTurns = null;
+        PerPageOrientationDecider.Decision? pageDecision = null;
         if (perPageOrientation && keptEncodes.Count > 0)
         {
             var votes = new List<PerPageOrientationDecider.PageVote>(keptEncodes.Count);
@@ -410,6 +412,7 @@ public sealed class ScanService
             };
             PerPageOrientationDecider.Decision decision =
                 PerPageOrientationDecider.Decide(votes, binding);
+            pageDecision = decision;
             perPageTurns = decision.Turns;
             op.Step("逐页方向裁决", DescribeDecision(decision));
         }
@@ -479,7 +482,10 @@ public sealed class ScanService
         return new ScanOutcome(true, path, pages.Count, device.Name, null, null, cancelled, warning, readError,
             SkippedBlankPages: skippedBlanks,
             OrientationTurns: perPageTurns is null ? orientationTurns : null,
-            OrientationPerPage: perPageTurns is not null);
+            OrientationPerPage: perPageTurns is not null,
+            UndecidedPages: pageDecision is null
+                ? 0
+                : pageDecision.Sources.Count(s => s == PerPageOrientationDecider.Provenance.Undecided));
     }
 
     /// <summary>逐页裁决摘要：转数列表 + 按来源分层计数（上线后日志采样监控按此分层看误翻率）。</summary>

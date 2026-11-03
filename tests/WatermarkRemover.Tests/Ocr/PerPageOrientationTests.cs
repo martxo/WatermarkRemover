@@ -459,6 +459,70 @@ public class PerPageOrientationTests
             $"单页平均耗时 {totalMs / (double)total:0.0} ms 超过 50 ms 防线（目标 15 ms）{Environment.NewLine}{report}");
     }
 
+    // ---------- 奇偶自洽采纳（真机校准 2026-11-03 黄小婷件） ----------
+
+    /// <summary>真机复现：长边双面 5 页全歪（正 3 票需转 270、反 2 票需转 90），conf 0.55-0.86
+    /// 全被 0.85 门槛挡下、3:2 形不成多数——奇偶自洽（两组相差恰 2）应让全部页面被采纳摆正。</summary>
+    [Fact]
+    public void Parity_consistent_low_confidence_votes_are_adopted_on_duplex_scans()
+    {
+        var decision = PerPageOrientationDecider.Decide(new[]
+        {
+            // 页位交替 front/back；正面 conf 偏低（0.55-0.71），背面更高（0.62-0.85）。
+            Vote(3, conf: 0.55f),                       // front → 需转 270
+            Vote(1, conf: 0.62f, back: true),           // back  → 需转 90
+            Vote(3, conf: 0.71f),                       // front
+            Vote(1, conf: 0.85f, back: true),           // back（压线）
+            Vote(3, conf: 0.65f),                       // front
+        }, PerPageOrientationDecider.Binding.LongEdge);
+
+        Assert.Equal(new[] { 3, 1, 3, 1, 3 }, decision.Turns);
+        Assert.All(decision.Sources, s => Assert.Equal(PerPageOrientationDecider.Provenance.Parity, s));
+    }
+
+    [Fact]
+    public void A_noisy_vote_breaks_parity_adoption()
+    {
+        // 背面组内一张杂音票 → 组不一致 → 奇偶自洽不启用：低置信票保持弃权；那张杂音票
+        // conf 0.90 自身过门槛按既有单页规则独立采纳（互不牵连）。
+        var decision = PerPageOrientationDecider.Decide(new[]
+        {
+            Vote(3, conf: 0.55f),
+            Vote(1, conf: 0.62f, back: true),
+            Vote(3, conf: 0.71f),
+            Vote(2, conf: 0.90f, back: true),  // 背面组内杂音（自身高置信）
+            Vote(3, conf: 0.65f),
+        }, PerPageOrientationDecider.Binding.LongEdge);
+
+        Assert.Equal(new[] { 0, 0, 0, 2, 0 }, decision.Turns);
+        Assert.Equal(PerPageOrientationDecider.Provenance.Classifier, decision.Sources[3]);
+        Assert.Equal(PerPageOrientationDecider.Provenance.Undecided, decision.Sources[0]);
+    }
+
+    [Fact]
+    public void A_front_only_document_never_triggers_parity_adoption()
+    {
+        // 无背面票（单面/纯正面）：没有奇偶组合证据，低置信票保持弃权。
+        var decision = PerPageOrientationDecider.Decide(new[]
+        {
+            Vote(3, conf: 0.55f), Vote(3, conf: 0.60f), Vote(3, conf: 0.65f),
+        }, PerPageOrientationDecider.Binding.None);
+
+        Assert.Equal(new[] { 0, 0, 0 }, decision.Turns);
+    }
+
+    [Fact]
+    public void Parity_adoption_requires_two_votes_per_side()
+    {
+        // 正反各只有 1 票：组合证据太弱，不启用。
+        var decision = PerPageOrientationDecider.Decide(new[]
+        {
+            Vote(3, conf: 0.55f), Vote(1, conf: 0.60f, back: true),
+        }, PerPageOrientationDecider.Binding.LongEdge);
+
+        Assert.Equal(new[] { 0, 0 }, decision.Turns);
+    }
+
     // ---------- 模型映射校准（换模型/再导出必须重跑） ----------
 
     /// <summary>Parse 纯函数：输出已是概率分布（不再 softmax），类别=当前朝向，需转=(4−类)%4。</summary>

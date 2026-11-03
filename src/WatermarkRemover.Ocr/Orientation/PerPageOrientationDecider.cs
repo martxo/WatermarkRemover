@@ -93,6 +93,34 @@ public static class PerPageOrientationDecider
             }
         }
 
+        // ---- 第 4b 条：奇偶自洽采纳（真机校准 2026-11-03 黄小婷件）：长边/短边双面的正反面
+        // 朝向物理上相差恰 180°——当正、反两组各持一致票且相差恰 2 时，组合本身就是方向证据，
+        // 低置信票由物理约束集体背书（该案 5 票全对、conf 0.55-0.86 全被门槛挡下、3:2 票
+        // 形不成多数，页面全歪落盘）。启用条件保守：正反两组各 ≥2 票组内一致、相差恰 2、
+        // 且组间页位交替——孤立单票或纯正面文档不触发。
+        if (majority is null)
+        {
+            // 原始票（含被门槛挡下的低置信票）按正/反分组；组内全一致才认；横版守卫页不参与。
+            int? frontMode = UniformVote(pages, isBack: false);
+            int? backMode = UniformVote(pages, isBack: true);
+            int frontCount = pages.Count(p => !p.IsBackSide && !p.IsLandscape && p.ClassifierTurns is not null);
+            int backCount = pages.Count(p => p.IsBackSide && !p.IsLandscape && p.ClassifierTurns is not null);
+            if (frontMode is { } f && backMode is { } b &&
+                frontCount >= 2 && backCount >= 2 &&
+                ((f - b) % 4 + 4) % 4 == 2)
+            {
+                // 物理自洽成立：全部有票页按奇偶采纳，无票页按奇偶补齐。
+                for (int i = 0; i < turns.Length; i++)
+                {
+                    if (sources[i] is Provenance.Undecided or Provenance.Classifier)
+                    {
+                        turns[i] = pages[i].IsBackSide ? b : f;
+                        sources[i] = Provenance.Parity;
+                    }
+                }
+            }
+        }
+
         // ---- 第 5 条：短边装订奇偶约束——只推定未定反面，绝不推翻已定页 ----
         if (binding == Binding.ShortEdge && majority is { } front)
         {
@@ -146,5 +174,19 @@ public static class PerPageOrientationDecider
 
         KeyValuePair<int, int> best = counts.MaxBy(kv => kv.Value);
         return best.Value >= Math.Ceiling(voted * MajorityShare) ? best.Key : null;
+    }
+
+    /// <summary>指定正/反侧的全部原始票（含低置信）一致时返回该票向，否则 null——
+    /// 奇偶自洽采纳要求组内零杂音，一张噪声票就让整组保持弃权（宁可漏翻）。</summary>
+    private static int? UniformVote(IReadOnlyList<PageVote> pages, bool isBack)
+    {
+        int? mode = null;
+        foreach (PageVote p in pages)
+        {
+            if (p.IsBackSide != isBack || p.IsLandscape || p.ClassifierTurns is not { } t) continue;
+            if (mode is null) mode = t;
+            else if (mode != t) return null;
+        }
+        return mode;
     }
 }

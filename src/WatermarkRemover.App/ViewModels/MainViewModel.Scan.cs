@@ -163,11 +163,16 @@ public sealed partial class MainViewModel
         string blankNote = outcome.SkippedBlankPages > 0
             ? $"，已跳过 {outcome.SkippedBlankPages} 页空白页"
             : string.Empty;
+        // 逐页模式跳过预览摆正是预期行为；有页面未定（未被纠正）时必须说出口，否则用户只看到
+        // 改名、不知道页面还歪着（黄小婷件反馈）。
+        string orientNote = outcome.UndecidedPages > 0
+            ? $"，{outcome.UndecidedPages} 页未能自动摆正（可在预览中手动旋转）"
+            : string.Empty;
         string summary = outcome.Cancelled
             ? $"已取消，保留 {outcome.PageCount} 页{blankNote}"
             : outcome.Interruption is { Length: > 0 }
                 ? $"扫描中断，已保存 {outcome.PageCount} 页{blankNote}"
-                : $"扫描 {outcome.PageCount} 页{blankNote}";
+                : $"扫描 {outcome.PageCount} 页{blankNote}{orientNote}";
         job.Apply(FeatureResult.Success(path, path, summary, outcome.PageCount));
         // A device failure mid-document (paper jam, cable) used to lose every page already
         // pulled off the hardware. The partial PDF is saved now, and the row offers
