@@ -121,6 +121,23 @@ public static class PerPageOrientationDecider
             }
         }
 
+        // ---- 第 4c 条：同向零杂音采纳（真机 1.16.85 票面 2026-11-03）：同一次放纸的整份歪斜
+        // 在原始票上就是「全部同向」——该机型 LongEdge 双面正反同向出纸（5/5 票全 3、conf
+        // 0.57-0.78 全在门槛下、组内零杂音），「正反差恰 2」的假设对该机型不成立。组合证据
+        // （≥3 页零杂音同向）强于单页置信度。条件保守：非横版有票页 ≥3、原始票全部一致、
+        // conf ≥0.5（<0.50 带实测 1 对 11 错，绝不算票）；孤立票、杂音票、横版票均不触发。
+        if (majority is null && UniformVoteAll(pages) is { } uniform && UniformVoteCount(pages) >= 3)
+        {
+            for (int i = 0; i < turns.Length; i++)
+            {
+                if (sources[i] is Provenance.Undecided or Provenance.Classifier && !pages[i].IsLandscape)
+                {
+                    turns[i] = uniform;
+                    sources[i] = Provenance.Parity;
+                }
+            }
+        }
+
         // ---- 第 5 条：短边装订奇偶约束——只推定未定反面，绝不推翻已定页 ----
         if (binding == Binding.ShortEdge && majority is { } front)
         {
@@ -189,4 +206,24 @@ public static class PerPageOrientationDecider
         }
         return mode;
     }
+
+    /// <summary>conf 可信下限：低于此带的原始票不参与同向采纳（<0.50 带实测 1 对 11 错）。</summary>
+    internal const double UniformConfFloor = 0.5;
+
+    /// <summary>全部非横版有票页（conf ≥ floor）票向一致时返回该票向，否则 null。</summary>
+    private static int? UniformVoteAll(IReadOnlyList<PageVote> pages)
+    {
+        int? mode = null;
+        foreach (PageVote p in pages)
+        {
+            if (p.IsLandscape || p.ClassifierTurns is not { } t || p.ClassifierConfidence < UniformConfFloor) continue;
+            if (mode is null) mode = t;
+            else if (mode != t) return null;
+        }
+        return mode;
+    }
+
+    /// <summary>参与同向采纳的有票页数（非横版、conf ≥ floor）。</summary>
+    private static int UniformVoteCount(IReadOnlyList<PageVote> pages) =>
+        pages.Count(p => !p.IsLandscape && p.ClassifierTurns is not null && p.ClassifierConfidence >= UniformConfFloor);
 }

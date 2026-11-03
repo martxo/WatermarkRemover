@@ -500,15 +500,16 @@ public class PerPageOrientationTests
     }
 
     [Fact]
-    public void A_front_only_document_never_triggers_parity_adoption()
+    public void A_front_only_uniform_document_is_also_adopted()
     {
-        // 无背面票（单面/纯正面）：没有奇偶组合证据，低置信票保持弃权。
+        // 4c 不要求正反成对：单面/纯正面文档 ≥3 页同向零杂音同样是整份歪斜的组合证据。
         var decision = PerPageOrientationDecider.Decide(new[]
         {
             Vote(3, conf: 0.55f), Vote(3, conf: 0.60f), Vote(3, conf: 0.65f),
         }, PerPageOrientationDecider.Binding.None);
 
-        Assert.Equal(new[] { 0, 0, 0 }, decision.Turns);
+        Assert.Equal(new[] { 3, 3, 3 }, decision.Turns);
+        Assert.All(decision.Sources, s => Assert.Equal(PerPageOrientationDecider.Provenance.Parity, s));
     }
 
     [Fact]
@@ -518,6 +519,66 @@ public class PerPageOrientationTests
         var decision = PerPageOrientationDecider.Decide(new[]
         {
             Vote(3, conf: 0.55f), Vote(1, conf: 0.60f, back: true),
+        }, PerPageOrientationDecider.Binding.LongEdge);
+
+        Assert.Equal(new[] { 0, 0 }, decision.Turns);
+    }
+
+    // ---------- 同向零杂音采纳（真机 1.16.85 票面 2026-11-03 18:15） ----------
+
+    /// <summary>真机 1:1 票面：LongEdge 双面 5 页原始票全部同向 3（该机型正反同向出纸）、
+    /// conf 0.572-0.779 全在 0.85 门槛下、基线全弃权、1 页空白背面已被过滤——同向零杂音
+    /// 采纳应让全部内容页摆正。</summary>
+    [Fact]
+    public void The_rescan_vote_pattern_is_adopted_as_uniform()
+    {
+        var decision = PerPageOrientationDecider.Decide(new[]
+        {
+            Vote(3, conf: 0.645f), Vote(3, conf: 0.779f, back: true),
+            Vote(3, conf: 0.606f), Vote(3, conf: 0.572f, back: true),
+            Vote(3, conf: 0.728f),
+        }, PerPageOrientationDecider.Binding.LongEdge);
+
+        Assert.Equal(new[] { 3, 3, 3, 3, 3 }, decision.Turns);
+        Assert.All(decision.Sources, s => Assert.Equal(PerPageOrientationDecider.Provenance.Parity, s));
+    }
+
+    [Fact]
+    public void Sub_floor_votes_never_form_a_uniform_adoption()
+    {
+        // conf < 0.5 的票不算票（<0.50 带实测 1 对 11 错）：有效票只剩 2 张（<3）→ 不触发；
+        // 其余两票 conf 0.606/0.572 仍低于 0.85 门槛 → 全部弃权。
+        var decision = PerPageOrientationDecider.Decide(new[]
+        {
+            Vote(3, conf: 0.45f), Vote(3, conf: 0.40f, back: true),
+            Vote(3, conf: 0.606f), Vote(3, conf: 0.572f, back: true),
+        }, PerPageOrientationDecider.Binding.LongEdge);
+
+        Assert.Equal(new[] { 0, 0, 0, 0 }, decision.Turns);
+    }
+
+    [Fact]
+    public void A_conflicting_direction_breaks_uniform_adoption()
+    {
+        // 4 票同向 + 1 票异向（conf 过门槛）→ 杂音破坏零杂音前提；
+        // 异向高置信票按既有单页规则独立成立，多数不足 2/3 → 其余弃权。
+        var decision = PerPageOrientationDecider.Decide(new[]
+        {
+            Vote(3, conf: 0.645f), Vote(3, conf: 0.779f, back: true),
+            Vote(3, conf: 0.606f), Vote(1, conf: 0.90f, back: true),
+            Vote(3, conf: 0.728f),
+        }, PerPageOrientationDecider.Binding.LongEdge);
+
+        Assert.Equal(new[] { 0, 0, 0, 1, 0 }, decision.Turns);
+        Assert.Equal(PerPageOrientationDecider.Provenance.Classifier, decision.Sources[3]);
+    }
+
+    [Fact]
+    public void Fewer_than_three_uniform_votes_do_not_trigger()
+    {
+        var decision = PerPageOrientationDecider.Decide(new[]
+        {
+            Vote(3, conf: 0.645f), Vote(3, conf: 0.779f, back: true),
         }, PerPageOrientationDecider.Binding.LongEdge);
 
         Assert.Equal(new[] { 0, 0 }, decision.Turns);
