@@ -11,6 +11,8 @@ namespace WatermarkRemover.Ocr.Orientation;
 /// 3. 投影基线的大类（横排 vs 竖排）与分类器矛盾 → 弃权；
 /// 4. 同份文档多数投票：≥3 页有票且最高票占比 ≥ 2/3 时，与多数矛盾的离群票改为多数
 ///   （装订阴影/贴纸压字造成的单页误判被整份一致性吸收）；
+/// 4b. 双面奇偶自洽：翻面使背面图像与正面相差恰 180°——正、反两组各自 ≥2 票且组内 ≥2/3
+///   同向、两组相差恰 2 时，按组多数采纳（组内个别杂音票由物理约束吸收）；
 /// 5. 短边装订奇偶约束：物理上正反面朝向相差 180°——未定页的反面按「多数 + 2」推定；
 ///   已定页不因约束被推翻（物理例外：混纸、插页）。
 /// 6. 仍未定的页保持原样（0），日志留痕。
@@ -93,18 +95,17 @@ public static class PerPageOrientationDecider
             }
         }
 
-        // ---- 第 4b 条：奇偶自洽采纳（真机校准 2026-11-03 黄小婷件）：长边/短边双面的正反面
-        // 朝向物理上相差恰 180°——当正、反两组各持一致票且相差恰 2 时，组合本身就是方向证据，
-        // 低置信票由物理约束集体背书（该案 5 票全对、conf 0.55-0.86 全被门槛挡下、3:2 票
-        // 形不成多数，页面全歪落盘）。启用条件保守：正反两组各 ≥2 票组内一致、相差恰 2、
-        // 且组间页位交替——孤立单票或纯正面文档不触发。
+        // ---- 第 4b 条：双面奇偶自洽采纳（真机 2026-11-03 两轮票面校准，黄小婷件）：
+        // 双面扫描翻面后，背面存储图像与正面相差恰 180°——「正面组同向、背面组同向、两组
+        // 相差恰 2」是物理约束。组内允许个别杂音票（≥2/3 同向即成立），由组多数背书；两组
+        // 各需 ≥2 票。1.16.86 票面（正 3/3/1、反 1/1，conf 0.572-0.733）由此采纳为
+        // [3,1,3,1,3]，与人工看图逐页核对一致（正 3 票、反 1 票）。
+        // 反例：1.16.85 首轮票面五票全 3——两组同向但相差 0，物理上不可能，说明背面票本身
+        // 就是错的；此时保持弃权（宁可漏翻，绝不误翻）。
         if (majority is null)
         {
-            // 原始票（含被门槛挡下的低置信票）按正/反分组；组内全一致才认；横版守卫页不参与。
-            int? frontMode = UniformVote(pages, isBack: false);
-            int? backMode = UniformVote(pages, isBack: true);
-            int frontCount = pages.Count(p => !p.IsBackSide && !p.IsLandscape && p.ClassifierTurns is not null);
-            int backCount = pages.Count(p => p.IsBackSide && !p.IsLandscape && p.ClassifierTurns is not null);
+            int? frontMode = GroupMode(pages, isBack: false, out int frontCount);
+            int? backMode = GroupMode(pages, isBack: true, out int backCount);
             if (frontMode is { } f && backMode is { } b &&
                 frontCount >= 2 && backCount >= 2 &&
                 ((f - b) % 4 + 4) % 4 == 2)
@@ -117,23 +118,6 @@ public static class PerPageOrientationDecider
                         turns[i] = pages[i].IsBackSide ? b : f;
                         sources[i] = Provenance.Parity;
                     }
-                }
-            }
-        }
-
-        // ---- 第 4c 条：同向零杂音采纳（真机 1.16.85 票面 2026-11-03）：同一次放纸的整份歪斜
-        // 在原始票上就是「全部同向」——该机型 LongEdge 双面正反同向出纸（5/5 票全 3、conf
-        // 0.57-0.78 全在门槛下、组内零杂音），「正反差恰 2」的假设对该机型不成立。组合证据
-        // （≥3 页零杂音同向）强于单页置信度。条件保守：非横版有票页 ≥3、原始票全部一致、
-        // conf ≥0.5（<0.50 带实测 1 对 11 错，绝不算票）；孤立票、杂音票、横版票均不触发。
-        if (majority is null && UniformVoteAll(pages) is { } uniform && UniformVoteCount(pages) >= 3)
-        {
-            for (int i = 0; i < turns.Length; i++)
-            {
-                if (sources[i] is Provenance.Undecided or Provenance.Classifier && !pages[i].IsLandscape)
-                {
-                    turns[i] = uniform;
-                    sources[i] = Provenance.Parity;
                 }
             }
         }
@@ -193,37 +177,21 @@ public static class PerPageOrientationDecider
         return best.Value >= Math.Ceiling(voted * MajorityShare) ? best.Key : null;
     }
 
-    /// <summary>指定正/反侧的全部原始票（含低置信）一致时返回该票向，否则 null——
-    /// 奇偶自洽采纳要求组内零杂音，一张噪声票就让整组保持弃权（宁可漏翻）。</summary>
-    private static int? UniformVote(IReadOnlyList<PageVote> pages, bool isBack)
+    /// <summary>指定正/反侧的原始票（含低置信）组多数：组内 ≥2 票且最高票占比 ≥ 2/3 时返回该
+    /// 票向，否则 null。个别杂音票（单页误判）不阻止采纳——物理约束是组间的，不是组内的。</summary>
+    private static int? GroupMode(IReadOnlyList<PageVote> pages, bool isBack, out int count)
     {
-        int? mode = null;
-        foreach (PageVote p in pages)
-        {
-            if (p.IsBackSide != isBack || p.IsLandscape || p.ClassifierTurns is not { } t) continue;
-            if (mode is null) mode = t;
-            else if (mode != t) return null;
-        }
-        return mode;
+        var votes = pages
+            .Where(p => p.IsBackSide == isBack && !p.IsLandscape && p.ClassifierTurns is not null)
+            .Select(p => p.ClassifierTurns!.Value)
+            .ToList();
+        count = votes.Count;
+        if (count < 2) return null;
+
+        KeyValuePair<int, int> best = votes
+            .GroupBy(v => v)
+            .Select(g => new KeyValuePair<int, int>(g.Key, g.Count()))
+            .MaxBy(kv => kv.Value);
+        return best.Value >= Math.Ceiling(count * MajorityShare) ? best.Key : null;
     }
-
-    /// <summary>conf 可信下限：低于此带的原始票不参与同向采纳（<0.50 带实测 1 对 11 错）。</summary>
-    internal const double UniformConfFloor = 0.5;
-
-    /// <summary>全部非横版有票页（conf ≥ floor）票向一致时返回该票向，否则 null。</summary>
-    private static int? UniformVoteAll(IReadOnlyList<PageVote> pages)
-    {
-        int? mode = null;
-        foreach (PageVote p in pages)
-        {
-            if (p.IsLandscape || p.ClassifierTurns is not { } t || p.ClassifierConfidence < UniformConfFloor) continue;
-            if (mode is null) mode = t;
-            else if (mode != t) return null;
-        }
-        return mode;
-    }
-
-    /// <summary>参与同向采纳的有票页数（非横版、conf ≥ floor）。</summary>
-    private static int UniformVoteCount(IReadOnlyList<PageVote> pages) =>
-        pages.Count(p => !p.IsLandscape && p.ClassifierTurns is not null && p.ClassifierConfidence >= UniformConfFloor);
 }
