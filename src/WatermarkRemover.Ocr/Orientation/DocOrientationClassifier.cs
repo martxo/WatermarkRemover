@@ -100,11 +100,49 @@ public sealed class DocOrientationClassifier : IDisposable
         return Parse(logits);
     }
 
-    /// <summary>224×224 direct resize (contract ignores aspect), /255 then ImageNet mean/std, RGB.</summary>
-    private static float[] BuildImageInput(SKBitmap source)
+    /// <summary>校准探针专用：预处理变体开关（通道顺序 / 是否走官方 resize+crop 契约 / 是否先降采样）。</summary>
+    internal Vote TestClassify(SKBitmap source, bool bgr, bool directResize, bool downscale)
     {
+        using var probe = downscale ? DownscaleLongEdge(source, 1500) : null;
+        float[] logits = Run(BuildImageInputVariant(probe ?? source, bgr, directResize));
+        return Parse(logits);
+    }
+
+    /// <summary>需要缩放时返回新位图（由调用方释放）；无需缩放返回 null（沿用原位图）。</summary>
+    private static SKBitmap? DownscaleLongEdge(SKBitmap source, int maxEdge)
+    {
+        int longest = Math.Max(source.Width, source.Height);
+        if (longest <= maxEdge) return null;
+        double factor = maxEdge / (double)longest;
+        var target = new SKBitmap(
+            (int)Math.Round(source.Width * factor), (int)Math.Round(source.Height * factor),
+            source.ColorType, source.AlphaType);
+        source.ScalePixels(target, new SKSamplingOptions(SKFilterMode.Linear));
+        return target;
+    }
+
+    private float[] BuildImageInputVariant(SKBitmap source, bool bgr, bool directResize)
+    {
+        int resizedW, resizedH, cropX, cropY;
+        if (directResize)
+        {
+            resizedW = InputSize;
+            resizedH = InputSize;
+            cropX = 0;
+            cropY = 0;
+        }
+        else
+        {
+            int shortSide = Math.Min(source.Width, source.Height);
+            double scale = 256.0 / shortSide;
+            resizedW = Math.Max(InputSize, (int)Math.Round(source.Width * scale));
+            resizedH = Math.Max(InputSize, (int)Math.Round(source.Height * scale));
+            cropX = (resizedW - InputSize) / 2;
+            cropY = (resizedH - InputSize) / 2;
+        }
+
         using var resized = new SKBitmap(
-            new SKImageInfo(InputSize, InputSize, SKColorType.Rgba8888, SKAlphaType.Premul));
+            new SKImageInfo(resizedW, resizedH, SKColorType.Rgba8888, SKAlphaType.Premul));
         if (!source.ScalePixels(resized, new SKSamplingOptions(SKFilterMode.Linear)))
             throw new InvalidOperationException("方向分类输入缩放失败。");
 
@@ -114,10 +152,48 @@ public sealed class DocOrientationClassifier : IDisposable
         int rowBytes = resized.RowBytes;
         for (int y = 0; y < InputSize; y++)
         {
-            int row = y * rowBytes;
+            int row = (y + cropY) * rowBytes;
             for (int x = 0; x < InputSize; x++)
             {
-                int p = row + x * 4; // RGBA
+                int p = row + (x + cropX) * 4; // RGBA
+                int i = y * InputSize + x;
+                float r = px[p] / 255f, g = px[p + 1] / 255f, b = px[p + 2] / 255f;
+                if (bgr) (r, b) = (b, r);
+                image[i] = (r - Mean[0]) / Std[0];
+                image[plane + i] = (g - Mean[1]) / Std[1];
+                image[2 * plane + i] = (b - Mean[2]) / Std[2];
+            }
+        }
+
+        return image;
+    }
+
+    /// <summary>官方预处理契约（inference.yml）：ResizeImage resize_short=256 → CropImage 224
+    /// （短边缩放后中心裁方）→ /255 + ImageNet mean/std → CHW。</summary>
+    private static float[] BuildImageInput(SKBitmap source)
+    {
+        int shortSide = Math.Min(source.Width, source.Height);
+        double scale = 256.0 / shortSide;
+        int resizedW = Math.Max(224, (int)Math.Round(source.Width * scale));
+        int resizedH = Math.Max(224, (int)Math.Round(source.Height * scale));
+        int cropX = (resizedW - 224) / 2;
+        int cropY = (resizedH - 224) / 2;
+
+        using var resized = new SKBitmap(
+            new SKImageInfo(resizedW, resizedH, SKColorType.Rgba8888, SKAlphaType.Premul));
+        if (!source.ScalePixels(resized, new SKSamplingOptions(SKFilterMode.Linear)))
+            throw new InvalidOperationException("方向分类输入缩放失败。");
+
+        var image = new float[3 * InputSize * InputSize];
+        int plane = InputSize * InputSize;
+        ReadOnlySpan<byte> px = resized.GetPixelSpan();
+        int rowBytes = resized.RowBytes;
+        for (int y = 0; y < InputSize; y++)
+        {
+            int row = (y + cropY) * rowBytes;
+            for (int x = 0; x < InputSize; x++)
+            {
+                int p = row + (x + cropX) * 4; // RGBA
                 int i = y * InputSize + x;
                 image[i] = (px[p] / 255f - Mean[0]) / Std[0];               // R
                 image[plane + i] = (px[p + 1] / 255f - Mean[1]) / Std[1];   // G
@@ -126,6 +202,13 @@ public sealed class DocOrientationClassifier : IDisposable
         }
 
         return image;
+    }
+
+    /// <summary>校准探针专用：返回网络原始输出（判定其是否已是概率分布）。</summary>
+    internal float[] TestRawLogits(SKBitmap source, bool bgr, bool directResize, bool downscale)
+    {
+        using var probe = downscale ? DownscaleLongEdge(source, 1500) : null;
+        return Run(BuildImageInputVariant(probe ?? source, bgr, directResize));
     }
 
     private float[] Run(float[] image)
@@ -145,26 +228,24 @@ public sealed class DocOrientationClassifier : IDisposable
         return logits;
     }
 
-    /// <summary>Class index → clockwise quarter turns. The doc_ori classes are 0/90/180/270
-    /// clockwise; the mapping is pinned by the layered evaluation harness (评测夹具) — a re-export
-    /// that flips the convention shows up there as a systematic 误翻 and must be remapped here.</summary>
-    internal static Vote Parse(float[] logits)
+    /// <summary>
+    /// 解析网络输出。实测（2026-11-03，探针校准）：
+    /// ① ONNX 图内已含 softmax——输出是概率分布（官方 180° demo 图 raw = [0.04, 0.04, 0.88, 0.04]，
+    ///    sum=1.000），这里直接取 max 作置信度，绝不能再 softmax（会压平成 ~0.43）；
+    /// ② 类别语义 = 图片「当前朝向」而非「需转角度」——倒置 demo 图 top=类2（180°）、
+    ///    正向真实扫描页 top=类0、人工顺时针转 90° 后 top=类1、转 270° 后 top=类3。
+    ///    因此需转的顺时针四分之一转数 = (4 − 类别) % 4。
+    /// 两点均由 eval/orientation/calibration 的可验证夹具钉住（MappingCalibrationTests），
+    /// 换模型再导出时必须重跑该校准——系统性镜像会在这里现形。
+    /// </summary>
+    internal static Vote Parse(float[] probabilities)
     {
-        float max = float.NegativeInfinity;
         int maxIndex = 0;
-        double sum = 0;
-        var exp = new double[logits.Length];
-        for (int i = 0; i < logits.Length; i++)
+        for (int i = 1; i < probabilities.Length; i++)
         {
-            exp[i] = Math.Exp(logits[i]);
-            sum += exp[i];
-            if (logits[i] > max)
-            {
-                max = logits[i];
-                maxIndex = i;
-            }
+            if (probabilities[i] > probabilities[maxIndex]) maxIndex = i;
         }
 
-        return new Vote(maxIndex % 4, (float)(exp[maxIndex] / Math.Max(sum, double.Epsilon)));
+        return new Vote((4 - maxIndex % 4) % 4, probabilities[maxIndex]);
     }
 }
