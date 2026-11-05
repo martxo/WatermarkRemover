@@ -38,6 +38,14 @@
     <SolidColorBrush x:Key="TextTertiaryBrush" Color="#FF9AA1AC"/>
     <SolidColorBrush x:Key="TextDisabledBrush" Color="#FFC4C9D4"/>
 
+    <!-- 手机传文件 chat (微信式两栏气泡，但用本系统品牌色，不引入外来绿色) -->
+    <SolidColorBrush x:Key="ChatPeerBubbleBrush" Color="#FFFFFFFF"/>
+    <SolidColorBrush x:Key="ChatPeerBubbleStrokeBrush" Color="#FFE4E7ED"/>
+    <SolidColorBrush x:Key="ChatOwnBubbleBrush" Color="#FFEEF1FE"/>
+    <SolidColorBrush x:Key="ChatOwnBubbleStrokeBrush" Color="#FFD9E1FC"/>
+    <SolidColorBrush x:Key="ChatTimeBrush" Color="#FF9AA1AC"/>
+    <SolidColorBrush x:Key="ChatSystemPillBrush" Color="#FFE8EAEF"/>
+
     <!-- Status -->
     <SolidColorBrush x:Key="SuccessBrush" Color="#FF10B981"/>
     <SolidColorBrush x:Key="SuccessSurfaceBrush" Color="#FFE7F8F1"/>

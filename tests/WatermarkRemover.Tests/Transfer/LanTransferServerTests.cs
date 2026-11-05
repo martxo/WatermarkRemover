@@ -67,4 +67,33 @@ public sealed class LanTransferServerTests
     [InlineData(null, null)]
     public void MultipartBoundary_ParsesContentType(string? contentType, string? expected) =>
         Assert.Equal(expected, LanTransferServer.MultipartBoundary(contentType));
+
+    [Fact]
+    public void Chat_snapshot_returns_rows_after_the_cursor_in_order()
+    {
+        using var server = new LanTransferServer();
+        server.SendText("第一句");
+        server.SendText("第二句");
+
+        IReadOnlyList<TransferChatMessage> all = server.Snapshot();
+        Assert.Equal(2, all.Count);
+        Assert.All(all, message => Assert.Equal(TransferChatDirection.Computer, message.Direction));
+        Assert.All(all, message => Assert.Equal(TransferChatKind.Text, message.Kind));
+        Assert.Equal("第二句", all[1].Text);
+
+        IReadOnlyList<TransferChatMessage> newer = server.Snapshot(all[0].Id);
+        Assert.Single(newer);
+        Assert.Equal(all[1].Id, newer[0].Id);
+    }
+
+    [Fact]
+    public void Phone_page_is_a_two_way_chat_client()
+    {
+        string html = MobileUploadPage.Html;
+
+        Assert.Contains("/chat?", html);
+        Assert.Contains("/download/", html);
+        Assert.Contains("/text?", html);
+        Assert.Contains("发送", html);
+    }
 }

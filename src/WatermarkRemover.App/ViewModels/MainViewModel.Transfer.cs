@@ -119,4 +119,60 @@ public sealed partial class MainViewModel
         _preview.FlushAllDatasets();
         Transfer.Stop();
     }
+
+    // --- 聊天 → PDF 处理页 的往返 ------------------------------------------
+
+    /// <summary>The PDF processor a share-link document is handed to.</summary>
+    private const string PdfProcessorFeatureId = "watermark.badge";
+
+    /// <summary>Title-row button on the PDF page: back to the 手机传文件 chat.</summary>
+    public RelayCommand ReturnToTransferPageCommand { get; }
+
+    private bool _canReturnToTransfer;
+
+    /// <summary>
+    /// True while the PDF page was entered from the 手机传文件 chat: the shell header then
+    /// offers 「返回手机传文件」 so the round trip never depends on the sidebar.
+    /// </summary>
+    public bool CanReturnToTransfer
+    {
+        get => _canReturnToTransfer;
+        private set => SetProperty(ref _canReturnToTransfer, value);
+    }
+
+    /// <summary>
+    /// Chat → PDF page: switches to the PDF processor and loads the link's document (when one
+    /// exists) so the user lands on a page that already has something to work on.
+    /// </summary>
+    private void OnTransferPdfPageRequested(string? pdfPath)
+    {
+        var dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher is null) return;
+
+        dispatcher.Invoke(() =>
+        {
+            IFeature? target = NavItems
+                .Select(item => item.Feature)
+                .FirstOrDefault(feature => feature.Id == PdfProcessorFeatureId);
+            if (target is null) return;
+
+            CanReturnToTransfer = true;
+            SelectedFeature = target;
+
+            if (pdfPath is { } path && File.Exists(path)) _ = AddFilesAsync(new[] { path });
+            else AppLog.Info("手机传文件：切换到 PDF 处理页（无待加载文件）");
+        });
+    }
+
+    /// <summary>PDF page → chat: the header button's counterpart.</summary>
+    public void ReturnToTransferPage()
+    {
+        IFeature? transfer = NavItems
+            .Select(item => item.Feature)
+            .FirstOrDefault(feature => feature.Id == "transfer.page");
+        if (transfer is null) return;
+
+        CanReturnToTransfer = false;
+        SelectedFeature = transfer;
+    }
 }

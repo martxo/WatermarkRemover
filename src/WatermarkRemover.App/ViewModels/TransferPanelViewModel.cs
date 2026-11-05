@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.IO;
 using System.Windows;
 using System.Windows.Media;
@@ -29,6 +30,8 @@ public sealed class TransferPanelViewModel : ObservableObject, IDisposable
     private LanTransferServer? _server;
 
     private bool _isRunning;
+    private bool _isConnected;
+    private string _draftText = string.Empty;
     private string _urlText = string.Empty;
     private ImageSource? _qrImage;
     private string _statusText = "点击「开始接收」，生成二维码后用手机扫码。";
@@ -41,6 +44,8 @@ public sealed class TransferPanelViewModel : ObservableObject, IDisposable
     private CropModeChoice _selectedCropMode = CropModeCatalog.All[0];
     private ImageSource? _composePreview;
     private bool _isComposing;
+    private int _localRowId;
+    private string? _lastLinkPdf;
 
     public TransferPanelViewModel(
         AppSettings settings,
@@ -61,6 +66,11 @@ public sealed class TransferPanelViewModel : ObservableObject, IDisposable
         OpenFolderCommand = new RelayCommand(
             () => _shell.TryOpenDirectory(_saveDirectoryText, out _),
             () => IsRunning);
+        SendTextCommand = new RelayCommand(
+            SendText, () => IsRunning && DraftText.Trim().Length > 0);
+        SendFileCommand = new RelayCommand(
+            () => SendFileRequested?.Invoke(this, EventArgs.Empty), () => IsRunning);
+        Chat.CollectionChanged += (_, _) => OnPropertyChanged(nameof(HasChat));
 
         ComposeCommand = new RelayCommand(
             () => _ = ComposePendingAsync(SelectedLayout, SelectedCropMode),
@@ -79,6 +89,25 @@ public sealed class TransferPanelViewModel : ObservableObject, IDisposable
 
     /// <summary>Relayed from the server; fires on a socket thread per landed file.</summary>
     public event Action<string, long>? FileReceived;
+
+    /// <summary>Raised when the computer's 「发送文件」 button is pressed; the host owns the picker
+    /// and calls <see cref="SendFileAsync"/> with the chosen path.</summary>
+    public event EventHandler? SendFileRequested;
+
+    /// <summary>Images open in the app's shared viewer (the screenshot/PDF surface), not the
+    /// shell; the host wires this to ImageViewerWindow.</summary>
+    public event EventHandler<string>? OpenImageRequested;
+
+    /// <summary>
+    /// The user asked to take a share-link document to the PDF page: the parameter is the
+    /// finished PDF when one already exists (or was just composed), null when the page should
+    /// simply open. The owner switches pages and loads the file.
+    /// </summary>
+    public event Action<string?>? PdfPageRequested;
+
+    public RelayCommand SendTextCommand { get; }
+
+    public RelayCommand SendFileCommand { get; }
 
     /// <summary>A file composed from a share link is ready at this path. The flag tells the owner
     /// whether to run content naming: the 身份证 template already produces the final printable
@@ -156,13 +185,46 @@ public sealed class TransferPanelViewModel : ObservableObject, IDisposable
 
     public bool HasMessages => Messages.Count > 0;
 
+    /// <summary>The two-way conversation shown on the computer side, oldest first.</summary>
+    public ObservableCollection<TransferChatItemViewModel> Chat { get; } = new();
+
+    public bool HasChat => Chat.Count > 0;
+
+    /// <summary>True once the phone opened the page; the QR hero then folds into the ⋯ menu.</summary>
+    public bool IsConnected
+    {
+        get => _isConnected;
+        private set
+        {
+            if (SetProperty(ref _isConnected, value))
+                OnPropertyChanged(nameof(ShowQrHero));
+        }
+    }
+
+    /// <summary>Show the big centered QR until the phone has opened the page.</summary>
+    public bool ShowQrHero => !IsConnected;
+
+    /// <summary>Text being composed on the computer; cleared after a successful send.</summary>
+    public string DraftText
+    {
+        get => _draftText;
+        set
+        {
+            if (SetProperty(ref _draftText, value)) SendTextCommand.RaiseCanExecuteChanged();
+        }
+    }
+
     public bool IsRunning
     {
         get => _isRunning;
         private set
         {
             if (SetProperty(ref _isRunning, value))
+            {
                 OnPropertyChanged(nameof(ToggleText));
+                SendTextCommand.RaiseCanExecuteChanged();
+                SendFileCommand.RaiseCanExecuteChanged();
+            }
         }
     }
 
@@ -215,6 +277,7 @@ public sealed class TransferPanelViewModel : ObservableObject, IDisposable
             _server.UploadStarted += OnServerUploadStarted;
             _server.UploadProgress += OnServerUploadProgress;
             _server.UploadFailed += OnServerUploadFailed;
+            _server.ChatMessageAdded += OnChatMessageAdded;
             _server.Start(directory);
         }
         catch (Exception ex)
@@ -231,6 +294,8 @@ public sealed class TransferPanelViewModel : ObservableObject, IDisposable
         QrImage = BuildQr(_server.Url);
         _receivedCount = 0;
         _receivedBytes = 0;
+        Chat.Clear();
+        IsConnected = false;
         IsRunning = true;
         StatusText = "等待手机扫码…（首次使用时若弹出防火墙提示，请选择「允许访问」）";
         AppLog.Info($"手机传文件：接收服务已启动 {_server.Url}");
@@ -247,10 +312,13 @@ public sealed class TransferPanelViewModel : ObservableObject, IDisposable
         server.UploadStarted -= OnServerUploadStarted;
         server.UploadProgress -= OnServerUploadProgress;
         server.UploadFailed -= OnServerUploadFailed;
+        server.ChatMessageAdded -= OnChatMessageAdded;
         server.Dispose();
 
         QrImage = null;
         UrlText = string.Empty;
+        IsConnected = false;
+        Chat.Clear();
         IsRunning = false;
         StatusText = "接收已停止。";
         AppLog.Info("手机传文件：接收已停止");
@@ -291,7 +359,29 @@ public sealed class TransferPanelViewModel : ObservableObject, IDisposable
             }
         });
 
-        if (shareLink) StartShareDownload(link);
+        if (!shareLink) return;
+
+        // The link's own chat row lives only on this side: the phone already shows the message
+        // it sent, and a mirrored "电脑" row there would read as an echo.
+        dispatcher.BeginInvoke(() =>
+        {
+            TransferChatItemViewModel row = AddLinkRow(link);
+            StartShareDownload(link, row);
+        });
+    }
+
+    /// <summary>
+    /// A locally owned chat row (negative ids never collide with the server's sequence, and the
+    /// phone's polling never sees it) that follows the share link through its download chain.
+    /// </summary>
+    private TransferChatItemViewModel AddLinkRow(string link)
+    {
+        var message = new TransferChatMessage(
+            --_localRowId, TransferChatDirection.Computer, TransferChatKind.Link,
+            link, "分享链接", 0, DateTime.Now);
+        var row = new TransferChatItemViewModel(message, null, null, null, OpenPdfFromLink);
+        Chat.Add(row);
+        return row;
     }
 
     /// <summary>
@@ -321,23 +411,27 @@ public sealed class TransferPanelViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>Background chain for a recognized CamScanner share link: resolve the short link →
-    /// read the document info → pull every page preview → assemble the PDF verbatim → hand the
-    /// file to the owner, which routes it into the watermark-removal pipeline. Async void on
-    /// purpose: fully detached from the socket loop, reporting only via status line and log.</summary>
-    private async void StartShareDownload(string link)
+    /// read the document info → pull every page preview → hand the pages to the gallery. Async
+    /// void on purpose: fully detached from the socket loop, reporting through the chat row's
+    /// own progress states (plus the status line and log).</summary>
+    private async void StartShareDownload(string link, TransferChatItemViewModel row)
     {
         try
         {
             var client = new CamScannerShareClient();
             var (eid, sid) = await client.ResolveAsync(link).ConfigureAwait(false);
             var info = await client.QueryAsync(eid, sid).ConfigureAwait(false);
+            RunOnUi(() => row.ReportLinkTitle(info.Title));
             StatusText = $"正在下载「{info.Title}」（共 {info.PageFileNames.Count} 页）…";
 
             var pages = new List<byte[]>(info.PageFileNames.Count);
             for (var i = 0; i < info.PageFileNames.Count; i++)
             {
                 pages.Add(await client.DownloadPageAsync(eid, sid, info.PageFileNames[i]).ConfigureAwait(false));
-                StatusText = $"正在下载「{info.Title}」第 {i + 1}/{info.PageFileNames.Count} 页…";
+                int done = i + 1;
+                double fraction = info.PageFileNames.Count == 0 ? 0 : (double)done / info.PageFileNames.Count;
+                RunOnUi(() => row.ReportLinkStage($"正在下载第 {done}/{info.PageFileNames.Count} 页…", fraction));
+                StatusText = $"正在下载「{info.Title}」第 {done}/{info.PageFileNames.Count} 页…";
             }
 
             // The old chain assembled every preview verbatim into a finished PDF — the
@@ -347,18 +441,40 @@ public sealed class TransferPanelViewModel : ObservableObject, IDisposable
             if (dispatcher is null)
             {
                 AppLog.Warn("手机传文件：没有 UI 线程，链接图片未进入拼版面板");
+                RunOnUi(() => row.ReportLinkFailure("界面线程不可用，链接图片未加载"));
                 return;
             }
 
             await dispatcher.InvokeAsync(() => LoadPendingPages(info.Title, pages));
+            RunOnUi(() => row.ReportLinkReady($"已下载 {pages.Count} 张图片，可合并后处理"));
             StatusText = $"链接已下载 {pages.Count} 张图片，勾选后点击「合并生成 PDF」";
             AppLog.Info($"手机传文件：分享链接图片就绪 {pages.Count} 张（{info.Title}）");
         }
         catch (Exception ex)
         {
             AppLog.Error("手机传文件：分享链接下载失败", ex);
+            RunOnUi(() => row.ReportLinkFailure($"下载失败：{ex.Message}"));
             StatusText = $"链接下载失败：{ex.Message}";
         }
+    }
+
+    /// <summary>
+    /// The link row's 去处理 PDF button: takes the link's document to the PDF page. A document
+    /// already composed from this link goes as-is; otherwise the pending gallery is packed
+    /// one-page-per-image (the generic default) and that file is what gets loaded.
+    /// </summary>
+    private async void OpenPdfFromLink(TransferChatItemViewModel row)
+    {
+        string? pdf = _lastLinkPdf is { } existing && File.Exists(existing) ? existing : null;
+        if (pdf is null && PendingPages.Count > 0)
+        {
+            row.ReportLinkStage("正在合并图片…", -1);
+            await ComposePendingAsync(ComposeLayoutCatalog.Single, CropModeCatalog.All[2])
+                .ConfigureAwait(true);
+            pdf = _lastLinkPdf;
+        }
+
+        PdfPageRequested?.Invoke(pdf);
     }
 
     /// <summary>Shows a freshly downloaded link in the gallery: all pages selected, a sensible
@@ -372,6 +488,7 @@ public sealed class TransferPanelViewModel : ObservableObject, IDisposable
         }
         PendingPages.Clear();
         _pendingTitle = string.IsNullOrWhiteSpace(title) ? "分享文档" : title;
+        _lastLinkPdf = null;
 
         for (int i = 0; i < pages.Count; i++)
         {
@@ -550,6 +667,7 @@ public sealed class TransferPanelViewModel : ObservableObject, IDisposable
                 new CamScannerShareClient.ShareDocumentInfo(title, Array.Empty<string>()));
             string target = OutputNameGenerator.FindAvailablePath(directory, suggestedName);
             await File.WriteAllBytesAsync(target, pdf).ConfigureAwait(true);
+            _lastLinkPdf = target;
 
             // Only the checked pages leave the gallery: a mixed link (执照 + 身份证 + 户口本)
             // is processed in several passes, each pass producing its own file.
@@ -622,7 +740,97 @@ public sealed class TransferPanelViewModel : ObservableObject, IDisposable
     // the UI thread automatically (same as OnServerFileReceived above).
 
     private void OnServerPageOpened() =>
-        StatusText = $"手机已打开传输页（{DateTime.Now:HH:mm:ss}），可在手机上选择文件或发送文本";
+        RunOnUi(() =>
+        {
+            IsConnected = true;
+            StatusText = $"手机已打开传输页（{DateTime.Now:HH:mm:ss}），可双向发送文字、图片和文件";
+        });
+
+    /// <summary>Either direction added a chat row: append it on the UI thread.</summary>
+    private void OnChatMessageAdded(TransferChatMessage message) =>
+        RunOnUi(() =>
+        {
+            string? path = _server?.LocalPathFor(message.Id);
+            Chat.Add(new TransferChatItemViewModel(message, path, OpenChatFile, RevealChatFile));
+        });
+
+    private static void RunOnUi(Action action)
+    {
+        var dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher is null || dispatcher.CheckAccess()) action();
+        else _ = dispatcher.BeginInvoke(action);
+    }
+
+    /// <summary>Computer → phone text; the server echoes it back through the chat event.</summary>
+    private void SendText()
+    {
+        if (_server is null) return;
+        _server.SendText(DraftText);
+        DraftText = string.Empty;
+    }
+
+    /// <summary>Sends a picked file/image to the phone (copied into the session outbox).</summary>
+    public async Task SendFileAsync(string path)
+    {
+        if (_server is not { } server) return;
+        try
+        {
+            await server.SendFileAsync(path).ConfigureAwait(true);
+            StatusText = $"已发送 {Path.GetFileName(path)}；手机上点开或下载即可保存";
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"发送失败：{ex.Message}";
+        }
+    }
+
+    /// <summary>Files dropped onto the transfer card go straight to the phone.</summary>
+    public async Task SendDroppedFilesAsync(IReadOnlyList<string> paths)
+    {
+        if (!IsRunning)
+        {
+            StatusText = "请先点击「开始接收」并让手机扫码，再拖入文件";
+            return;
+        }
+
+        string[] files = paths.Where(File.Exists).ToArray();
+        if (files.Length == 0) return;
+
+        foreach (string file in files) await SendFileAsync(file).ConfigureAwait(true);
+        StatusText = $"已发送 {files.Length} 个文件到手机";
+    }
+
+    /// <summary>Clicking a file bubble opens it: images in the shared viewer, others via the shell.</summary>
+    private void OpenChatFile(TransferChatItemViewModel row)
+    {
+        if (row.LocalPath is not { } path || !File.Exists(path))
+        {
+            StatusText = "文件已不存在，可能已被移动或删除";
+            return;
+        }
+
+        if (row.IsImage)
+        {
+            OpenImageRequested?.Invoke(this, path);
+            return;
+        }
+
+        try
+        {
+            Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"打开失败：{ex.Message}";
+        }
+    }
+
+    private void RevealChatFile(TransferChatItemViewModel row)
+    {
+        if (row.Directory.Length == 0) return;
+        if (!_shell.TryOpenDirectory(row.Directory, out string? error))
+            StatusText = $"打开文件夹失败：{error}";
+    }
 
     private void OnServerUploadStarted(long total) =>
         StatusText = $"正在接收上传（共 {FormatSize(total)}）…";

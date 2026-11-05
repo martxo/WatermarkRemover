@@ -1,10 +1,11 @@
 namespace WatermarkRemover.Core.Features.Transfer;
 
 /// <summary>
-/// The single HTML page the phone sees after scanning the QR code. Deliberately dependency-free
-/// (one file input + XHR), so it renders identically in the system browser, WeChat's built-in
-/// browser and iOS Safari. Upload progress rides on XHR's upload.onprogress; multiple files go
-/// out in one form post, and the success toast invites another round.
+/// The chat page the phone sees after scanning the QR code. Dependency-free (fetch + FormData)
+/// so it renders identically in the system browser, WeChat's built-in browser and iOS Safari.
+/// Text and files are sent to the computer; computer-sent text/files/images appear as bubbles
+/// through a 1.5 s poll. Scroll position is respected: new rows only pull the view down when the
+/// user is already at the bottom.
 /// </summary>
 public static class MobileUploadPage
 {
@@ -16,258 +17,280 @@ public static class MobileUploadPage
             <head>
             <meta charset="utf-8">
             <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-            <title>手机传文件</title>
+            <title>办公助理 · 传文件</title>
             <style>
                 * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+                html, body { height: 100%; }
                 body {
                     font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
-                    background: #f2f4f7; color: #1f2329; min-height: 100vh;
-                    display: flex; flex-direction: column; align-items: center; padding: 24px 16px 48px;
+                    background: #ededed; color: #1f2329;
+                    display: flex; flex-direction: column;
+                    max-width: 560px; margin: 0 auto;
                 }
-                .card {
-                    width: 100%; max-width: 480px; background: #fff; border-radius: 16px;
-                    padding: 22px 18px; box-shadow: 0 2px 12px rgba(15, 23, 42, .06); margin-bottom: 16px;
+                header {
+                    flex: none; background: #f7f7f7; border-bottom: 1px solid #dcdcdc;
+                    padding: calc(10px + env(safe-area-inset-top)) 16px 10px;
+                    display: flex; align-items: center; justify-content: space-between;
                 }
-                h1 { font-size: 19px; margin-bottom: 4px; }
-                .hint { font-size: 13px; color: #8a919f; line-height: 1.6; }
-                #drop {
-                    border: 2px dashed #c9d1dc; border-radius: 12px; padding: 26px 12px;
-                    text-align: center; color: #646a73; font-size: 14px; margin-top: 14px;
+                header .name { font-size: 17px; font-weight: 600; }
+                header .sub { display: block; font-size: 11px; font-weight: 400; color: #8a919f; margin-top: 2px; }
+                #dot { width: 8px; height: 8px; border-radius: 50%; background: #c8412b; }
+                #dot.ok { background: #1aad19; }
+                #chat {
+                    flex: 1; overflow-y: auto; padding: 14px 14px 6px;
+                    -webkit-overflow-scrolling: touch;
                 }
-                #drop.active { border-color: #4f7cff; color: #4f7cff; background: #f3f7ff; }
-                button {
-                    display: block; width: 100%; border: 0; border-radius: 10px; padding: 13px 0;
-                    font-size: 16px; font-weight: 600; margin-top: 14px; cursor: pointer;
+                #empty { color: #9aa0a6; font-size: 13px; line-height: 1.8; text-align: center; margin-top: 32px; }
+                .row { display: flex; margin-bottom: 12px; align-items: flex-start; }
+                .row.mine { justify-content: flex-end; }
+                .bubble {
+                    max-width: 78%; border-radius: 10px; padding: 9px 11px;
+                    font-size: 14px; line-height: 1.5; word-break: break-word;
+                    background: #ffffff; box-shadow: 0 1px 2px rgba(0,0,0,.05);
                 }
-                #pick { background: #eaf0ff; color: #2f5fe0; }
-                #send { background: #4f7cff; color: #fff; }
-                #send:disabled { background: #c3cdf5; }
-                ul { list-style: none; margin-top: 12px; }
-                li { font-size: 13px; padding: 9px 10px; border-radius: 8px; background: #f5f6f8;
-                     margin-bottom: 8px; word-break: break-all; }
-                li .bar { height: 4px; border-radius: 2px; background: #e2e6ec; margin-top: 7px; overflow: hidden; }
-                li .bar i { display: block; height: 100%; width: 0; background: #4f7cff; transition: width .2s; }
-                li.ok { color: #1a7f4b; }
-                li.ok .bar { display: none; }
-                li.fail { color: #c8412b; }
+                .row.mine .bubble { background: #95ec69; }
+                .bubble .time { display: block; font-size: 10px; color: #8a919f; margin-top: 4px; }
+                .bubble img { display: block; max-width: 210px; max-height: 260px; border-radius: 8px; margin-bottom: 4px; background: #f2f2f2; }
+                .filecard { display: flex; align-items: center; gap: 10px; min-width: 170px; }
+                .fileicon {
+                    width: 34px; height: 34px; border-radius: 6px; background: #e8f0fe;
+                    color: #2f5fe0; font-size: 15px; font-weight: 700;
+                    display: flex; align-items: center; justify-content: center; flex: none;
+                }
+                .filemeta { flex: 1; min-width: 0; }
+                .filename { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+                .filesize { font-size: 11px; color: #8a919f; margin-top: 2px; }
+                .dl { flex: none; font-size: 12px; color: #2f5fe0; text-decoration: none; padding: 4px 2px; }
+                #newChip {
+                    position: fixed; bottom: 84px; left: 50%; transform: translateX(-50%);
+                    background: rgba(31,35,41,.88); color: #fff; font-size: 12px;
+                    border-radius: 14px; padding: 6px 14px; border: 0;
+                }
+                footer {
+                    flex: none; background: #f7f7f7; border-top: 1px solid #dcdcdc;
+                    padding: 8px 10px calc(8px + env(safe-area-inset-bottom));
+                    display: flex; align-items: center; gap: 8px;
+                }
+                #fileBtn {
+                    flex: none; width: 38px; height: 38px; border-radius: 50%; border: 1px solid #d5d5d5;
+                    background: #fff; color: #333; font-size: 22px; line-height: 1; cursor: pointer;
+                }
+                #msg {
+                    flex: 1; min-width: 0; height: 38px; border: 0; border-radius: 8px;
+                    background: #fff; padding: 0 12px; font-size: 15px; font-family: inherit; color: #1f2329;
+                }
+                #msg:focus { outline: 1px solid #c7d7f7; }
+                #send {
+                    flex: none; height: 38px; padding: 0 16px; border: 0; border-radius: 8px;
+                    background: #07c160; color: #fff; font-size: 14px; font-weight: 600; cursor: pointer;
+                }
+                #send:disabled { background: #c4e8d3; }
                 #toast {
-                    position: fixed; left: 50%; bottom: 40px; transform: translateX(-50%) translateY(20px);
-                    background: rgba(31,35,41,.92); color: #fff; font-size: 14px; padding: 10px 18px;
-                    border-radius: 8px; opacity: 0; pointer-events: none; transition: all .25s; max-width: 86vw;
+                    position: fixed; left: 50%; bottom: 96px; transform: translateX(-50%) translateY(10px);
+                    background: rgba(31,35,41,.92); color: #fff; font-size: 13px; padding: 9px 16px;
+                    border-radius: 8px; opacity: 0; pointer-events: none; transition: all .2s; max-width: 86vw;
                 }
                 #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
-                textarea {
-                    width: 100%; border: 1px solid #c9d1dc; border-radius: 10px; padding: 10px 12px;
-                    font-size: 15px; font-family: inherit; line-height: 1.5; resize: vertical;
-                    margin-top: 14px; background: #fff; color: #1f2329;
-                }
-                textarea:focus { outline: none; border-color: #4f7cff; }
-                #sendText { background: #4f7cff; color: #fff; }
-                #sendText:disabled { background: #c3cdf5; }
-                #hist li { cursor: pointer; }
-                #hist .meta { font-size: 12px; color: #8a919f; margin-bottom: 3px; }
-                #hist .kind { display: inline-block; font-size: 11px; color: #2f5fe0;
-                              background: #eaf0ff; border-radius: 4px; padding: 0 5px; margin-left: 6px; }
-                #hist .txt { font-size: 13px; color: #1f2329; }
             </style>
             </head>
             <body>
-            <div class="card">
-                <h1>手机传文件</h1>
-                <p class="hint">选择照片、视频或任意文件，上传后立即出现在电脑上。文件仅在局域网内直接传输，不经过任何服务器。</p>
-                <div id="drop">也可以把文件拖到这里</div>
-                <button id="pick" type="button">选择文件</button>
-                <button id="send" type="button" disabled>开始上传</button>
-                <ul id="list"></ul>
-            </div>
-            <div class="card">
-                <h1>发文本到电脑</h1>
-                <p class="hint">输入文字点发送，电脑上会自动复制到剪贴板。</p>
-                <textarea id="msg" rows="3" placeholder="输入要发送的文本…"></textarea>
-                <button id="sendText" type="button" disabled>发送文本</button>
-            </div>
-            <div class="card" id="histCard" hidden>
-                <h1>发送记录</h1>
-                <p class="hint">保存在本机浏览器（最多 50 条），点一条可复制全文。</p>
-                <ul id="hist"></ul>
-            </div>
+            <header>
+                <div>
+                    <div class="name">办公助理</div>
+                    <span class="sub">局域网直传 · 不经过任何服务器</span>
+                </div>
+                <div id="dot" title="连接状态"></div>
+            </header>
+
+            <main id="chat">
+                <div id="empty">这里会显示电脑传过来的文字、图片和文件。<br>发消息或选择文件即可传到电脑。</div>
+            </main>
+
+            <button id="newChip" type="button" hidden>有新消息 ↓</button>
+
+            <footer>
+                <button id="fileBtn" type="button" title="发送文件或图片">+</button>
+                <input id="msg" type="text" placeholder="发消息…" autocomplete="off">
+                <button id="send" type="button" disabled>发送</button>
+            </footer>
             <div id="toast"></div>
             <input id="file" type="file" multiple hidden>
+
             <script>
-                var pickBtn = document.getElementById('pick'),
+                var token = new URLSearchParams(location.search).get('t') || '';
+                var chat    = document.getElementById('chat'),
+                    empty   = document.getElementById('empty'),
+                    msg     = document.getElementById('msg'),
                     sendBtn = document.getElementById('send'),
-                    input   = document.getElementById('file'),
-                    list    = document.getElementById('list'),
-                    drop    = document.getElementById('drop'),
+                    fileBtn = document.getElementById('fileBtn'),
+                    fileIn  = document.getElementById('file'),
+                    dot     = document.getElementById('dot'),
+                    chip    = document.getElementById('newChip'),
                     toast   = document.getElementById('toast');
 
-                // The upload URL must carry the session token — the page's own URL already has it.
-                var uploadUrl = 'up?t=' + encodeURIComponent(new URLSearchParams(location.search).get('t') || '');
+                var lastId = 0, atBottom = true, polling = false, timer = null;
+                var chatUrl     = '/chat?t=' + encodeURIComponent(token);
+                var textUrl     = '/text?t=' + encodeURIComponent(token);
+                var uploadUrl   = '/up?t=' + encodeURIComponent(token);
+                var downloadUrl = '/download/';
 
                 function toastMsg(text) {
                     toast.textContent = text;
                     toast.classList.add('show');
-                    setTimeout(function () { toast.classList.remove('show'); }, 2600);
+                    clearTimeout(toastMsg.t);
+                    toastMsg.t = setTimeout(function () { toast.classList.remove('show'); }, 2600);
                 }
                 function human(bytes) {
-                    if (bytes > 1073741824) return (bytes / 1073741824).toFixed(2) + ' GB';
-                    if (bytes > 1048576) return (bytes / 1048576).toFixed(1) + ' MB';
-                    return Math.max(1, Math.round(bytes / 1024)) + ' KB';
+                    if (bytes >= 1073741824) return (bytes / 1073741824).toFixed(2) + ' GB';
+                    if (bytes >= 1048576) return (bytes / 1048576).toFixed(1) + ' MB';
+                    if (bytes >= 1024) return Math.round(bytes / 1024) + ' KB';
+                    return (bytes || 0) + ' B';
                 }
-                pickBtn.onclick = function () { input.click(); };
-                input.onchange = function () { render(input.files); };
+                function nearBottom() {
+                    return chat.scrollHeight - chat.scrollTop - chat.clientHeight < 48;
+                }
+                function toBottom() {
+                    chat.scrollTop = chat.scrollHeight;
+                    atBottom = true;
+                    chip.hidden = true;
+                }
+                chat.onscroll = function () {
+                    atBottom = nearBottom();
+                    if (atBottom) chip.hidden = true;
+                };
+                chip.onclick = toBottom;
 
-                ['dragover', 'dragenter'].forEach(function (ev) {
-                    drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.add('active'); });
-                });
-                ['dragleave', 'drop'].forEach(function (ev) {
-                    drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.remove('active'); });
-                });
-                drop.addEventListener('drop', function (e) { render(e.dataTransfer.files); });
+                function makeRow(m) {
+                    var row = document.createElement('div');
+                    row.className = 'row ' + (m.dir === 'phone' ? 'mine' : 'theirs');
+                    var bubble = document.createElement('div');
+                    bubble.className = 'bubble';
 
-                function render(files) {
-                    list.innerHTML = '';
-                    for (var i = 0; i < files.length; i++) {
-                        var li = document.createElement('li');
-                        li.textContent = files[i].name + '（' + human(files[i].size) + '）';
-                        var bar = document.createElement('div'); bar.className = 'bar';
-                        bar.innerHTML = '<i></i>';
-                        li.appendChild(bar);
-                        list.appendChild(li);
+                    if (m.kind === 'text') {
+                        bubble.appendChild(document.createTextNode(m.text));
+                    } else if (m.kind === 'image') {
+                        var img = new Image();
+                        img.src = downloadUrl + m.id + '?t=' + encodeURIComponent(token);
+                        img.onclick = function () { window.open(img.src, '_blank'); };
+                        bubble.appendChild(img);
+                        var cap = document.createElement('span');
+                        cap.style.fontSize = '11px';
+                        cap.style.color = '#6b7280';
+                        cap.textContent = m.name + ' · ' + human(m.size);
+                        bubble.appendChild(cap);
+                    } else {
+                        var card = document.createElement('div');
+                        card.className = 'filecard';
+                        var icon = document.createElement('div');
+                        icon.className = 'fileicon';
+                        icon.textContent = 'FILE';
+                        icon.style.fontSize = '9px';
+                        var meta = document.createElement('div');
+                        meta.className = 'filemeta';
+                        var name = document.createElement('div');
+                        name.className = 'filename';
+                        name.textContent = m.name;
+                        var size = document.createElement('div');
+                        size.className = 'filesize';
+                        size.textContent = human(m.size);
+                        meta.appendChild(name); meta.appendChild(size);
+                        var dl = document.createElement('a');
+                        dl.className = 'dl';
+                        dl.href = downloadUrl + m.id + '?t=' + encodeURIComponent(token);
+                        dl.setAttribute('download', m.name);
+                        dl.textContent = '下载';
+                        card.appendChild(icon); card.appendChild(meta); card.appendChild(dl);
+                        bubble.appendChild(card);
                     }
-                    sendBtn.disabled = files.length === 0;
+
+                    var time = document.createElement('span');
+                    time.className = 'time';
+                    time.textContent = (m.dir === 'phone' ? '我 · ' : '电脑 · ') + (m.time || '');
+                    bubble.appendChild(time);
+                    row.appendChild(bubble);
+                    return row;
                 }
 
-                sendBtn.onclick = function () {
-                    if (input.files.length === 0) return;
-                    sendBtn.disabled = true;
-                    sendBtn.textContent = '正在上传…';
-                    var form = new FormData();
-                    for (var i = 0; i < input.files.length; i++) form.append('file', input.files[i]);
+                function append(rows, initial) {
+                    if (!rows.length) return false;
+                    empty.hidden = true;
+                    var frag = document.createDocumentFragment();
+                    rows.forEach(function (m) {
+                        if (m.id > lastId) lastId = m.id;
+                        frag.appendChild(makeRow(m));
+                    });
+                    var wasAtBottom = atBottom;
+                    chat.appendChild(frag);
+                    if (initial || wasAtBottom) toBottom();
+                    else chip.hidden = false;
+                    return true;
+                }
 
+                function poll() {
+                    if (polling) return;
+                    polling = true;
+                    fetch(chatUrl + '&after=' + lastId, { cache: 'no-store' })
+                        .then(function (r) { if (!r.ok) throw new Error('bad status'); return r.json(); })
+                        .then(function (data) {
+                            dot.className = 'ok';
+                            append((data && data.messages) || []);
+                        })
+                        .catch(function () { dot.className = ''; })
+                        .then(function () { polling = false; });
+                }
+
+                function sendText() {
+                    var text = msg.value.trim();
+                    if (!text) return;
+                    sendBtn.disabled = true;
+                    fetch(textUrl, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+                        body: text
+                    }).then(function (r) {
+                        if (!r.ok) throw new Error('send failed');
+                        msg.value = '';
+                        poll();
+                    }).catch(function () { toastMsg('发送失败，请检查连接'); })
+                      .then(function () { sendBtn.disabled = !msg.value.trim(); });
+                }
+
+                function upload(files) {
+                    if (!files || !files.length) return;
+                    var form = new FormData();
+                    for (var i = 0; i < files.length; i++) form.append('file', files[i], files[i].name);
                     var xhr = new XMLHttpRequest();
                     xhr.open('POST', uploadUrl);
+                    var total = 0;
+                    for (var j = 0; j < files.length; j++) total += files[j].size;
+                    toastMsg('正在发送 ' + files.length + ' 个文件…');
                     xhr.upload.onprogress = function (e) {
                         if (!e.lengthComputable) return;
-                        var pct = Math.round(e.loaded / e.total * 100);
-                        sendBtn.textContent = '正在上传… ' + pct + '%';
-                        var bars = list.querySelectorAll('.bar i');
-                        for (var i = 0; i < bars.length; i++) bars[i].style.width = pct + '%';
+                        toastMsg('发送中 ' + Math.round(e.loaded / e.total * 100) + '%');
                     };
                     xhr.onload = function () {
-                        sendBtn.textContent = '开始上传';
-                        if (xhr.status === 200) {
-                            Array.prototype.forEach.call(list.children, function (li) {
-                                li.classList.add('ok'); li.classList.remove('fail');
-                            });
-                            toastMsg(xhr.responseText);
-                            input.value = '';
-                            sendBtn.disabled = true;
+                        if (xhr.status >= 200 && xhr.status < 300) {
+                            toastMsg('已发送 ' + files.length + ' 个文件');
+                            poll();
                         } else {
-                            Array.prototype.forEach.call(list.children, function (li) { li.classList.add('fail'); });
-                            toastMsg('上传失败：' + xhr.responseText);
-                            sendBtn.disabled = false;
+                            toastMsg('发送失败：' + (xhr.responseText || xhr.status));
                         }
                     };
-                    xhr.onerror = function () {
-                        sendBtn.textContent = '开始上传';
-                        sendBtn.disabled = false;
-                        toastMsg('网络中断，请保持手机与电脑在同一 Wi-Fi 后重试');
-                    };
+                    xhr.onerror = function () { toastMsg('发送失败，请检查连接'); };
                     xhr.send(form);
-                };
+                }
 
-                var msgBox = document.getElementById('msg'),
-                    sendTextBtn = document.getElementById('sendText');
-                var textUrl = 'text?t=' + encodeURIComponent(new URLSearchParams(location.search).get('t') || '');
+                msg.addEventListener('input', function () { sendBtn.disabled = !msg.value.trim(); });
+                msg.addEventListener('keydown', function (e) {
+                    if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); sendText(); }
+                });
+                sendBtn.onclick = sendText;
+                fileBtn.onclick = function () { fileIn.click(); };
+                fileIn.onchange = function () { upload(fileIn.files); fileIn.value = ''; };
 
-                // --- 发送记录：localStorage only (nothing leaves this phone), newest first ---
-                var HIST_KEY = 'csTransferHistory';
-                function loadHist() {
-                    try { return JSON.parse(localStorage.getItem(HIST_KEY) || '[]') || []; }
-                    catch (e) { return []; }
-                }
-                function saveHist(items) {
-                    try { localStorage.setItem(HIST_KEY, JSON.stringify(items.slice(0, 50))); } catch (e) {}
-                }
-                function renderHist() {
-                    var items = loadHist();
-                    document.getElementById('histCard').hidden = items.length === 0;
-                    var box = document.getElementById('hist');
-                    box.innerHTML = '';
-                    for (var i = 0; i < items.length; i++) {
-                        var li = document.createElement('li');
-                        var meta = document.createElement('div'); meta.className = 'meta';
-                        meta.textContent = items[i].tm;
-                        var kind = document.createElement('span'); kind.className = 'kind';
-                        kind.textContent = /^https?:\/\//i.test(items[i].t) ? '链接' : '文本';
-                        meta.appendChild(kind);
-                        var txt = document.createElement('div'); txt.className = 'txt';
-                        var full = items[i].t;
-                        txt.textContent = full.length > 60 ? full.slice(0, 60) + '…' : full;
-                        li.appendChild(meta); li.appendChild(txt);
-                        li.onclick = (function (text) {
-                            return function () { copyText(text); };
-                        })(full);
-                        box.appendChild(li);
-                    }
-                }
-                function copyText(text) {
-                    // Clipboard API needs a secure context — LAN pages run on http, so fall
-                    // back to the classic hidden-textarea + execCommand route.
-                    var fallback = function () {
-                        var ta = document.createElement('textarea');
-                        ta.value = text;
-                        ta.style.position = 'fixed'; ta.style.opacity = '0';
-                        document.body.appendChild(ta); ta.select();
-                        var ok = false;
-                        try { ok = document.execCommand('copy'); } catch (e) {}
-                        document.body.removeChild(ta);
-                        toastMsg(ok ? '已复制' : '复制失败');
-                    };
-                    if (navigator.clipboard && window.isSecureContext) {
-                        navigator.clipboard.writeText(text).then(function () { toastMsg('已复制'); }, fallback);
-                    } else {
-                        fallback();
-                    }
-                }
-                renderHist();
-
-                msgBox.oninput = function () { sendTextBtn.disabled = msgBox.value.length === 0; };
-                sendTextBtn.onclick = function () {
-                    var text = msgBox.value;
-                    if (!text) return;
-                    sendTextBtn.disabled = true;
-                    sendTextBtn.textContent = '发送中…';
-                    var xhr = new XMLHttpRequest();
-                    xhr.open('POST', textUrl);
-                    xhr.onload = function () {
-                        sendTextBtn.textContent = '发送文本';
-                        if (xhr.status === 200) {
-                            // The reply carries the SERVER's clock — history times stay
-                            // consistent even if the phone's clock drifts.
-                            var time = '';
-                            try { time = JSON.parse(xhr.responseText).time || ''; } catch (e) {}
-                            if (!time) time = new Date().toTimeString().slice(0, 5);
-                            var items = loadHist();
-                            items.unshift({ t: text, tm: time });
-                            saveHist(items);
-                            renderHist();
-                            msgBox.value = '';
-                            sendTextBtn.disabled = true;
-                            toastMsg('已发送到电脑');
-                        } else {
-                            sendTextBtn.disabled = false;
-                            toastMsg('发送失败：' + xhr.responseText);
-                        }
-                    };
-                    xhr.onerror = function () {
-                        sendTextBtn.textContent = '发送文本';
-                        sendTextBtn.disabled = false;
-                        toastMsg('网络中断，请保持手机与电脑在同一 Wi-Fi 后重试');
-                    };
-                    xhr.send(text);
-                };
+                poll();
+                timer = setInterval(poll, 1500);
+                window.addEventListener('pagehide', function () { clearInterval(timer); });
             </script>
             </body>
             </html>

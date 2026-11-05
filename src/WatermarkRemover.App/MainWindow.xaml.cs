@@ -114,6 +114,9 @@ public partial class MainWindow : Window
         _viewModel.ScreenshotOcrRequested += (_, path) => _ = ShowScreenshotOcrAsync(path);
         _viewModel.ScreenshotViewRequested += (_, path) =>
             ImageViewerWindow.ShowFor(path, _viewModel.Settings);
+        _viewModel.Transfer.SendFileRequested += (_, _) => ChooseTransferFile();
+        _viewModel.Transfer.OpenImageRequested += (_, path) =>
+            ImageViewerWindow.ShowFor(path, _viewModel.Settings);
         _dragWatchdog = new System.Windows.Threading.DispatcherTimer
         {
             Interval = TimeSpan.FromMilliseconds(180),
@@ -418,6 +421,58 @@ public partial class MainWindow : Window
     {
         AppLog.Debug("截图快捷键触发（晾衣绳）");
         ToggleScreenshotShelf();
+    }
+
+    /// <summary>Picks one or more files and sends them to the phone through the transfer server.</summary>
+    private void ChooseTransferFile()
+    {
+        var dialog = new OpenFileDialog
+        {
+            Title = "选择要发送到手机的文件",
+            Multiselect = true,
+        };
+        if (dialog.ShowDialog(this) != true) return;
+
+        foreach (string path in dialog.FileNames)
+            _ = _viewModel.Transfer.SendFileAsync(path);
+    }
+
+    /// <summary>Clicking a chat bubble's folder line reveals the folder, not the file. The bubble
+    /// itself listens on the same (bubbling) event and stops when this one handles it, so a path
+    /// click can never open the file as well.</summary>
+    private void OnTransferPathClick(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is FrameworkElement { DataContext: TransferChatItemViewModel row })
+            row.OpenFolderCommand.Execute(null);
+        e.Handled = true;
+    }
+
+    /// <summary>Clicking a bubble opens its file (images go to the app's viewer); the path line
+    /// and the buttons inside handle their own clicks first, so they never reach here.</summary>
+    private void OnTransferBubbleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (e.Handled) return;
+        if (sender is FrameworkElement { DataContext: TransferChatItemViewModel row })
+            row.OpenCommand.Execute(null);
+    }
+
+    /// <summary>Accept file payloads only while the transfer server is running.</summary>
+    private void OnTransferDragOver(object sender, DragEventArgs e)
+    {
+        bool hasFiles = e.Data.GetDataPresent(DataFormats.FileDrop);
+        e.Effects = hasFiles && _viewModel.Transfer.IsRunning
+            ? DragDropEffects.Copy
+            : DragDropEffects.None;
+        e.Handled = true;
+    }
+
+    /// <summary>Files dropped onto the transfer card are sent to the phone.</summary>
+    private async void OnTransferDrop(object sender, DragEventArgs e)
+    {
+        e.Handled = true;
+        if (!e.Data.GetDataPresent(DataFormats.FileDrop)) return;
+        if (e.Data.GetData(DataFormats.FileDrop) is not string[] paths) return;
+        await _viewModel.Transfer.SendDroppedFilesAsync(paths);
     }
 
     /// <summary>

@@ -475,195 +475,360 @@
         </DataTemplate>
 
         <DataTemplate x:Key="Page.Transfer">
-            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
-                          MaxHeight="400">
+            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
             <Grid DataContext="{Binding DataContext, RelativeSource={RelativeSource AncestorType=Window}}">
-        <!-- Transfer panel (手机传文件): QR code + start/stop. Height is pinned to the same
-             top/bottom proportion as the 去水印/OCR page (compact top card, records below get the
-             rest); the gallery scrolls inside the capped outer ScrollViewer. -->
-        <Border Margin="0,0,0,16" Height="270" Style="{StaticResource CardBorder}">
-            <Grid Margin="20,16">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="*"/>
-                </Grid.ColumnDefinitions>
+        <!-- 手机传文件: 微信式双向聊天。该页 kind 横跨两行，卡片随之撑满可用高度（原来的固定
+             高度把消息流压得很小）；链接图片拼版区放在卡片下方。 -->
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*" MinHeight="470"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+        <Border Grid.Row="0" Margin="0,0,0,16" Style="{StaticResource CardBorder}" Padding="0"
+                AllowDrop="True"
+                DragOver="OnTransferDragOver"
+                Drop="OnTransferDrop">
+            <Grid>
 
-                <!-- Left column: QR card + action buttons. Status/how-to moved to the right
-                     header so the left remains narrow and the card stays compact. -->
-                <StackPanel Grid.Column="0" VerticalAlignment="Top" Width="130">
-                    <Border Width="120" Height="120" CornerRadius="10" Background="White"
-                            BorderBrush="{StaticResource ShellCardStrokeBrush}"
-                            BorderThickness="1">
-                        <Grid>
-                            <Image Source="{Binding Transfer.QrImage}" Stretch="Uniform" Margin="6"/>
-                            <TextBlock Text="点击「开始接收」&#x0A;生成二维码"
-                                       HorizontalAlignment="Center" VerticalAlignment="Center"
-                                       TextAlignment="Center" FontSize="11"
-                                       Foreground="{StaticResource TextSecondaryBrush}">
-                                <TextBlock.Style>
-                                    <Style TargetType="TextBlock">
-                                        <Setter Property="Visibility" Value="Collapsed"/>
-                                        <Style.Triggers>
-                                            <DataTrigger Binding="{Binding Transfer.IsRunning}" Value="False">
-                                                <Setter Property="Visibility" Value="Visible"/>
-                                            </DataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </TextBlock.Style>
-                            </TextBlock>
-                        </Grid>
-                    </Border>
-                    <Button Content="{Binding Transfer.ToggleText}"
-                            Style="{StaticResource PrimaryButton}"
-                            Command="{Binding Transfer.ToggleCommand}"
-                            Margin="0,12,0,0"/>
-                    <Button Content="打开文件夹"
-                            Style="{StaticResource SmallButton}"
-                            Command="{Binding Transfer.OpenFolderCommand}"
-                            Margin="0,8,0,0"/>
-                </StackPanel>
+                <!-- 未连接时居中的二维码；手机打开页面后，二维码收进标题行 ⋯ 菜单，整层折叠。 -->
+                <Grid VerticalAlignment="Center" Margin="24">
+                    <Grid.Style>
+                        <Style TargetType="Grid">
+                            <Setter Property="Visibility" Value="Collapsed"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding Transfer.ShowQrHero}" Value="True">
+                                    <Setter Property="Visibility" Value="Visible"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Grid.Style>
+                    <StackPanel HorizontalAlignment="Center">
+                        <Border Width="176" Height="176" CornerRadius="12" Background="White"
+                                BorderBrush="{StaticResource ShellCardStrokeBrush}"
+                                BorderThickness="1" HorizontalAlignment="Center">
+                            <Grid>
+                                <Image Source="{Binding Transfer.QrImage}" Stretch="Uniform" Margin="10"/>
+                                <TextBlock Text="点击「开始接收」&#x0A;生成二维码"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center"
+                                           TextAlignment="Center" FontSize="12"
+                                           Foreground="{StaticResource TextSecondaryBrush}">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding Transfer.IsRunning}" Value="False">
+                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </Grid>
+                        </Border>
+                        <TextBlock Text="手机与电脑连接同一 Wi-Fi，扫码打开聊天页"
+                                   FontSize="12" Foreground="{StaticResource TextSecondaryBrush}"
+                                   HorizontalAlignment="Center" Margin="0,12,0,0"/>
+                        <TextBlock Text="{Binding Transfer.UrlText}"
+                                   FontSize="11" Foreground="{StaticResource TextSecondaryBrush}"
+                                   HorizontalAlignment="Center" Margin="0,4,0,0"
+                                   TextTrimming="CharacterEllipsis" MaxWidth="360"/>
+                        <Button Content="{Binding Transfer.ToggleText}"
+                                Style="{StaticResource PrimaryButton}"
+                                Command="{Binding Transfer.ToggleCommand}"
+                                Width="160" Margin="0,12,0,0"/>
+                    </StackPanel>
+                </Grid>
 
-                <!-- Right column: the message log, full height of the panel. The panel's height
-                     is pinned by the left column, so the file list below never gets squeezed. -->
-                <Border Grid.Column="1"
-                        Margin="18,0,0,0"
-                        Background="#FAFBFC"
-                        BorderBrush="{StaticResource ShellCardStrokeBrush}"
-                        BorderThickness="1"
-                        CornerRadius="6"
-                        VerticalAlignment="Stretch">
+                <!-- 聊天面板：手机打开页面后出现。气泡按微信两栏（对方左、自己右），
+                     时间在气泡外右下角；⋯ 菜单已移到标题行右侧。 -->
+                <Border VerticalAlignment="Stretch">
+                    <Border.Style>
+                        <Style TargetType="Border">
+                            <Setter Property="Visibility" Value="Collapsed"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding Transfer.IsConnected}" Value="True">
+                                    <Setter Property="Visibility" Value="Visible"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Border.Style>
                     <Grid>
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="*"/>
+                            <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
 
-                        <!-- Header: status + how-to tip, so the QR column stays narrow. -->
-                        <Grid Grid.Row="0" Margin="10,8,10,0">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="Auto"/>
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Text="{Binding Transfer.StatusText}"
-                                       FontSize="11"
-                                       Foreground="{StaticResource TextSecondaryBrush}"
-                                       TextWrapping="Wrap"
-                                       VerticalAlignment="Center"/>
-                            <TextBlock Grid.Column="1" Margin="12,0,0,0"
-                                       FontSize="11"
-                                       Foreground="{StaticResource TextSecondaryBrush}"
-                                       Cursor="Hand"
-                                       ToolTipService.InitialShowDelay="150"
-                                       ToolTipService.Placement="Bottom">
-                                <TextBlock.Style>
-                                    <Style TargetType="TextBlock">
-                                        <Setter Property="Text" Value="ⓘ 使用说明"/>
-                                        <Style.Triggers>
-                                            <DataTrigger Binding="{Binding Transfer.IsRunning}" Value="True">
-                                                <Setter Property="Text" Value="ⓘ 使用说明 / 地址"/>
-                                            </DataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </TextBlock.Style>
-                                <TextBlock.ToolTip>
-                                    <ToolTip>
-                                        <StackPanel MaxWidth="320">
-                                            <TextBlock Text="手机与电脑连接同一 Wi-Fi，用相机或微信扫一扫二维码，在浏览器里选择文件或发送文本即可传到电脑。文件仅在局域网内直传，不经过任何服务器。"
-                                                       TextWrapping="Wrap"/>
-                                            <TextBlock Text="{Binding Transfer.UrlText}"
-                                                       TextWrapping="Wrap"
-                                                       Margin="0,8,0,0">
-                                                <TextBlock.Style>
-                                                    <Style TargetType="TextBlock">
-                                                        <Setter Property="Visibility" Value="Collapsed"/>
+                        <!-- 状态行：连接与接收进度的一行说明（二维码/停止已进标题行菜单） -->
+                        <TextBlock Grid.Row="0"
+                                   Text="{Binding Transfer.StatusText}"
+                                   FontSize="11"
+                                   Foreground="{StaticResource TextSecondaryBrush}"
+                                   TextTrimming="CharacterEllipsis"
+                                   Margin="20,14,20,0"/>
+
+                        <!-- 消息流：微信式灰底画布 + 两栏气泡 -->
+                        <Border Grid.Row="1" Margin="16,10,16,0"
+                                Background="{StaticResource SurfaceAltBrush}"
+                                CornerRadius="8">
+                            <Grid>
+                                <TextBlock Text="还没有消息&#x0A;在下方发送文字或文件，手机上会立即出现&#x0A;也可以把文件直接拖到这里"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center"
+                                           TextAlignment="Center" FontSize="12" LineHeight="20"
+                                           Foreground="{StaticResource TextSecondaryBrush}"
+                                           IsHitTestVisible="False">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding Transfer.HasChat}" Value="True">
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                                <ListBox Margin="8,10"
+                                         ItemsSource="{Binding Transfer.Chat}"
+                                         behaviors:AutoScrollListBox.IsEnabled="True"
+                                         BorderThickness="0" Background="Transparent"
+                                         ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                                    <ListBox.ItemContainerStyle>
+                                        <Style TargetType="ListBoxItem">
+                                            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                                            <Setter Property="Padding" Value="0"/>
+                                            <Setter Property="Margin" Value="0"/>
+                                            <Setter Property="Template">
+                                                <Setter.Value>
+                                                    <ControlTemplate TargetType="ListBoxItem">
+                                                        <ContentPresenter/>
+                                                    </ControlTemplate>
+                                                </Setter.Value>
+                                            </Setter>
+                                        </Style>
+                                    </ListBox.ItemContainerStyle>
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                                                <StackPanel.Style>
+                                                    <Style TargetType="StackPanel">
+                                                        <Setter Property="HorizontalAlignment" Value="Left"/>
                                                         <Style.Triggers>
-                                                            <DataTrigger Binding="{Binding Transfer.IsRunning}" Value="True">
-                                                                <Setter Property="Visibility" Value="Visible"/>
+                                                            <DataTrigger Binding="{Binding IsMine}" Value="True">
+                                                                <Setter Property="HorizontalAlignment" Value="Right"/>
                                                             </DataTrigger>
                                                         </Style.Triggers>
                                                     </Style>
-                                                </TextBlock.Style>
-                                            </TextBlock>
-                                        </StackPanel>
-                                    </ToolTip>
-                                </TextBlock.ToolTip>
-                            </TextBlock>
-                        </Grid>
+                                                </StackPanel.Style>
+                                                <!-- 自己的消息：时间贴在气泡左侧（微信式，紧跟气泡尾部） -->
+                                                <TextBlock Text="{Binding TimeText}"
+                                                           FontSize="10" VerticalAlignment="Bottom"
+                                                           Margin="0,0,6,3"
+                                                           Foreground="{StaticResource ChatTimeBrush}">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock">
+                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding IsMine}" Value="True">
+                                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
 
-                        <Grid Grid.Row="1" Margin="0,4,0,0">
-                        <!-- Empty state: a quiet hint while no text has arrived yet. -->
-                        <TextBlock Text="发送记录&#x0A;手机发送的文本将显示在这里，点击条目右侧「复制」可重新复制全文"
-                                   HorizontalAlignment="Center" VerticalAlignment="Center"
-                                   TextAlignment="Center" FontSize="12" LineHeight="20"
-                                   Foreground="{StaticResource TextSecondaryBrush}"
-                                   IsHitTestVisible="False">
-                            <TextBlock.Style>
-                                <Style TargetType="TextBlock">
-                                    <Setter Property="Visibility" Value="Visible"/>
-                                    <Style.Triggers>
-                                        <DataTrigger Binding="{Binding Transfer.HasMessages}" Value="True">
-                                            <Setter Property="Visibility" Value="Collapsed"/>
-                                        </DataTrigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </TextBlock.Style>
-                        </TextBlock>
-                        <ScrollViewer Margin="8" VerticalScrollBarVisibility="Auto">
-                            <ScrollViewer.Style>
-                                <Style TargetType="ScrollViewer">
-                                    <Setter Property="Visibility" Value="Collapsed"/>
-                                    <Style.Triggers>
-                                        <DataTrigger Binding="{Binding Transfer.HasMessages}" Value="True">
-                                            <Setter Property="Visibility" Value="Visible"/>
-                                        </DataTrigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </ScrollViewer.Style>
-                            <ItemsControl ItemsSource="{Binding Transfer.Messages}">
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate>
-                                        <Border Background="#F5F6F8"
-                                                CornerRadius="6"
-                                                Padding="10,7"
-                                                Margin="0,0,0,6">
-                                            <StackPanel>
-                                                <StackPanel Orientation="Horizontal">
-                                                    <TextBlock Text="{Binding TimeText}"
-                                                               FontSize="11"
-                                                               Foreground="{StaticResource TextSecondaryBrush}"/>
-                                                    <TextBlock Text="{Binding Sender}"
-                                                               FontSize="11"
-                                                               Margin="8,0,0,0"
-                                                               Foreground="{StaticResource TextSecondaryBrush}"/>
-                                                    <Border Background="#EAF0FF"
-                                                            CornerRadius="4"
-                                                            Margin="8,0,0,0"
-                                                            Padding="5,0">
-                                                        <TextBlock Text="{Binding KindText}"
-                                                                   FontSize="10"
-                                                                   Foreground="#2F5FE0"/>
-                                                    </Border>
-                                                </StackPanel>
-                                                <Grid Margin="0,4,0,0">
-                                                    <Grid.ColumnDefinitions>
-                                                        <ColumnDefinition Width="*"/>
-                                                        <ColumnDefinition Width="Auto"/>
-                                                    </Grid.ColumnDefinitions>
-                                                    <TextBlock Text="{Binding Preview}"
-                                                               FontSize="13"
-                                                               TextWrapping="Wrap"
-                                                               Margin="0,0,10,0"/>
-                                                    <Button Grid.Column="1" Content="复制"
-                                                            Style="{StaticResource SmallButton}"
-                                                            Command="{Binding CopyCommand}"
-                                                            VerticalAlignment="Top"/>
-                                                </Grid>
+                                                <!-- 气泡：对方白底、自己品牌浅蓝 -->
+                                                <Border MaxWidth="420"
+                                                        Padding="9,7" CornerRadius="7"
+                                                        BorderThickness="1"
+                                                        ToolTip="点击打开文件；点路径打开所在文件夹"
+                                                        MouseLeftButtonUp="OnTransferBubbleClick">
+                                                    <Border.Style>
+                                                        <Style TargetType="Border">
+                                                            <Setter Property="Background" Value="{StaticResource ChatPeerBubbleBrush}"/>
+                                                            <Setter Property="BorderBrush" Value="{StaticResource ChatPeerBubbleStrokeBrush}"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding IsMine}" Value="True">
+                                                                    <Setter Property="Background" Value="{StaticResource ChatOwnBubbleBrush}"/>
+                                                                    <Setter Property="BorderBrush" Value="{StaticResource ChatOwnBubbleStrokeBrush}"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </Border.Style>
+                                                    <StackPanel>
+                                                        <!-- 文字 -->
+                                                        <TextBlock Text="{Binding Text}" FontSize="13"
+                                                                   TextWrapping="Wrap" LineHeight="19">
+                                                            <TextBlock.Style>
+                                                                <Style TargetType="TextBlock">
+                                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                                    <Style.Triggers>
+                                                                        <DataTrigger Binding="{Binding IsText}" Value="True">
+                                                                            <Setter Property="Visibility" Value="Visible"/>
+                                                                        </DataTrigger>
+                                                                    </Style.Triggers>
+                                                                </Style>
+                                                            </TextBlock.Style>
+                                                        </TextBlock>
+
+                                                        <!-- 文件卡片：类型徽标 + 文件名 / 大小 / 路径 -->
+                                                        <StackPanel>
+                                                            <StackPanel.Style>
+                                                                <Style TargetType="StackPanel">
+                                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                                    <Style.Triggers>
+                                                                        <DataTrigger Binding="{Binding IsFile}" Value="True">
+                                                                            <Setter Property="Visibility" Value="Visible"/>
+                                                                        </DataTrigger>
+                                                                    </Style.Triggers>
+                                                                </Style>
+                                                            </StackPanel.Style>
+                                                            <StackPanel Orientation="Horizontal">
+                                                                <Border Background="{StaticResource AccentSoftBrush}"
+                                                                        CornerRadius="4" Padding="5,1" MinWidth="32"
+                                                                        VerticalAlignment="Center">
+                                                                    <TextBlock Text="{Binding ExtensionText}"
+                                                                               FontSize="10" TextAlignment="Center"
+                                                                               Foreground="{StaticResource AccentBrush}"/>
+                                                                </Border>
+                                                                <TextBlock Text="{Binding FileName}" FontSize="12.5"
+                                                                           FontWeight="SemiBold" Margin="6,0,0,0"
+                                                                           TextTrimming="CharacterEllipsis" MaxWidth="320"/>
+                                                            </StackPanel>
+                                                            <TextBlock Text="{Binding SizeText}" FontSize="11"
+                                                                       Foreground="{StaticResource TextSecondaryBrush}"
+                                                                       Margin="0,4,0,0"/>
+                                                            <TextBlock Text="{Binding Directory}" FontSize="10"
+                                                                       Foreground="{StaticResource TextTertiaryBrush}"
+                                                                       Margin="0,2,0,0"
+                                                                       TextTrimming="CharacterEllipsis"
+                                                                       Cursor="Hand" ToolTip="点击打开所在文件夹"
+                                                                       MouseLeftButtonUp="OnTransferPathClick">
+                                                                <TextBlock.Style>
+                                                                    <Style TargetType="TextBlock">
+                                                                        <Setter Property="Visibility" Value="Visible"/>
+                                                                        <Style.Triggers>
+                                                                            <DataTrigger Binding="{Binding HasPath}" Value="False">
+                                                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                                            </DataTrigger>
+                                                                        </Style.Triggers>
+                                                                    </Style>
+                                                                </TextBlock.Style>
+                                                            </TextBlock>
+                                                        </StackPanel>
+
+                                                        <!-- 分享链接卡片：下载进度 + 去处理 PDF -->
+                                                        <StackPanel Width="280">
+                                                            <StackPanel.Style>
+                                                                <Style TargetType="StackPanel">
+                                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                                    <Style.Triggers>
+                                                                        <DataTrigger Binding="{Binding IsLink}" Value="True">
+                                                                            <Setter Property="Visibility" Value="Visible"/>
+                                                                        </DataTrigger>
+                                                                    </Style.Triggers>
+                                                                </Style>
+                                                            </StackPanel.Style>
+                                                            <StackPanel Orientation="Horizontal">
+                                                                <Border Background="{StaticResource AccentSoftBrush}"
+                                                                        CornerRadius="4" Padding="5,1"
+                                                                        VerticalAlignment="Center">
+                                                                    <TextBlock Text="链接" FontSize="10"
+                                                                               Foreground="{StaticResource AccentBrush}"/>
+                                                                </Border>
+                                                                <TextBlock Text="扫描全能王分享" FontSize="11"
+                                                                           Margin="6,0,0,0"
+                                                                           Foreground="{StaticResource TextSecondaryBrush}"
+                                                                           VerticalAlignment="Center"/>
+                                                            </StackPanel>
+                                                            <TextBlock Text="{Binding LinkTitle}" FontSize="12.5"
+                                                                       FontWeight="SemiBold" Margin="0,5,0,0"
+                                                                       TextWrapping="Wrap">
+                                                                <TextBlock.Style>
+                                                                    <Style TargetType="TextBlock">
+                                                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                                                        <Style.Triggers>
+                                                                            <DataTrigger Binding="{Binding HasLinkTitle}" Value="True">
+                                                                                <Setter Property="Visibility" Value="Visible"/>
+                                                                            </DataTrigger>
+                                                                        </Style.Triggers>
+                                                                    </Style>
+                                                                </TextBlock.Style>
+                                                            </TextBlock>
+                                                            <ProgressBar Height="3" Margin="0,7,0,0"
+                                                                         Foreground="{StaticResource AccentBrush}"
+                                                                         Background="{StaticResource BorderBrushLight}"
+                                                                         BorderThickness="0"
+                                                                         Value="{Binding LinkProgress, Mode=OneWay}"
+                                                                         IsIndeterminate="{Binding LinkProgressIndeterminate, Mode=OneWay}"/>
+                                                            <TextBlock Text="{Binding LinkStateText}" FontSize="11"
+                                                                       Foreground="{StaticResource TextSecondaryBrush}"
+                                                                       Margin="0,5,0,0" TextWrapping="Wrap"/>
+                                                            <Button Content="去处理 PDF"
+                                                                    FontSize="12" Padding="12,6"
+                                                                    HorizontalAlignment="Left"
+                                                                    Command="{Binding OpenPdfCommand}"
+                                                                    Margin="0,8,0,0">
+                                                                <Button.Style>
+                                                                    <Style TargetType="Button" BasedOn="{StaticResource PrimaryButton}">
+                                                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                                                        <Style.Triggers>
+                                                                            <DataTrigger Binding="{Binding LinkReady}" Value="True">
+                                                                                <Setter Property="Visibility" Value="Visible"/>
+                                                                            </DataTrigger>
+                                                                        </Style.Triggers>
+                                                                    </Style>
+                                                                </Button.Style>
+                                                            </Button>
+                                                        </StackPanel>
+                                                    </StackPanel>
+                                                </Border>
+
+                                                <!-- 对方的消息：时间贴在气泡右侧尾部 -->
+                                                <TextBlock Text="{Binding TimeText}"
+                                                           FontSize="10" VerticalAlignment="Bottom"
+                                                           Margin="6,0,0,3"
+                                                           Foreground="{StaticResource ChatTimeBrush}">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock">
+                                                            <Setter Property="Visibility" Value="Visible"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding IsMine}" Value="True">
+                                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
                                             </StackPanel>
-                                        </Border>
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
-                        </ScrollViewer>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                            </Grid>
+                        </Border>
+
+                        <!-- 输入条：文字 + 发送 + 文件 -->
+                        <Grid Grid.Row="2" Margin="16,10,16,14">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBox Grid.Column="0" Style="{StaticResource InputBox}"
+                                     Height="36" VerticalContentAlignment="Center"
+                                     Text="{Binding Transfer.DraftText, UpdateSourceTrigger=PropertyChanged}">
+                                <TextBox.InputBindings>
+                                    <KeyBinding Key="Enter" Command="{Binding Transfer.SendTextCommand}"/>
+                                </TextBox.InputBindings>
+                            </TextBox>
+                            <Button Grid.Column="1" Content="发送"
+                                    Style="{StaticResource PrimaryButton}"
+                                    Command="{Binding Transfer.SendTextCommand}"
+                                    Margin="10,0,0,0" Padding="16,8"/>
+                            <Button Grid.Column="2" Content="文件"
+                                    Style="{StaticResource SmallButton}"
+                                    Command="{Binding Transfer.SendFileCommand}"
+                                    Margin="8,0,0,0"
+                                    ToolTip="选择文件或图片发送到手机"/>
                         </Grid>
                     </Grid>
                 </Border>
@@ -674,7 +839,7 @@
              into a finished PDF immediately. The user checks the pages that belong together,
              picks a pack (并排/上下/四宫格) and crop mode, previews the actual cut, then merges
              into one file. Generic layouts — no document type is hardcoded. -->
-        <Border Margin="0,0,0,16" Style="{StaticResource CardBorder}"
+        <Border Grid.Row="1" Margin="0,0,0,16" Style="{StaticResource CardBorder}"
                 Visibility="{Binding Transfer.HasPendingPages, Converter={StaticResource BoolToVis}}">
             <StackPanel Margin="20,16">
                 <StackPanel Orientation="Horizontal">
@@ -853,6 +1018,78 @@
             TransferTemplate="{StaticResource Page.Transfer}"
             ScreenshotTemplate="{StaticResource Page.Screenshot}"/>
         <presentation:FeaturePageKindConverter x:Key="FeaturePageKind"/>
+
+        <!-- ===== 页头动作（标题行右侧）=====
+             每个页面 kind 最多带一个动作条；没有动作的页面解析为 null，标题行右侧留空。
+             模板内部把 DataContext 重新绑回窗口（选择器传入的是 feature 本身）。 -->
+        <DataTemplate x:Key="Header.Transfer">
+            <Grid DataContext="{Binding DataContext, RelativeSource={RelativeSource AncestorType=Window}}">
+                <ToggleButton Content="&#xE712;"
+                              FontFamily="Segoe MDL2 Assets" FontSize="14"
+                              Width="30" Height="30"
+                              Background="Transparent" BorderThickness="0"
+                              Foreground="{StaticResource TextSecondaryBrush}"
+                              Cursor="Hand" Focusable="False"
+                              x:Name="TransferHeaderMenu"
+                              ToolTip="二维码 / 连接地址 / 停止接收">
+                    <ToggleButton.Style>
+                        <Style TargetType="ToggleButton">
+                            <Setter Property="Visibility" Value="Collapsed"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding Transfer.IsRunning}" Value="True">
+                                    <Setter Property="Visibility" Value="Visible"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </ToggleButton.Style>
+                </ToggleButton>
+                <Popup PlacementTarget="{Binding ElementName=TransferHeaderMenu}"
+                       IsOpen="{Binding IsChecked, ElementName=TransferHeaderMenu}"
+                       StaysOpen="False" Placement="Bottom" HorizontalOffset="-236">
+                    <Border Width="266" Background="White" CornerRadius="10"
+                            BorderBrush="{StaticResource ShellCardStrokeBrush}"
+                            BorderThickness="1" Padding="16">
+                        <Border.Effect>
+                            <DropShadowEffect Color="#000000" BlurRadius="18"
+                                              ShadowDepth="4" Opacity="0.18"/>
+                        </Border.Effect>
+                        <StackPanel>
+                            <TextBlock Text="手机扫码连接" FontSize="13" FontWeight="SemiBold"/>
+                            <Image Source="{Binding Transfer.QrImage}"
+                                   Width="168" Height="168" Margin="0,10"/>
+                            <TextBlock Text="{Binding Transfer.UrlText}"
+                                       FontSize="11" TextWrapping="Wrap"
+                                       Foreground="{StaticResource TextSecondaryBrush}"/>
+                            <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                                <Button Content="{Binding Transfer.ToggleText}"
+                                        Style="{StaticResource SmallButton}"
+                                        Command="{Binding Transfer.ToggleCommand}"/>
+                                <Button Content="打开文件夹"
+                                        Style="{StaticResource SmallButton}"
+                                        Command="{Binding Transfer.OpenFolderCommand}"
+                                        Margin="8,0,0,0"/>
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+                </Popup>
+            </Grid>
+        </DataTemplate>
+
+        <!-- PDF 处理页：从聊天跳过来时，标题行右侧提供「返回手机传文件」。 -->
+        <DataTemplate x:Key="Header.Files">
+            <Grid DataContext="{Binding DataContext, RelativeSource={RelativeSource AncestorType=Window}}">
+                <Button Content="&#xE72B; 返回手机传文件"
+                        Style="{StaticResource GhostButton}"
+                        FontSize="12" Padding="12,7"
+                        Command="{Binding ReturnToTransferPageCommand}"
+                        Visibility="{Binding CanReturnToTransfer, Converter={StaticResource BoolToVis}}"
+                        ToolTip="回到手机传文件的聊天窗口"/>
+            </Grid>
+        </DataTemplate>
+
+        <presentation:FeaturePageHeaderSelector x:Key="FeatureHeaderSelector"
+            TransferHeaderTemplate="{StaticResource Header.Transfer}"
+            FilesHeaderTemplate="{StaticResource Header.Files}"/>
 
         <!-- Shared chip template: used by the inline row and by the expanded wrap row below the name -->
         <DataTemplate DataType="{x:Type vm:SuffixChipViewModel}">
@@ -1151,9 +1388,13 @@
                 <RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
 
-            <!-- Header: current feature -->
+            <!-- Header: current feature + this page kind's action strip (title row, right) -->
             <Grid Grid.Row="0" Margin="0,0,0,16">
-                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
                     <TextBlock Text="{Binding SelectedFeature.DisplayName}"
                                FontSize="21" FontWeight="Bold"
                                Foreground="{StaticResource TextPrimaryBrush}"/>
@@ -1170,6 +1411,13 @@
                                Foreground="{StaticResource TextSecondaryBrush}"
                                VerticalAlignment="Center" Margin="10,0,0,0"/>
                 </StackPanel>
+                <!-- Page actions declared by the feature's page kind (empty for most pages). -->
+                <ContentControl Grid.Column="1"
+                                Content="{Binding SelectedFeature}"
+                                ContentTemplateSelector="{StaticResource FeatureHeaderSelector}"
+                                VerticalAlignment="Center"
+                                Focusable="False"
+                                IsTabStop="False"/>
             </Grid>
 
         <!-- Feature page: the ViewLocator picks the template declared by the feature's
@@ -1845,8 +2093,10 @@
             </Grid>
         </Border>
 
-        <!-- Footer -->
-        <Grid Grid.Row="3" Margin="0,14,0,0">
+        <!-- Footer: job-list pages only. 快速搜索 and 手机传文件 own their lists and have no
+             board footer to clear. -->
+        <Grid Grid.Row="3" Margin="0,14,0,0"
+              Visibility="{Binding SelectedPresentation.PageKind, Converter={StaticResource FeaturePageKind}, ConverterParameter=JobList}">
             <TextBlock FontSize="12"
                        Foreground="{StaticResource TextSecondaryBrush}"
                        VerticalAlignment="Center">

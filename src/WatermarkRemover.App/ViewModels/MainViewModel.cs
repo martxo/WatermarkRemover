@@ -166,6 +166,8 @@ public sealed partial class MainViewModel : ObservableObject
             Settings, _shell, message => AppLog.Trace(message, null), _composition.OcrEngine);
         Transfer.FileReceived += OnTransferFileReceived;
         Transfer.ShareDocumentReceived += OnTransferShareDocumentReceived;
+        Transfer.PdfPageRequested += OnTransferPdfPageRequested;
+        ReturnToTransferPageCommand = new RelayCommand(ReturnToTransferPage);
 
         // --- 快速搜索 ---
         // The page asks the local index host over a named pipe. The index itself lives in a
@@ -358,6 +360,10 @@ public sealed partial class MainViewModel : ObservableObject
 
         // 首次进入快速搜索页时自动完成索引引擎的一次性授权安装（UAC 同意即可，无需再找按钮）。
         if (_selectedFeature.Id == "search.page") _ = Search.ActivateAsync();
+
+        // The chat → PDF round trip is a one-shot affordance: navigating anywhere else ends it,
+        // so a stale 「返回手机传文件」 never sits on an unrelated page's header.
+        if (_selectedFeature.Id != PdfProcessorFeatureId) CanReturnToTransfer = false;
     }
 
     /// <summary>Builds and unfolds the row's strip immediately (scans call this the moment the

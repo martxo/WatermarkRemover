@@ -3,6 +3,7 @@ using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using WatermarkRemover.Core.Settings;
 
@@ -52,6 +53,10 @@ public sealed class LanTransferServer : IDisposable
     /// is a status-bar friendly phrase.</summary>
     public event Action<string>? UploadFailed;
 
+    /// <summary>Raised on a handler thread whenever either side adds a chat row. The computer
+    /// page subscribes to append its bubble; subscribers marshal to their own context.</summary>
+    public event Action<TransferChatMessage>? ChatMessageAdded;
+
     /// <summary>Fixed LAN port: deterministic for the URL reservation, and obscure enough to
     /// almost never collide.</summary>
     private const int DefaultPort = 52125;
@@ -76,6 +81,11 @@ public sealed class LanTransferServer : IDisposable
     private Thread? _contextThread;
     private string? _token;
     private volatile int _busy; // 1 while an upload is being written (single-phone flow)
+    private readonly List<TransferChatMessage> _chat = new();
+    private readonly Dictionary<int, string> _chatFiles = new();
+    private readonly object _chatLock = new();
+    private int _nextChatId;
+    private string? _outboxDirectory;
 
     /// <summary>Upper bound for one upload request; a stalled phone can't hold the receiver
     /// forever. Generous: phone videos over Wi-Fi may take minutes per GB.</summary>
@@ -109,6 +119,7 @@ public sealed class LanTransferServer : IDisposable
         Directory.CreateDirectory(targetDirectory);
         _options.TargetDirectory = targetDirectory;
         _token = NewToken();
+        _outboxDirectory = Path.Combine(Path.GetTempPath(), "WatermarkRemover-Outbox", _token);
 
         bool wildcard;
         int port;
@@ -271,8 +282,92 @@ public sealed class LanTransferServer : IDisposable
         IsRunning = false;
         try { _listener?.Close(); } catch { /* already gone */ }
         _listener = null;
+        lock (_chatLock)
+        {
+            _chat.Clear();
+            _chatFiles.Clear();
+            _nextChatId = 0;
+        }
+        if (_outboxDirectory is { } outbox)
+        {
+            try { Directory.Delete(outbox, recursive: true); } catch { /* best effort */ }
+            _outboxDirectory = null;
+        }
         _trace("手机传文件：接收服务已停止");
     }
+
+    /// <summary>Rows of the current session newer than <paramref name="afterId"/>; a pure read
+    /// used by both the phone's polling endpoint and the computer's chat list.</summary>
+    public IReadOnlyList<TransferChatMessage> Snapshot(int afterId = 0)
+    {
+        lock (_chatLock) return _chat.Where(message => message.Id > afterId).ToArray();
+    }
+
+    /// <summary>Local file behind a chat row (phone upload target or computer outbox copy).
+    /// Kept off the HTTP wire on purpose; only the computer UI needs it.</summary>
+    public string? LocalPathFor(int messageId)
+    {
+        lock (_chatLock) return _chatFiles.GetValueOrDefault(messageId);
+    }
+
+    /// <summary>Computer → phone text. Added to the shared log and broadcast to both ends.</summary>
+    public void SendText(string text)
+    {
+        text = text?.Trim() ?? string.Empty;
+        if (text.Length == 0) return;
+        AddChatMessage(TransferChatDirection.Computer, TransferChatKind.Text, text, string.Empty, 0, null);
+    }
+
+    /// <summary>
+    /// Computer → phone file or image: the source is copied into the session outbox first, so
+    /// moving/deleting the original afterwards does not break the phone's download link.
+    /// </summary>
+    public async Task SendFileAsync(string sourcePath, CancellationToken cancellationToken = default)
+    {
+        if (!File.Exists(sourcePath)) return;
+
+        string name = Path.GetFileName(sourcePath);
+        string outbox = _outboxDirectory
+            ?? throw new InvalidOperationException("接收服务未启动，无法发送文件。");
+        Directory.CreateDirectory(outbox);
+        string target = OutputNameGenerator.FindAvailablePath(outbox, SanitizeFileName(name));
+
+        await using (var input = File.OpenRead(sourcePath))
+        await using (var output = new FileStream(target, FileMode.CreateNew, FileAccess.Write, FileShare.None, 1 << 16))
+        {
+            await input.CopyToAsync(output, cancellationToken).ConfigureAwait(false);
+        }
+
+        long size = new FileInfo(target).Length;
+        AddChatMessage(TransferChatDirection.Computer, KindForName(name), string.Empty, name, size, target);
+    }
+
+    private TransferChatMessage AddChatMessage(
+        TransferChatDirection direction, TransferChatKind kind, string text,
+        string fileName, long size, string? filePath)
+    {
+        TransferChatMessage message;
+        lock (_chatLock)
+        {
+            int id = ++_nextChatId;
+            message = new TransferChatMessage(
+                id, direction, kind, text, fileName, size, DateTime.Now);
+            _chat.Add(message);
+            if (filePath is not null) _chatFiles[id] = filePath;
+        }
+
+        ChatMessageAdded?.Invoke(message);
+        return message;
+    }
+
+    /// <summary>Images render inline on the phone; every other file is a download card.</summary>
+    private static TransferChatKind KindForName(string name) =>
+        Path.GetExtension(name).ToLowerInvariant() switch
+        {
+            ".png" or ".jpg" or ".jpeg" or ".gif" or ".webp" or ".bmp" or ".heic" or ".heif"
+                => TransferChatKind.Image,
+            _ => TransferChatKind.File,
+        };
 
     public void Dispose() => Stop();
 
@@ -316,8 +411,14 @@ public sealed class LanTransferServer : IDisposable
 
             if (request.HttpMethod != "POST")
             {
-                WriteText(response, 200, "text/html; charset=utf-8", MobileUploadPage.Html);
-                PageOpened?.Invoke();
+                string path = request.Url?.AbsolutePath ?? "/";
+                if (path == "/chat") HandleChat(request, response);
+                else if (path.StartsWith("/download/", StringComparison.Ordinal)) HandleDownload(request, response);
+                else
+                {
+                    WriteText(response, 200, "text/html; charset=utf-8", MobileUploadPage.Html);
+                    PageOpened?.Invoke();
+                }
             }
             else if (request.Url?.AbsolutePath == "/text")
                 HandleText(request, response);
@@ -413,6 +514,9 @@ public sealed class LanTransferServer : IDisposable
                     saved++;
                     _trace($"手机传文件：已接收 {Path.GetFileName(target)}（{bytes / 1024.0:F1} KB）");
                     FileReceived?.Invoke(target, bytes);
+                    AddChatMessage(
+                        TransferChatDirection.Phone, KindForName(target), string.Empty,
+                        Path.GetFileName(target), bytes, target);
                 }
 
                 if (!reader.NextPart()) break;
@@ -462,9 +566,89 @@ public sealed class LanTransferServer : IDisposable
 
         _trace($"手机传文件：已接收文本（{body.Length} 字，来自 {message.SenderLabel}）");
         TextReceived?.Invoke(message);
+        AddChatMessage(TransferChatDirection.Phone, TransferChatKind.Text, body, string.Empty, 0, null);
         WriteText(response, 200, "application/json; charset=utf-8",
             $$"""{"ok":true,"time":"{{message.ReceivedAt:HH:mm}}"}""");
     }
+
+    /// <summary>Polling endpoint for the phone page: rows after <c>after</c>, newest last.</summary>
+    private void HandleChat(HttpListenerRequest request, HttpListenerResponse response)
+    {
+        int after = QueryInt(request.Url?.Query, "after");
+        IReadOnlyList<TransferChatMessage> rows = Snapshot(after);
+        var payload = rows.Select(message => new
+        {
+            id = message.Id,
+            dir = message.Direction == TransferChatDirection.Phone ? "phone" : "computer",
+            kind = message.Kind switch
+            {
+                TransferChatKind.Text => "text",
+                TransferChatKind.Image => "image",
+                _ => "file",
+            },
+            text = message.Text,
+            name = message.FileName,
+            size = message.Size,
+            time = message.CreatedAt.ToString("HH:mm"),
+        });
+
+        WriteText(response, 200, "application/json; charset=utf-8",
+            JsonSerializer.Serialize(new { messages = payload }));
+    }
+
+    /// <summary>Streams a computer-sent file to the phone; images render inline, others download.</summary>
+    private void HandleDownload(HttpListenerRequest request, HttpListenerResponse response)
+    {
+        const string prefix = "/download/";
+        string path = request.Url?.AbsolutePath ?? string.Empty;
+        int id = int.TryParse(path[prefix.Length..], out int parsed) ? parsed : 0;
+
+        string? file;
+        lock (_chatLock) file = _chatFiles.GetValueOrDefault(id);
+        if (file is null || !File.Exists(file))
+        {
+            WriteText(response, 404, "text/plain; charset=utf-8", "文件不存在或已过期");
+            return;
+        }
+
+        string name = Path.GetFileName(file);
+        bool inline = KindForName(name) == TransferChatKind.Image;
+        response.StatusCode = 200;
+        response.ContentType = ContentTypeFor(name);
+        response.AddHeader(
+            "Content-Disposition",
+            $"{(inline ? "inline" : "attachment")}; filename*=UTF-8''{Uri.EscapeDataString(name)}");
+        response.ContentLength64 = new FileInfo(file).Length;
+        response.KeepAlive = false;
+
+        using var source = File.OpenRead(file);
+        source.CopyTo(response.OutputStream);
+    }
+
+    private static int QueryInt(string? query, string key)
+    {
+        foreach (var pair in (query ?? string.Empty).TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries))
+        {
+            int eq = pair.IndexOf('=');
+            if (eq > 0 && pair[..eq] == key && int.TryParse(pair[(eq + 1)..], out int value)) return value;
+        }
+        return 0;
+    }
+
+    private static string ContentTypeFor(string name) =>
+        Path.GetExtension(name).ToLowerInvariant() switch
+        {
+            ".png" => "image/png",
+            ".jpg" or ".jpeg" => "image/jpeg",
+            ".gif" => "image/gif",
+            ".webp" => "image/webp",
+            ".bmp" => "image/bmp",
+            ".pdf" => "application/pdf",
+            ".txt" => "text/plain; charset=utf-8",
+            ".mp4" => "video/mp4",
+            ".mov" => "video/quicktime",
+            _ => "application/octet-stream",
+        };
 
     /// <summary>Builds a short, human sender label from the phone's browser UA and IP tail —
     /// enough to tell senders apart in the message list, no deeper device probing.</summary>
