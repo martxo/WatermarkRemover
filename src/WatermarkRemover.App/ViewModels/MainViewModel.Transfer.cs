@@ -113,5 +113,10 @@ public sealed partial class MainViewModel
     }
 
     /// <summary>Stops the LAN receiver; the window calls this on close so the port frees at once.</summary>
-    public void Shutdown() => Transfer.Stop();
+    public void Shutdown()
+    {
+        // Last chance to sync dataset truth with the PDFs the previews may have edited.
+        _preview.FlushAllDatasets();
+        Transfer.Stop();
+    }
 }

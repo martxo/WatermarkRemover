@@ -2,6 +2,7 @@ using System.IO;
 using System.Windows;
 using System.ComponentModel;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Runtime.InteropServices;
 using Microsoft.Win32;
@@ -176,6 +177,11 @@ public partial class MainWindow : Window
     /// </summary>
     private async void OnWindowLoaded(object sender, RoutedEventArgs e)
     {
+        // The ViewModel restores the journal INSIDE its constructor, before this window can
+        // subscribe to Jobs.CollectionChanged — so a restored scan history never fired the
+        // visibility sync and the list stayed collapsed until the next scan added a row. Sync
+        // once now that the bindings are live.
+        SyncListVisibility();
         // Explorer/double-click launches are usually allowed to take the foreground; calling
         // Activate also covers a launch that started behind an already-open browser window.
         Activate();
@@ -219,7 +225,7 @@ public partial class MainWindow : Window
         // capture, full-screen capture and the shelf, each independently configurable.
         _hotkeys = new GlobalHotkeyService(hwnd, 0x5348, OnScreenshotHotkey);
         _fullScreenHotkeys = new GlobalHotkeyService(hwnd, 0x534B, OnFullScreenHotkey);
-        _shelfHotkeys = new GlobalHotkeyService(hwnd, 0x534A, ToggleScreenshotShelf);
+        _shelfHotkeys = new GlobalHotkeyService(hwnd, 0x534A, OnShelfHotkey);
         RegisterScreenshotHotkeys();
 
         _tray = new TrayIconService(hwnd, ShowFromTray, () => _ = _viewModel.CaptureScreenshotAsync(),
@@ -302,6 +308,14 @@ public partial class MainWindow : Window
             _viewModel.ScreenshotShelfItems, _viewModel.OpenScreenshotFolder,
             _viewModel.Settings.ScreenshotTrigger);
         shelf.MarkupRequested += (_, job) => ShowImageMarkup(job);
+        shelf.OcrRequested += (_, job) =>
+        {
+            if (job.OutputPath is { } path) _ = ShowScreenshotOcrAsync(path);
+        };
+        shelf.PinRequested += (_, job) =>
+        {
+            if (job.OutputPath is { } path && File.Exists(path)) PinnedImageWindow.ShowFor(path);
+        };
         shelf.Closed += (_, _) => _shelf = null;
         _shelf = shelf;
         // ShowActivated=False in XAML: the line appears without stealing focus from the app
@@ -382,20 +396,39 @@ public partial class MainWindow : Window
 
     /// <summary>
     /// WM_HOTKEY: the view model guards against overlapping captures, so a double press (or a
-    /// press while the page button already started one) simply does nothing. The settings page
-    /// is ignored on purpose: recording a gesture there must not launch a capture over it.
+    /// press while the page button already started one) simply does nothing. A global shortcut
+    /// must fire wherever it is pressed — including over the settings page — so there is no
+    /// settings/focus gate here; a registered gesture never reaches the recorder box anyway.
     /// </summary>
     private void OnScreenshotHotkey()
     {
-        if (_viewModel.IsSettingsOpen) return;
+        AppLog.Debug("截图快捷键触发（区域）");
         _ = _viewModel.CaptureScreenshotAsync();
     }
 
     /// <summary>WM_HOTKEY for a full-screen capture (no region overlay).</summary>
     private void OnFullScreenHotkey()
     {
-        if (_viewModel.IsSettingsOpen) return;
+        AppLog.Debug("截图快捷键触发（全屏）");
         _ = _viewModel.CaptureFullScreenAsync(0);
+    }
+
+    /// <summary>WM_HOTKEY for the screenshot shelf (Ctrl+Alt+T by default).</summary>
+    private void OnShelfHotkey()
+    {
+        AppLog.Debug("截图快捷键触发（晾衣绳）");
+        ToggleScreenshotShelf();
+    }
+
+    /// <summary>
+    /// 快速搜索：点击结果的路径行直接打开所在文件夹（与软件其它位置一致）。这里把事件吃掉，
+    /// 避免同一次点击再冒泡去触发整行的双击打开。
+    /// </summary>
+    private void OnSearchPathClick(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is FrameworkElement { DataContext: SearchResultItemViewModel row })
+            row.OpenFolderCommand.Execute(null);
+        e.Handled = true;
     }
 
     /// <summary>

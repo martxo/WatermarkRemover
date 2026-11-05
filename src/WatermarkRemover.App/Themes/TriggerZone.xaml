@@ -1,22 +1,14 @@
 <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
-    <!-- 触发区域「云朵」：鼠标悬上热区时浮出的半透明云（运行时指示器 TriggerZoneIndicator），
-         以及截图设置示意图里的同款热区块（ScreenshotTriggerEditor）。形状、颜色、阴影只在
-         这一处定义——运行时与设置页因此永远长一个样，改云朵只需改这一处。 -->
+    <!-- 触发区域样式：截图设置示意图里的热区块（ScreenshotTriggerEditor）。
+         形状、颜色、阴影只在这一处定义，改样式只需改这一处。 -->
 
-    <!-- 云体：运行时偏实（浮在任意窗口内容上要看得见），设置页偏透（灰底示意图上不抢戏） -->
-    <SolidColorBrush x:Key="TriggerCloudFillBrush" Color="#CCFFFFFF"/>
+    <!-- 热区块：灰底示意图上偏透，不抢戏 -->
     <SolidColorBrush x:Key="TriggerCloudSoftFillBrush" Color="#80FFFFFF"/>
     <SolidColorBrush x:Key="TriggerCloudEdgeBrush" Color="#99FFFFFF"/>
 
-    <!-- 柔光阴影：零投影距离 + 大模糊，是云朵「浮起来」的唯一来源 -->
+    <!-- 柔光阴影：零投影距离 + 大模糊，是热区块「浮起来」的唯一来源 -->
     <DropShadowEffect x:Key="TriggerCloudShadow" BlurRadius="16" ShadowDepth="0"
                       Color="#3D000000" Opacity="0.45"/>
-
-    <!-- 76×40 的蓬蓬云：五段二次贝塞尔手工收边，左/中/右三个瓣加平底。
-         StreamGeometry 可被多个 Path 安全共享（冻结后跨窗口复用无问题）。 -->
-    <StreamGeometry x:Key="TriggerCloudGeometry">
-        M 12,32 Q 0,30 3,21 Q 6,10 19,13 Q 24,1 38,5 Q 51,-1 58,12 Q 72,9 71,22 Q 76,29 68,34 Q 57,42 42,37 Q 27,43 17,37 Q 5,35 12,32 Z
-    </StreamGeometry>
 </ResourceDictionary>

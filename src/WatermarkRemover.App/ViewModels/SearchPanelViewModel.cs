@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Windows;
@@ -30,7 +31,7 @@ public sealed class SearchPanelViewModel : ObservableObject
     private bool _isAvailable;
     private bool _isInstalling;
     private bool _availabilityChecked;
-    private SearchResultItemViewModel? _selectedResult;
+    private bool _autoInstallAttempted;
 
     public SearchPanelViewModel(
         IFileSearchProvider provider,
@@ -45,10 +46,8 @@ public sealed class SearchPanelViewModel : ObservableObject
         _setup = provider as IIndexSetup;
 
         SearchCommand = new RelayCommand(() => _ = RunSearchAsync(), () => !IsSearching);
-        OpenCommand = new RelayCommand(() => OpenSelected(SelectedResult), () => SelectedResult is not null);
-        OpenFolderCommand = new RelayCommand(RevealSelected, () => SelectedResult is not null);
-        CopyPathCommand = new RelayCommand(CopySelectedPath, () => SelectedResult is not null);
-        DeleteCommand = new RelayCommand(DeleteSelected, () => SelectedResult is not null);
+        DeleteCheckedCommand = new RelayCommand(DeleteChecked, () => HasChecked);
+        ClearCheckedCommand = new RelayCommand(ClearChecked, () => HasChecked);
         InstallProviderCommand = new RelayCommand(() => _ = InstallAsync(), () => !IsInstalling);
 
         _isAvailable = _provider.IsAvailable;
@@ -66,13 +65,11 @@ public sealed class SearchPanelViewModel : ObservableObject
 
     public RelayCommand SearchCommand { get; }
 
-    public RelayCommand OpenCommand { get; }
+    /// <summary>Batch delete; enabled only when at least one row is checked.</summary>
+    public RelayCommand DeleteCheckedCommand { get; }
 
-    public RelayCommand OpenFolderCommand { get; }
-
-    public RelayCommand CopyPathCommand { get; }
-
-    public RelayCommand DeleteCommand { get; }
+    /// <summary>Unchecks every row (the batch bar disappears with it).</summary>
+    public RelayCommand ClearCheckedCommand { get; }
 
     public RelayCommand InstallProviderCommand { get; }
 
@@ -145,11 +142,12 @@ public sealed class SearchPanelViewModel : ObservableObject
         }
     }
 
-    public SearchResultItemViewModel? SelectedResult
-    {
-        get => _selectedResult;
-        set => SetProperty(ref _selectedResult, value);
-    }
+    /// <summary>How many rows are checked; drives the batch bar's visibility and its delete button.</summary>
+    public int CheckedCount => Results.Count(row => row.IsChecked);
+
+    public bool HasChecked => CheckedCount > 0;
+
+    public string CheckedSummary => $"已勾选 {CheckedCount} 项";
 
     /// <summary>Runs a query immediately, cancelling any pending debounce. Used by Enter and by tests.</summary>
     internal async Task RunSearchAsync(CancellationToken cancellationToken = default)
@@ -225,12 +223,39 @@ public sealed class SearchPanelViewModel : ObservableObject
 
     private void ReplaceResults(IReadOnlyList<FileSearchResult> hits)
     {
+        foreach (SearchResultItemViewModel row in Results) row.PropertyChanged -= OnRowPropertyChanged;
         Results.Clear();
-        foreach (var hit in hits) Results.Add(new SearchResultItemViewModel(hit, OpenSelected));
-        SelectedResult = null;
+        foreach (FileSearchResult hit in hits)
+        {
+            var row = new SearchResultItemViewModel(hit, OpenRow, RevealRow, CopyRowPath);
+            row.PropertyChanged += OnRowPropertyChanged;
+            Results.Add(row);
+        }
+
+        RaiseCheckedChanged();
     }
 
-    private void OpenSelected(SearchResultItemViewModel? row)
+    private void OnRowPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(SearchResultItemViewModel.IsChecked)) RaiseCheckedChanged();
+    }
+
+    private void RaiseCheckedChanged()
+    {
+        OnPropertyChanged(nameof(CheckedCount));
+        OnPropertyChanged(nameof(HasChecked));
+        OnPropertyChanged(nameof(CheckedSummary));
+        DeleteCheckedCommand.RaiseCanExecuteChanged();
+        ClearCheckedCommand.RaiseCanExecuteChanged();
+    }
+
+    private void ClearChecked()
+    {
+        foreach (SearchResultItemViewModel row in Results) row.IsChecked = false;
+        RaiseCheckedChanged();
+    }
+
+    private void OpenRow(SearchResultItemViewModel? row)
     {
         if (row is null) return;
 
@@ -251,21 +276,19 @@ public sealed class SearchPanelViewModel : ObservableObject
         }
     }
 
-    private void RevealSelected()
+    /// <summary>Clicking the path line reveals the hit's parent folder (the app-wide gesture).</summary>
+    private void RevealRow(SearchResultItemViewModel row)
     {
-        if (SelectedResult is null) return;
-        if (!_shell.TryOpenDirectory(SelectedResult.Directory, out string? error))
+        if (!_shell.TryOpenDirectory(row.Directory, out string? error))
             StatusText = "打开失败：" + error;
     }
 
-    private void CopySelectedPath()
+    private void CopyRowPath(SearchResultItemViewModel row)
     {
-        if (SelectedResult is null) return;
-
         try
         {
-            Clipboard.SetText(SelectedResult.FullPath);
-            StatusText = "路径已复制";
+            Clipboard.SetText(row.FullPath);
+            StatusText = $"路径已复制：{row.Name}";
         }
         catch (Exception ex)
         {
@@ -274,29 +297,82 @@ public sealed class SearchPanelViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Removes a hit from the list by sending it to the Recycle Bin. Confirm first — the button
-    /// sits next to 打开 and a folder takes its whole contents with it. The index host sees the
-    /// delete through the USN journal within a second, so no local re-scan is needed.
+    /// Moves every checked hit to the Recycle Bin. Confirm once for the whole batch — folders
+    /// take their contents with them, and the index host picks the delete up through the USN
+    /// journal within a second, so no local re-scan is needed.
     /// </summary>
-    private void DeleteSelected()
+    private void DeleteChecked()
     {
-        if (SelectedResult is null) return;
-        var row = SelectedResult;
+        List<SearchResultItemViewModel> rows = Results.Where(row => row.IsChecked).ToList();
+        if (rows.Count == 0) return;
 
-        string detail = row.IsFolder
-            ? $"文件夹「{row.Name}」及其中的所有内容都会被移到回收站，之后可在回收站还原。"
-            : $"文件「{row.Name}」会被移到回收站，之后可在回收站还原。";
+        string detail;
+        if (rows.Count == 1)
+        {
+            SearchResultItemViewModel row = rows[0];
+            detail = row.IsFolder
+                ? $"文件夹「{row.Name}」及其中的所有内容都会被移到回收站，之后可在回收站还原。"
+                : $"文件「{row.Name}」会被移到回收站，之后可在回收站还原。";
+        }
+        else
+        {
+            int folders = rows.Count(row => row.IsFolder);
+            string folderNote = folders > 0 ? $"其中 {folders} 个文件夹会连同内容一起删除。" : string.Empty;
+            detail = $"选中的 {rows.Count} 项会被移到回收站，之后可在回收站还原。{folderNote}";
+        }
+
         if (!_dialogs.ConfirmYesNo(detail, "移到回收站")) return;
 
-        if (!_recycleBin.TryDelete(row.FullPath, row.IsFolder, out string? error))
+        var failures = new List<string>();
+        foreach (SearchResultItemViewModel row in rows)
         {
-            StatusText = "删除失败：" + error;
+            if (_recycleBin.TryDelete(row.FullPath, row.IsFolder, out string? error))
+            {
+                row.PropertyChanged -= OnRowPropertyChanged;
+                Results.Remove(row);
+            }
+            else
+            {
+                failures.Add($"{row.Name}：{error}");
+            }
+        }
+
+        RaiseCheckedChanged();
+
+        if (failures.Count == 0)
+        {
+            StatusText = rows.Count == 1
+                ? $"已移到回收站：{rows[0].Name}"
+                : $"已将 {rows.Count} 项移到回收站";
+        }
+        else if (failures.Count == rows.Count)
+        {
+            StatusText = $"删除失败：{string.Join("；", failures)}";
+        }
+        else
+        {
+            StatusText = $"已删除 {rows.Count - failures.Count} 项，{failures.Count} 项失败：{failures[0]}";
+        }
+    }
+
+    /// <summary>
+    /// Called when 快速搜索 becomes the visible page. On a machine that has never installed the
+    /// engine, this starts the one-time elevated install immediately — the UAC consent is the
+    /// only click left, instead of asking the user to find and press the setup button. If the
+    /// consent is dismissed, later page visits keep the manual button (no repeat nagging).
+    /// </summary>
+    public async Task ActivateAsync()
+    {
+        if (_autoInstallAttempted || IsInstalling) return;
+        _autoInstallAttempted = true;
+
+        if (_setup is { IsInstalled: false })
+        {
+            await InstallAsync();
             return;
         }
 
-        Results.Remove(row);
-        SelectedResult = null;
-        StatusText = $"已移到回收站：{row.Name}";
+        await RefreshAvailabilityAsync();
     }
 
     private async Task RefreshAvailabilityAsync()

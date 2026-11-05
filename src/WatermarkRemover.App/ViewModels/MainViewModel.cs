@@ -355,6 +355,9 @@ public sealed partial class MainViewModel : ObservableObject
         // Each section owns its own upload batch: the footer button follows the page.
         OnPropertyChanged(nameof(CanUploadBatch));
         OnPropertyChanged(nameof(UploadBatchHint));
+
+        // 首次进入快速搜索页时自动完成索引引擎的一次性授权安装（UAC 同意即可，无需再找按钮）。
+        if (_selectedFeature.Id == "search.page") _ = Search.ActivateAsync();
     }
 
     /// <summary>Builds and unfolds the row's strip immediately (scans call this the moment the

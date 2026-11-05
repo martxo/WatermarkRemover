@@ -105,6 +105,11 @@ public sealed class AppSettings
     /// of documents a day, so the mode is remembered rather than re-checked every launch.</summary>
     public bool ContinuousScan { get; set; }
 
+    /// <summary>扫描训练数据导出（默认关闭）：每份扫描落一个本地目录，保存生产同域的 256px
+    /// 探针、原始帧灰度图、逐页票面与最终 /Rotate 真值，供后续方向模型自监督微调。只写本地、
+    /// 不上传；环境变量 WMR_DATASET_EXPORT=1 也可开启（便于不改 UI 直接抓数据）。</summary>
+    public bool ScanDatasetExportEnabled { get; set; }
+
     /// <summary>Scan colour mode (扫描色彩): 0 = 自动, 1 = 彩色, 2 = 灰度, 3 = 黑白. Defaults to
     /// 黑白 — text documents scan ~2x faster and produce far smaller, crisper PDFs.</summary>
     public int ScanColor { get; set; } = 3;
@@ -197,6 +202,7 @@ public sealed class AppSettings
         ScanDuplex = ScanDuplex,
         PerPageOrientationEnabled = PerPageOrientationEnabled,
         ContinuousScan = ContinuousScan,
+        ScanDatasetExportEnabled = ScanDatasetExportEnabled,
         ScanColor = ScanColor,
         ScanOutputDirectory = ScanOutputDirectory,
         TransferOutputDirectory = TransferOutputDirectory,

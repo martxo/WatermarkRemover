@@ -30,17 +30,29 @@ public sealed partial class PdfPreviewViewModel
                 return;
             }
 
+            // 逐页裁决只要还有未定页就不算“已完成”：部分页已决时只兜底那些未定页，避免整份
+            // 旋转把已经摆正的页又转歪；全未决时整份 OCR 兜底仍是唯一可用的保守做法。
+            bool scopedFallback =
+                _undecidedPageIndices.Count > 0 && _decidedPages > 0 && PageCount > 0;
             bool blankFirstPage = _autoCleanBlank && await IsPageBlankAsync(0);
             op.Step("检测首页空白", blankFirstPage ? "空白" : "有内容");
 
-            if (blankFirstPage)
+            if (scopedFallback)
             {
-                await CleanBlankPagesAsync();
-                op.Step("清理空白页", "首页空白，先清理");
+                await FallbackUndecidedPagesAsync();
+                op.Step("未裁决页兜底");
             }
+            else
+            {
+                if (blankFirstPage)
+                {
+                    await CleanBlankPagesAsync();
+                    op.Step("清理空白页", "首页空白，先清理");
+                }
 
-            await AutoOrientAsync();
-            op.Step("方向检测");
+                await AutoOrientAsync();
+                op.Step("方向检测");
+            }
 
             if (_autoCleanBlank && !blankFirstPage)
             {
@@ -48,11 +60,161 @@ public sealed partial class PdfPreviewViewModel
                 op.Step("清理空白页", "方向检测后清理");
             }
 
+            // 扫描后处理也可能转动/删除页；收尾时把 truth 拉回当前 PDF，避免标签停留在扫描瞬间。
+            FlushDatasetTruth("scan-post-process");
             op.Complete("扫描后处理结束");
         }
         catch (Exception ex)
         {
             op.Fail("扫描后处理失败", ex);
+        }
+    }
+
+    /// <summary>
+    /// 只对未裁决页做 OCR 方向兜底，一次写盘，已裁决页保持不动。全未决的文档不走这里
+    /// （整份旋转更稳）；OCR 读不出方向的页保持原样，留给「批量摆正」人工一次改完。
+    /// </summary>
+    private async Task FallbackUndecidedPagesAsync()
+    {
+        if (IsCancelled || _ocrEngine is null || IsOrienting) return;
+        if (PageCount <= 0 || _isLoading) return;
+
+        using var op = AppLog.BeginOperation(
+            LogCategory.Preview, "未裁决页兜底", Path.GetFileName(_file.Path), slowMs: 0);
+
+        IsOrienting = true;
+        StatusText = $"正在兜底摆正 {_undecidedPageIndices.Count} 页未裁决页…";
+        try
+        {
+            int turned = await _postProcessor
+                .OrientPagesAsync(PageCount, _undecidedPageIndices, OrientationDpi)
+                .ConfigureAwait(true);
+            if (IsCancelled)
+            {
+                op.Complete("已取消");
+                return;
+            }
+            if (turned == 0)
+            {
+                op.Complete("OCR 无法判定，未改动");
+                return;
+            }
+
+            op.Step("旋转写盘", $"定向摆正 {turned} 页");
+            BuildThumbnails();
+            StartThumbnailLoad();
+            await RenderAsync(PageIndex, force: true);
+
+            if (StatusText.Length == 0)
+                ShowTransientStatus($"已兜底摆正 {turned} 页，其余可点「批量摆正」");
+            op.Complete($"定向摆正 {turned} 页");
+        }
+        catch (OperationCanceledException)
+        {
+            op.Complete("已取消");
+        }
+        catch (Exception ex)
+        {
+            op.Fail("未裁决页兜底失败", ex);
+            if (!IsCancelled) StatusText = $"兜底摆正失败：{ex.Message}（文件未改动）";
+        }
+        finally
+        {
+            IsOrienting = false;
+        }
+    }
+
+    /// <summary>
+    /// Final truth flush for this session: called when the strip folds and at app exit, so any
+    /// automatic post-process (blank cleanup, fallback orientation) that changed page order or
+    /// rotations after the last tracked action is still reflected in truth.txt.
+    /// </summary>
+    public void FlushDatasetTruth(string reason)
+    {
+        if (_datasetDirectory is null) return;
+        // A scan is renamed by the naming pass after it lands; the strip still holds the temp
+        // name, so the flush must resolve the rename first (the log used to say "找不到文件").
+        _file.TryRelocate();
+        ScanDatasetExporter.RefreshTruth(_datasetDirectory, _file.Path, reason);
+    }
+
+    /// <summary>Host dialog → batch upright; no host dialog or user cancel means no change.</summary>
+    private async Task PromptBatchUprightAsync()
+    {
+        if (_chooseBatchUpright is null || IsOrienting || IsRotating || PageCount <= 0) return;
+        BatchUprightChoice? choice = _chooseBatchUpright(_undecidedPageIndices.Count);
+        if (choice is null) return;
+        await ApplyBatchUprightAsync(choice.QuarterTurns, choice.OnlyUndecided);
+    }
+
+    /// <summary>
+    /// 一键批量摆正：整份或仅未裁决页，按用户选择的方向一次写盘，然后重建所有表面。
+    /// 与逐页裁决保持一致的单写者锁，失败时文件不动并给出原因。
+    /// </summary>
+    internal async Task ApplyBatchUprightAsync(int quarterTurns, bool onlyUndecided)
+    {
+        int turns = ((quarterTurns % 4) + 4) % 4;
+        if (turns == 0 || IsCancelled || IsRotating || IsOrienting || PageCount <= 0) return;
+
+        using var op = AppLog.BeginOperation(
+            LogCategory.Preview, "批量摆正", Path.GetFileName(_file.Path), slowMs: 0);
+
+        IsRotating = true;
+        StatusText = "正在批量摆正…";
+        try
+        {
+            int[] undecided = _undecidedPageIndices
+                .Where(index => index >= 0 && index < PageCount)
+                .Distinct()
+                .ToArray();
+            bool scoped = onlyUndecided && undecided.Length > 0;
+            int affected = scoped ? undecided.Length : PageCount;
+
+            if (scoped)
+            {
+                await _edits.RotatePagesAsync(
+                    undecided.Select(index => (Index: index, Steps: turns)).ToArray());
+            }
+            else
+            {
+                await _edits.RotateAllAsync(turns);
+            }
+            op.Step("旋转写盘", $"顺时针 {turns * 90}°，{(scoped ? "仅未裁决页" : "整份")}共 {affected} 页");
+
+            // Batch upright is a manual correction too: one line per affected page, then refresh.
+            int[] affectedPages = scoped ? undecided : Enumerable.Range(0, PageCount).ToArray();
+            foreach (int index in affectedPages)
+                ScanDatasetExporter.AppendManualRotation(
+                    _datasetDirectory, index + 1, turns * 90, "Batch");
+            ScanDatasetExporter.RefreshTruth(_datasetDirectory, _file.Path, "batch-upright");
+
+            if (IsCancelled)
+            {
+                op.Complete("已取消");
+                return;
+            }
+
+            BuildThumbnails();
+            StartThumbnailLoad();
+            await RenderAsync(PageIndex, force: true);
+
+            if (StatusText.Length == 0)
+                ShowTransientStatus($"已批量摆正（顺时针 {turns * 90}°），已保存");
+            UprightNoticeText = string.Empty;
+            op.Complete($"顺时针 {turns * 90}°，{affected} 页");
+        }
+        catch (OperationCanceledException)
+        {
+            op.Complete("已取消");
+        }
+        catch (Exception ex)
+        {
+            op.Fail("批量摆正失败", ex);
+            if (!IsCancelled) StatusText = $"批量摆正失败：{ex.Message}（文件未改动）";
+        }
+        finally
+        {
+            IsRotating = false;
         }
     }
 
@@ -163,6 +325,10 @@ public sealed partial class PdfPreviewViewModel
             op.Step("旋转写盘",
                 $"第 {pageIndex + 1} 页，顺时针 90°{(savedAsCopy ? $"，原文件被占用，已另存为 {Path.GetFileName(_file.Path)}" : string.Empty)}");
 
+            // 手动旋转立即落到 dataset：追加人工修正轨迹，并把 truth 从当前 PDF 回读刷新。
+            ScanDatasetExporter.AppendManualRotation(_datasetDirectory, pageIndex + 1, 90, "Manual");
+            ScanDatasetExporter.RefreshTruth(_datasetDirectory, _file.Path, "manual-rotate");
+
             if (IsCancelled)
             {
                 op.Complete("已取消（文件已保存）");
@@ -235,6 +401,10 @@ public sealed partial class PdfPreviewViewModel
         StatusText = $"正在删除第 {pageIndex + 1} 页…";
         try
         {
+            // Cancel any in-flight tile fill: it reads by index, and the indexes are about to
+            // shift. Images already decoded travel with their tiles and stay correct.
+            int generation = ++_thumbnailLoadGeneration;
+
             bool savedAsCopy = await _edits.DeleteAsync(pageIndex).ConfigureAwait(true);
             op.Step("删除页写盘",
                 $"第 {pageIndex + 1} 页{(savedAsCopy ? $"，原文件被占用，已另存为 {Path.GetFileName(_file.Path)}" : string.Empty)}");
@@ -245,12 +415,21 @@ public sealed partial class PdfPreviewViewModel
                 return; // the file is saved; nothing is on screen any more
             }
 
-            // Every page after the deleted one shifts down an index — the render cache keys by
-            // index, so all of it must go, not just the deleted page's entries.
+            // Only the deleted tile goes: the pages after it keep their pixels and just re-index,
+            // so a delete repaints the canvas instead of re-rendering every thumbnail.
             PageCount--;
-            BuildThumbnails();
-            StartThumbnailLoad();
-            op.Step("重建缩略图", $"剩余 {PageCount} 页");
+            Thumbnails.RemoveAt(pageIndex);
+            for (int i = pageIndex; i < Thumbnails.Count; i++)
+                Thumbnails[i].SetIndex(i);
+            RebuildStripItems();
+            SyncThumbnailSelection();
+            foreach (var thumb in Thumbnails) thumb.RefreshCommands();
+            op.Step("移除缩略图", $"剩余 {PageCount} 页");
+
+            // Tiles that never got an image (folded/aborted fill) still need pixels; the rest keep theirs.
+            var empty = Thumbnails.Where(tile => tile.Image is null).ToList();
+            if (empty.Count > 0)
+                _ = LoadThumbnailsAsync(empty, generation);
 
             // The page that took the deleted one's place becomes the shown page.
             await RenderAsync(Math.Min(pageIndex, PageCount - 1), force: true);

@@ -27,21 +27,21 @@
 
     <StackPanel>
         <TextBlock Style="{StaticResource Caption}"
-                   Text="鼠标快速移到屏幕边缘的触发区域，最近截图晾衣绳就会滑出；悬上热区时会浮出一朵云提示「就在这里」。四条边可分别启用；在左侧示意图里拖动云朵调整沿边位置，厚度/长度单位为屏幕像素。改动随「返回应用」保存生效。"/>
+                   Text="鼠标快速移到屏幕边缘的触发区域，最近截图晾衣绳就会滑出。四条边可分别启用；在左侧示意图里拖动热区块调整沿边位置，厚度/长度单位为屏幕像素，改动会实时反映到示意图上，随「返回应用」保存生效。"/>
         <Grid Margin="0,12,0,0">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="*"/>
             </Grid.ColumnDefinitions>
 
-            <!-- 屏幕（工作区）示意图：云朵色块就是热区，按住可沿边拖动。
-                 形状/颜色/阴影与运行时指示器同源（Themes/TriggerZone.xaml）。 -->
+            <!-- 屏幕（工作区）示意图：半透明色块就是热区，按住可沿边拖动。
+                 形状/颜色/阴影与运行时的热区样式同源（Themes/TriggerZone.xaml）。 -->
             <Border Grid.Column="0" Width="300" Height="190" CornerRadius="6"
                     Background="#FFF3F4F6"
                     BorderBrush="{StaticResource ShellInsetCardStrokeBrush}"
                     BorderThickness="1" Margin="0,0,18,0">
                 <Grid x:Name="ScreenMock">
-                    <TextBlock Text="屏幕边缘示意 · 拖动云朵调整位置"
+                    <TextBlock Text="屏幕边缘示意 · 拖动热区块调整位置"
                                HorizontalAlignment="Center" VerticalAlignment="Center"
                                Foreground="#FFB6BCC6" FontSize="11" IsHitTestVisible="False"/>
                     <Border x:Name="TopZone" Tag="Top" Cursor="SizeAll"
@@ -50,48 +50,28 @@
                             CornerRadius="12" Effect="{StaticResource TriggerCloudShadow}"
                             HorizontalAlignment="Left" VerticalAlignment="Top"
                             MouseLeftButtonDown="OnZoneMouseDown" MouseMove="OnZoneMouseMove"
-                            MouseLeftButtonUp="OnZoneMouseUp">
-                        <Path Data="{StaticResource TriggerCloudGeometry}"
-                              Fill="{StaticResource TriggerCloudFillBrush}"
-                              Stretch="Uniform" Width="44" Height="23"
-                              IsHitTestVisible="False"/>
-                    </Border>
+                            MouseLeftButtonUp="OnZoneMouseUp"/>
                     <Border x:Name="BottomZone" Tag="Bottom" Cursor="SizeAll"
                             Background="{StaticResource TriggerCloudSoftFillBrush}"
                             BorderBrush="{StaticResource TriggerCloudEdgeBrush}" BorderThickness="1"
                             CornerRadius="12" Effect="{StaticResource TriggerCloudShadow}"
                             HorizontalAlignment="Left" VerticalAlignment="Bottom"
                             MouseLeftButtonDown="OnZoneMouseDown" MouseMove="OnZoneMouseMove"
-                            MouseLeftButtonUp="OnZoneMouseUp">
-                        <Path Data="{StaticResource TriggerCloudGeometry}"
-                              Fill="{StaticResource TriggerCloudFillBrush}"
-                              Stretch="Uniform" Width="44" Height="23"
-                              IsHitTestVisible="False"/>
-                    </Border>
+                            MouseLeftButtonUp="OnZoneMouseUp"/>
                     <Border x:Name="LeftZone" Tag="Left" Cursor="SizeAll"
                             Background="{StaticResource TriggerCloudSoftFillBrush}"
                             BorderBrush="{StaticResource TriggerCloudEdgeBrush}" BorderThickness="1"
                             CornerRadius="12" Effect="{StaticResource TriggerCloudShadow}"
                             HorizontalAlignment="Left" VerticalAlignment="Top"
                             MouseLeftButtonDown="OnZoneMouseDown" MouseMove="OnZoneMouseMove"
-                            MouseLeftButtonUp="OnZoneMouseUp">
-                        <Path Data="{StaticResource TriggerCloudGeometry}"
-                              Fill="{StaticResource TriggerCloudFillBrush}"
-                              Stretch="Uniform" Width="44" Height="23"
-                              IsHitTestVisible="False"/>
-                    </Border>
+                            MouseLeftButtonUp="OnZoneMouseUp"/>
                     <Border x:Name="RightZone" Tag="Right" Cursor="SizeAll"
                             Background="{StaticResource TriggerCloudSoftFillBrush}"
                             BorderBrush="{StaticResource TriggerCloudEdgeBrush}" BorderThickness="1"
                             CornerRadius="12" Effect="{StaticResource TriggerCloudShadow}"
                             HorizontalAlignment="Right" VerticalAlignment="Top"
                             MouseLeftButtonDown="OnZoneMouseDown" MouseMove="OnZoneMouseMove"
-                            MouseLeftButtonUp="OnZoneMouseUp">
-                        <Path Data="{StaticResource TriggerCloudGeometry}"
-                              Fill="{StaticResource TriggerCloudFillBrush}"
-                              Stretch="Uniform" Width="44" Height="23"
-                              IsHitTestVisible="False"/>
-                    </Border>
+                            MouseLeftButtonUp="OnZoneMouseUp"/>
                 </Grid>
             </Border>
 
@@ -109,12 +89,14 @@
                               IsChecked="{Binding Settings.ScreenshotTrigger.Top.Enabled}"
                               Checked="OnEdgeToggleChanged" Unchecked="OnEdgeToggleChanged"/>
                     <TextBlock Grid.Column="1" Text="厚度" Style="{StaticResource FieldLabel}"/>
-                    <TextBox Grid.Column="2" Style="{StaticResource NumberBox}"
+                    <TextBox Grid.Column="2" Style="{StaticResource NumberBox}" Tag="Top:Thickness"
                              Text="{Binding Settings.ScreenshotTrigger.Top.Thickness, UpdateSourceTrigger=LostFocus}"
+                             TextChanged="OnNumericBoxTextChanged"
                              LostFocus="OnNumericBoxLostFocus"/>
                     <TextBlock Grid.Column="3" Text="长度" Style="{StaticResource FieldLabel}"/>
-                    <TextBox Grid.Column="4" Style="{StaticResource NumberBox}"
+                    <TextBox Grid.Column="4" Style="{StaticResource NumberBox}" Tag="Top:Length"
                              Text="{Binding Settings.ScreenshotTrigger.Top.Length, UpdateSourceTrigger=LostFocus}"
+                             TextChanged="OnNumericBoxTextChanged"
                              LostFocus="OnNumericBoxLostFocus"/>
                 </Grid>
                 <Grid Margin="0,0,0,10">
@@ -129,12 +111,14 @@
                               IsChecked="{Binding Settings.ScreenshotTrigger.Bottom.Enabled}"
                               Checked="OnEdgeToggleChanged" Unchecked="OnEdgeToggleChanged"/>
                     <TextBlock Grid.Column="1" Text="厚度" Style="{StaticResource FieldLabel}"/>
-                    <TextBox Grid.Column="2" Style="{StaticResource NumberBox}"
+                    <TextBox Grid.Column="2" Style="{StaticResource NumberBox}" Tag="Bottom:Thickness"
                              Text="{Binding Settings.ScreenshotTrigger.Bottom.Thickness, UpdateSourceTrigger=LostFocus}"
+                             TextChanged="OnNumericBoxTextChanged"
                              LostFocus="OnNumericBoxLostFocus"/>
                     <TextBlock Grid.Column="3" Text="长度" Style="{StaticResource FieldLabel}"/>
-                    <TextBox Grid.Column="4" Style="{StaticResource NumberBox}"
+                    <TextBox Grid.Column="4" Style="{StaticResource NumberBox}" Tag="Bottom:Length"
                              Text="{Binding Settings.ScreenshotTrigger.Bottom.Length, UpdateSourceTrigger=LostFocus}"
+                             TextChanged="OnNumericBoxTextChanged"
                              LostFocus="OnNumericBoxLostFocus"/>
                 </Grid>
                 <Grid Margin="0,0,0,10">
@@ -149,12 +133,14 @@
                               IsChecked="{Binding Settings.ScreenshotTrigger.Left.Enabled}"
                               Checked="OnEdgeToggleChanged" Unchecked="OnEdgeToggleChanged"/>
                     <TextBlock Grid.Column="1" Text="厚度" Style="{StaticResource FieldLabel}"/>
-                    <TextBox Grid.Column="2" Style="{StaticResource NumberBox}"
+                    <TextBox Grid.Column="2" Style="{StaticResource NumberBox}" Tag="Left:Thickness"
                              Text="{Binding Settings.ScreenshotTrigger.Left.Thickness, UpdateSourceTrigger=LostFocus}"
+                             TextChanged="OnNumericBoxTextChanged"
                              LostFocus="OnNumericBoxLostFocus"/>
                     <TextBlock Grid.Column="3" Text="长度" Style="{StaticResource FieldLabel}"/>
-                    <TextBox Grid.Column="4" Style="{StaticResource NumberBox}"
+                    <TextBox Grid.Column="4" Style="{StaticResource NumberBox}" Tag="Left:Length"
                              Text="{Binding Settings.ScreenshotTrigger.Left.Length, UpdateSourceTrigger=LostFocus}"
+                             TextChanged="OnNumericBoxTextChanged"
                              LostFocus="OnNumericBoxLostFocus"/>
                 </Grid>
                 <Grid>
@@ -169,12 +155,14 @@
                               IsChecked="{Binding Settings.ScreenshotTrigger.Right.Enabled}"
                               Checked="OnEdgeToggleChanged" Unchecked="OnEdgeToggleChanged"/>
                     <TextBlock Grid.Column="1" Text="厚度" Style="{StaticResource FieldLabel}"/>
-                    <TextBox Grid.Column="2" Style="{StaticResource NumberBox}"
+                    <TextBox Grid.Column="2" Style="{StaticResource NumberBox}" Tag="Right:Thickness"
                              Text="{Binding Settings.ScreenshotTrigger.Right.Thickness, UpdateSourceTrigger=LostFocus}"
+                             TextChanged="OnNumericBoxTextChanged"
                              LostFocus="OnNumericBoxLostFocus"/>
                     <TextBlock Grid.Column="3" Text="长度" Style="{StaticResource FieldLabel}"/>
-                    <TextBox Grid.Column="4" Style="{StaticResource NumberBox}"
+                    <TextBox Grid.Column="4" Style="{StaticResource NumberBox}" Tag="Right:Length"
                              Text="{Binding Settings.ScreenshotTrigger.Right.Length, UpdateSourceTrigger=LostFocus}"
+                             TextChanged="OnNumericBoxTextChanged"
                              LostFocus="OnNumericBoxLostFocus"/>
                 </Grid>
                 <TextBlock Text="示意图按主屏工作区等比绘制；晾衣绳只驻留在主屏，触发区域也只在主屏生效。"

@@ -320,6 +320,30 @@ public sealed class PdfPageRenderCache
         lock (_recentSync) _recent.Clear(); // the old recency keys no longer exist
     }
 
+    /// <summary>Remaps the cache around a page delete: only that page's entries go, and the pages
+    /// after it travel with their new index. Keeping the untouched pages is what makes a delete
+    /// repaint the canvas alone instead of re-rendering the whole strip (every tile at 96 dpi).</summary>
+    public void RemovePage(int pageIndex)
+    {
+        var remapped = new Dictionary<(int Page, int Dpi), byte[]>();
+        long freed = 0;
+        foreach (var ((page, dpi), bytes) in _renderedPages)
+        {
+            if (page == pageIndex)
+            {
+                freed += bytes.Length;
+                continue;
+            }
+            remapped[(page > pageIndex ? page - 1 : page, dpi)] = bytes;
+        }
+        Interlocked.Increment(ref _epoch); // in-flight pre-delete renders stay uncached
+        _renderedPages.Clear();
+        foreach (var (key, bytes) in remapped)
+            _renderedPages[key] = bytes;
+        if (freed > 0) Interlocked.Add(ref _bytes, -freed);
+        lock (_recentSync) _recent.Clear(); // the old recency keys no longer exist
+    }
+
     /// <summary>
     /// Folds a strip: hands back everything except the <see cref="TrimKeepPages"/> most recently
     /// viewed pages, so reopening paints instantly instead of re-rendering page one (~130 ms at

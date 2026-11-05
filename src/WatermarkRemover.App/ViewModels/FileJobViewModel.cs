@@ -63,6 +63,10 @@ public sealed class FileJobViewModel : ObservableObject
     private bool _canContinueScan;
     private ImageSource? _thumbnail;
 
+    /// <summary>True while <see cref="DisplayName"/> is a name the file has not taken on disk
+    /// yet (首屏命名). It never changes any path field — those stay the real file.</summary>
+    private bool _displayNameOptimistic;
+
     /// <summary>Numbered-rename explanations expire by the app's shared transient rule.</summary>
     private readonly TransientStatus _transientNote;
 
@@ -138,6 +142,10 @@ public sealed class FileJobViewModel : ObservableObject
                 RefreshChipStates();
         }
     }
+
+    /// <summary>Whether the card currently shows a name the file has not been renamed to yet.
+    /// Path fields are untouched — this is display only.</summary>
+    public bool IsDisplayNameOptimistic => _displayNameOptimistic;
 
     public JobState State
     {
@@ -419,6 +427,61 @@ public sealed class FileJobViewModel : ObservableObject
             dispatcher.Invoke(() => NamingNote = note);
     }
 
+    /// <summary>
+    /// Shows a name recognised while the scan is still running, before the PDF has been renamed
+    /// on disk. Only <see cref="DisplayName"/> changes; <see cref="InputPath"/> /
+    /// <see cref="OutputPath"/> keep pointing at the real file.
+    /// </summary>
+    public void SetOptimisticDisplayName(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return;
+
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (dispatcher is null || dispatcher.CheckAccess())
+            ApplyOptimisticDisplayName(name);
+        else
+            dispatcher.Invoke(() => ApplyOptimisticDisplayName(name));
+    }
+
+    private void ApplyOptimisticDisplayName(string name)
+    {
+        // A user rename in progress outranks a background guess.
+        if (IsEditing) return;
+
+        _displayNameOptimistic = true;
+        DisplayName = name;
+        SyncStripTitle();
+    }
+
+    /// <summary>
+    /// Takes the optimistic name back (the move failed, or the user renamed by hand): the card
+    /// shows the file's real name again, and an optional note explains why it changed.
+    /// </summary>
+    public void RevertOptimisticDisplayName(string? note = null)
+    {
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (dispatcher is null || dispatcher.CheckAccess())
+            RevertOptimisticDisplayNameCore(note);
+        else
+            dispatcher.Invoke(() => RevertOptimisticDisplayNameCore(note));
+    }
+
+    private void RevertOptimisticDisplayNameCore(string? note)
+    {
+        if (_displayNameOptimistic)
+        {
+            _displayNameOptimistic = false;
+            string realName = Path.GetFileName(OutputPath ?? InputPath);
+            if (realName.Length > 0) DisplayName = realName;
+            SyncStripTitle();
+        }
+
+        if (note is not null) SetNamingNote(note);
+    }
+
+    /// <summary>Keeps the open preview header on the same human-visible name as the card.</summary>
+    private void SyncStripTitle() => Strip?.SetDisplayName(DisplayName);
+
     /// <summary>Where this record's file stands with the netdisk; surfaced as the row chip.</summary>
     public UploadState Upload
     {
@@ -692,17 +755,21 @@ public sealed class FileJobViewModel : ObservableObject
                 OutputPath = outputPath;
                 ItemCount = result.ItemCount;
                 _resultSummary = string.IsNullOrWhiteSpace(result.Summary) ? "已处理" : result.Summary;
-                DisplayName = Path.GetFileName(outputPath);
+                // 首屏命名先在卡片上显示了识别名：落盘的是时间戳文件，不能把它盖回去。
+                if (!_displayNameOptimistic)
+                    DisplayName = Path.GetFileName(outputPath);
                 Detail = $"{_resultSummary} → {outputPath}";
                 LoadThumbnail(outputPath);
                 break;
 
             case FeatureStatus.NoChange:
+                RevertOptimisticDisplayName();
                 State = JobState.Skipped;
                 Detail = $"{result.Summary}，已跳过";
                 break;
 
             case FeatureStatus.Failed:
+                RevertOptimisticDisplayName();
                 State = JobState.Failed;
                 Detail = result.Error ?? "处理失败";
                 break;
@@ -791,11 +858,15 @@ public sealed class FileJobViewModel : ObservableObject
     /// <summary>Called by the coordinator after the output file was successfully moved.</summary>
     public void UpdateRenamed(string newPath)
     {
+        // The on-disk name is now the truth. When it matches the optimistic name no notification
+        // fires, so the card does not flicker; a numbered collision refreshes to the real name.
+        _displayNameOptimistic = false;
         OutputPath = newPath;
         DisplayName = Path.GetFileName(newPath);
         Detail = $"{_resultSummary} → {newPath}";
         LoadThumbnail(newPath);
         RefreshChipStates();
+        SyncStripTitle();
     }
 
     /// <summary>Rebuilds the chip row from the (possibly changed) quick-suffix settings.</summary>

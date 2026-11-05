@@ -46,6 +46,9 @@ public class PdfPreviewViewModelTests
         /// <summary>Every requested DPI, in call order — lets a test tell render passes apart.</summary>
         public List<int> RenderedDpis { get; } = new();
 
+        /// <summary>Every (page, dpi) that actually reached the renderer — proves which tiles re-decoded.</summary>
+        public List<(int Page, int Dpi)> RenderedPages { get; } = new();
+
         public Task<int> GetPageCountAsync(string pdfPath) => Task.FromResult(pageCount);
 
         public Task<byte[]> RenderPageAsync(string pdfPath, int pageIndex, int dpi, bool priority = false)
@@ -53,6 +56,7 @@ public class PdfPreviewViewModelTests
             if (failRendering) throw new InvalidOperationException("渲染失败");
             RenderedPageCount++;
             RenderedDpis.Add(dpi);
+            RenderedPages.Add((pageIndex, dpi));
             return Task.FromResult(Png(pngWidth, pngHeight));
         }
 
@@ -426,7 +430,7 @@ public class PdfPreviewViewModelTests
     }
 
     [Fact]
-    public async Task Deleting_a_page_saves_the_pdf_and_rebuilds_the_strip()
+    public async Task Deleting_a_page_saves_the_pdf_and_keeps_the_strip_in_step()
     {
         string path = WriteMultiPagePdf(3);
         try
@@ -505,6 +509,179 @@ public class PdfPreviewViewModelTests
         }
         finally
         {
+            File.Delete(path);
+        }
+    }
+
+    /// <summary>Renders after a page edit: the canvas repaints, the tiles must not.</summary>
+    private static void AssertOnlyCanvasRendered(FakeRenderer renderer, int callsBefore, int expectedPage)
+    {
+        var after = renderer.RenderedPages.Skip(callsBefore).ToList();
+        Assert.Single(after);
+        Assert.Equal((expectedPage, 150), after[0]);
+    }
+
+    [Fact]
+    public async Task Deleting_a_middle_page_reuses_the_untouched_tiles_and_their_pixels()
+    {
+        string path = WriteMultiPagePdf(6);
+        try
+        {
+            var renderer = new FakeRenderer(6);
+            var vm = new PdfPreviewViewModel(path, "doc.pdf", renderer);
+            await vm.LoadAsync();
+            await DrainThumbnailsAsync(vm);
+            var tilesBefore = vm.Thumbnails.ToArray();
+            int rendersBefore = renderer.RenderedPageCount;
+
+            vm.Thumbnails[2].DeleteCommand.Execute(null);
+            await DrainRotationAsync(vm);
+            await DrainThumbnailsAsync(vm);
+
+            Assert.Equal(5, ReadPageCount(path));
+            // Untouched tiles are the same objects, pixels included; later ones just re-index.
+            Assert.Same(tilesBefore[0], vm.Thumbnails[0]);
+            Assert.Same(tilesBefore[1], vm.Thumbnails[1]);
+            Assert.Same(tilesBefore[3], vm.Thumbnails[2]);
+            Assert.Same(tilesBefore[5], vm.Thumbnails[4]);
+            Assert.All(vm.Thumbnails, tile => Assert.NotNull(tile.Image));
+            Assert.Equal("3", vm.Thumbnails[2].PageLabel);
+            Assert.Equal("5", vm.Thumbnails[4].PageLabel);
+
+            // Only the page that slid into the gap was rendered (canvas, 150 dpi).
+            AssertOnlyCanvasRendered(renderer, rendersBefore, expectedPage: 2);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task Deleting_the_first_page_keeps_the_remaining_tiles_decoded()
+    {
+        string path = WriteMultiPagePdf(4);
+        try
+        {
+            var renderer = new FakeRenderer(4);
+            var vm = new PdfPreviewViewModel(path, "doc.pdf", renderer);
+            await vm.LoadAsync();
+            await DrainThumbnailsAsync(vm);
+            var tilesBefore = vm.Thumbnails.ToArray();
+            int rendersBefore = renderer.RenderedPageCount;
+
+            vm.Thumbnails[0].DeleteCommand.Execute(null);
+            await DrainRotationAsync(vm);
+            await DrainThumbnailsAsync(vm);
+
+            Assert.Equal(3, ReadPageCount(path));
+            Assert.Equal(3, vm.Thumbnails.Count);
+            Assert.Same(tilesBefore[1], vm.Thumbnails[0]);
+            Assert.Same(tilesBefore[3], vm.Thumbnails[2]);
+            Assert.Equal("1", vm.Thumbnails[0].PageLabel);
+            Assert.All(vm.Thumbnails, tile => Assert.NotNull(tile.Image));
+            Assert.Equal(0, vm.PageIndex);
+            AssertOnlyCanvasRendered(renderer, rendersBefore, expectedPage: 0);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task Deleting_the_last_page_keeps_the_remaining_tiles_decoded()
+    {
+        string path = WriteMultiPagePdf(4);
+        try
+        {
+            var renderer = new FakeRenderer(4);
+            var vm = new PdfPreviewViewModel(path, "doc.pdf", renderer);
+            await vm.LoadAsync();
+            await DrainThumbnailsAsync(vm);
+            int rendersBefore = renderer.RenderedPageCount;
+
+            vm.Thumbnails[3].DeleteCommand.Execute(null);
+            await DrainRotationAsync(vm);
+            await DrainThumbnailsAsync(vm);
+
+            Assert.Equal(3, ReadPageCount(path));
+            Assert.Equal(3, vm.PageCount);
+            Assert.All(vm.Thumbnails, tile => Assert.NotNull(tile.Image));
+            Assert.Equal(2, vm.PageIndex); // the previous page becomes the shown one
+            AssertOnlyCanvasRendered(renderer, rendersBefore, expectedPage: 2);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task Deleting_two_pages_in_a_row_re_indexes_without_re_decoding()
+    {
+        string path = WriteMultiPagePdf(6);
+        try
+        {
+            var renderer = new FakeRenderer(6);
+            var vm = new PdfPreviewViewModel(path, "doc.pdf", renderer);
+            await vm.LoadAsync();
+            await DrainThumbnailsAsync(vm);
+            int rendersBefore = renderer.RenderedPageCount;
+
+            vm.Thumbnails[1].DeleteCommand.Execute(null);
+            await DrainRotationAsync(vm);
+            vm.Thumbnails[1].DeleteCommand.Execute(null);
+            await DrainRotationAsync(vm);
+            await DrainThumbnailsAsync(vm);
+
+            Assert.Equal(4, ReadPageCount(path));
+            Assert.Equal(4, vm.PageCount);
+            Assert.All(vm.Thumbnails, tile => Assert.NotNull(tile.Image));
+            Assert.Equal("1", vm.Thumbnails[0].PageLabel);
+            Assert.Equal("4", vm.Thumbnails[3].PageLabel);
+            Assert.Equal(2, renderer.RenderedPageCount - rendersBefore); // one canvas per delete
+            Assert.All(renderer.RenderedPages.Skip(rendersBefore), call => Assert.Equal(150, call.Dpi));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task Deleting_from_a_locked_file_saves_a_copy_and_keeps_the_strip_in_step()
+    {
+        string path = WriteMultiPagePdf(5);
+        string? relocated = null;
+        try
+        {
+            var renderer = new FakeRenderer(5);
+            // A viewer holding the file read-only blocks the in-place move, so the edit lands
+            // in a sibling copy; the strip must follow that path and keep its tiles.
+            using var hold = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+            var vm = new PdfPreviewViewModel(path, "doc.pdf", renderer,
+                onRelocated: moved => relocated = moved);
+            await vm.LoadAsync();
+            await DrainThumbnailsAsync(vm);
+            int rendersBefore = renderer.RenderedPageCount;
+
+            vm.Thumbnails[2].DeleteCommand.Execute(null);
+            await DrainRotationAsync(vm);
+            await DrainThumbnailsAsync(vm);
+
+            Assert.NotNull(relocated);
+            Assert.EndsWith("(已删除).pdf", relocated);
+            Assert.Equal(4, ReadPageCount(relocated!));
+            Assert.Equal(5, ReadPageCount(path)); // the original is untouched
+            Assert.Contains("已另存为", vm.StatusText);
+            Assert.Equal(4, vm.PageCount);
+            Assert.All(vm.Thumbnails, tile => Assert.NotNull(tile.Image));
+            AssertOnlyCanvasRendered(renderer, rendersBefore, expectedPage: 2);
+        }
+        finally
+        {
+            if (relocated is not null) File.Delete(relocated);
             File.Delete(path);
         }
     }

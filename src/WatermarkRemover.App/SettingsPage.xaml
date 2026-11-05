@@ -446,6 +446,19 @@
                             </StackPanel>
                         </Border>
 
+                        <TextBlock Text="扫描数据导出（训练用）" Style="{StaticResource SectionTitle}" Margin="0,16,0,8"/>
+                        <Border Style="{StaticResource InsetCard}">
+                            <StackPanel>
+                                <CheckBox Content="导出扫描训练数据（默认关闭）"
+                                          FontSize="13"
+                                          VerticalContentAlignment="Center"
+                                          IsChecked="{Binding Settings.ScanDatasetExportEnabled, Mode=TwoWay}"/>
+                                <TextBlock Text="开启后，每份扫描会在「我的文档\WatermarkRemover-Dataset\时间戳」下保存：真正喂给方向模型的 256px 探针、原始帧灰度图、逐页票面，以及落盘 PDF 每页最终 /Rotate 真值。数据只写本机、绝不上传；用于后续训练方向模型。也可用环境变量 WMR_DATASET_EXPORT=1 临时开启。改动随「返回应用」保存生效。"
+                                           Style="{StaticResource RowCaption}"
+                                           Margin="0,10,0,0"/>
+                            </StackPanel>
+                        </Border>
+
                         <TextBlock Text="输出目录" Style="{StaticResource SectionTitle}" Margin="0,16,0,8"/>
                         <Border Style="{StaticResource InsetCard}">
                             <StackPanel>
@@ -523,7 +536,7 @@
                         <TextBlock Text="全局快捷键" Style="{StaticResource SectionTitle}" Margin="0,0,0,8"/>
                         <Border Style="{StaticResource InsetCard}">
                             <StackPanel>
-                                <TextBlock Text="软件在后台（包括最小化时）也能用这些快捷键。点击下面的输入框后直接按下组合键（或单个 F1 / 字母键）即可修改；单键会抢占该按键，保存时会提醒一次。"
+                                <TextBlock Text="软件在后台（包括最小化时）也能用这些快捷键。点击下面的输入框后直接按下组合键（或单个 F1 / 字母键）即可修改；单键会抢占该按键，请按需设置。"
                                            Style="{StaticResource RowCaption}"
                                            Margin="0,0,0,10"/>
                                 <Grid>
@@ -589,7 +602,7 @@
                                             Margin="8,0,0,0" VerticalAlignment="Center"
                                             Click="OnResetScreenshotHotkey"/>
                                 </Grid>
-                                <TextBlock Text="可用形式：Ctrl+Alt+A 这样的组合键，或直接按 F1 / A 这样的单键（可用按键：字母、数字、F1-F24、PrintScreen）。单键全局热键会抢占该按键——运行本软件期间，其他程序里按这个键会触发截图而不是它们自己的功能（例如 F1 在多数软件里是「帮助」），保存时会提醒一次。改动随「返回应用」保存生效；保存前会检查格式、三个功能是否撞键、以及热键是否被其他程序占用，冲突时留在设置页并提示换键，不会丢掉原来的快捷键。"
+                                <TextBlock Text="可用形式：Ctrl+Alt+A 这样的组合键，或直接按 F1 / A 这样的单键（可用按键：字母、数字、F1-F24、PrintScreen）。单键全局热键会抢占该按键——运行本软件期间，其他程序里按这个键会触发截图而不是它们自己的功能（例如 F1 在多数软件里是「帮助」）。改动随「返回应用」保存生效；保存前会检查格式、三个功能是否撞键、以及热键是否被其他程序占用，冲突时留在设置页并提示换键，不会丢掉原来的快捷键。"
                                            Style="{StaticResource RowCaption}"
                                            Margin="0,8,0,0"/>
                             </StackPanel>

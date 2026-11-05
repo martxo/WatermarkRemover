@@ -42,7 +42,8 @@ public sealed class PdfPageEditService
     }
 
     /// <summary>
-    /// Removes one page; every index after it shifts, so the whole cache goes.
+    /// Removes one page; every index after it shifts by one, so the cache is remapped around the
+    /// gap rather than dropped — the untouched pages keep their renders.
     /// Returns true when a locked original forced the result into a copy beside it.
     /// </summary>
     public async Task<bool> DeleteAsync(int pageIndex)
@@ -54,7 +55,7 @@ public sealed class PdfPageEditService
             return PdfPageRotator.DeletePage(original, pageIndex);
         }).ConfigureAwait(false);
         bool savedAsCopy = Follow(path, original);
-        _cache.InvalidateAll();
+        _cache.RemovePage(pageIndex);
         return savedAsCopy;
     }
 

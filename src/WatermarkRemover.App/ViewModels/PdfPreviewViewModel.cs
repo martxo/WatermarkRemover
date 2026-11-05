@@ -84,6 +84,24 @@ public sealed partial class PdfPreviewViewModel : ObservableObject
     /// <summary>Whether blank pages are dropped by themselves after load (scan rows do).</summary>
     private readonly bool _autoCleanBlank;
 
+    /// <summary>Final-page indices left Undecided by the per-page verdict (0-based). Used to
+    /// scope the OCR fallback and the one-click batch upright to the pages that need it.</summary>
+    private readonly IReadOnlyList<int> _undecidedPageIndices;
+
+    /// <summary>How many pages already carry a valid verdict. Zero means the whole document is
+    /// unjudged, so a whole-document OCR pass is the only safe fallback.</summary>
+    private readonly int _decidedPages;
+
+    /// <summary>Host dialog for batch upright: page count in, direction + scope out (null =
+    /// cancelled or no host). Null = the command is unavailable (tests).</summary>
+    private readonly Func<int, BatchUprightChoice?>? _chooseBatchUpright;
+
+    /// <summary>Scan dataset session directory, when the export switch was on for this scan.
+    /// Manual rotations refresh its truth.txt and append to manual-rotations.txt.</summary>
+    private readonly string? _datasetDirectory;
+
+    private string _uprightNoticeText = string.Empty;
+
     /// <summary>Host-supplied scanner for the gap button: one scan pass, handed back as the
     /// written PDF's path (null = nothing scanned; throw = failure with a readable message).
     /// Null = this strip cannot insert scans (imported files) and the gaps never enable.</summary>
@@ -129,7 +147,11 @@ public sealed partial class PdfPreviewViewModel : ObservableObject
         IOcrEngine? ocrEngine = null, bool autoOrient = false,
         Action<string>? onRelocated = null, bool autoCleanBlank = false,
         Func<IProgress<string>, Task<string?>>? scanProvider = null,
-        IReadOnlyList<ImageSource>? seedThumbnails = null)
+        IReadOnlyList<ImageSource>? seedThumbnails = null,
+        IReadOnlyList<int>? undecidedPageIndices = null,
+        int decidedPages = 0,
+        Func<int, BatchUprightChoice?>? chooseBatchUpright = null,
+        string? datasetDirectory = null)
     {
         _renderer = renderer;
         _cancellationToken = cancellationToken;
@@ -140,6 +162,10 @@ public sealed partial class PdfPreviewViewModel : ObservableObject
         _autoCleanBlank = autoCleanBlank;
         _scanProvider = scanProvider;
         _seedThumbnails = seedThumbnails;
+        _undecidedPageIndices = undecidedPageIndices ?? Array.Empty<int>();
+        _decidedPages = decidedPages;
+        _chooseBatchUpright = chooseBatchUpright;
+        _datasetDirectory = datasetDirectory;
 
         _file = new PdfDocumentFile(
             pdfPath,
@@ -165,6 +191,8 @@ public sealed partial class PdfPreviewViewModel : ObservableObject
         _transientStatus = new TransientStatus(
             read: () => StatusText,
             write: text => StatusText = text ?? string.Empty);
+        if (_undecidedPageIndices.Count > 0)
+            UprightNoticeText = $"{_undecidedPageIndices.Count} 页未能自动摆正，可点此批量摆正";
         Thumbnails.CollectionChanged += (_, _) =>
         {
             OnPropertyChanged(nameof(HasThumbnails));
@@ -183,6 +211,11 @@ public sealed partial class PdfPreviewViewModel : ObservableObject
         AutoOrientCommand = new RelayCommand(
             () => _ = AutoOrientAsync(reportFailure: true),
             () => _ocrEngine is not null && !IsOrienting && !IsRotating && PageCount > 0);
+        // 一键批量摆正：方向与范围交给宿主对话框，逐页裁决没搞定的页一次改完。命令始终可用
+        // （没有未定页时也能整份微调），宿主没提供对话框时（测试）禁用。
+        BatchUprightCommand = new RelayCommand(
+            () => _ = PromptBatchUprightAsync(),
+            () => _chooseBatchUpright is not null && !IsOrienting && !IsRotating && PageCount > 0);
         // Any document with at least one page accepts a scan at any slot — front, middle or
         // end. A one-page scan is exactly the case that needs the bookends most (the missing
         // page is usually the one before or after), so PageCount > 0, never > 1.
@@ -298,6 +331,10 @@ public sealed partial class PdfPreviewViewModel : ObservableObject
     public RelayCommand ZoomInCommand { get; }
     public RelayCommand ZoomOutCommand { get; }
     public RelayCommand AutoOrientCommand { get; }
+
+    /// <summary>One-click batch upright for pages the per-page verdict left undecided (and for
+    /// manual whole-document fixes). The host supplies the direction/scope dialog.</summary>
+    public RelayCommand BatchUprightCommand { get; }
 
     /// <summary>Gap button between two pages: scans fresh pages and splices them into the PDF
     /// right after the page the gap follows. Without a host scanner the gaps never enable.</summary>
@@ -438,6 +475,20 @@ public sealed partial class PdfPreviewViewModel : ObservableObject
     }
 
     public bool HasStatusText => !string.IsNullOrEmpty(_statusText);
+
+    /// <summary>Direct warning shown in the strip when the per-page verdict left pages undecided:
+    /// 「N 页未能自动摆正，可点此批量摆正」. Empty = no notice.</summary>
+    public string UprightNoticeText
+    {
+        get => _uprightNoticeText;
+        private set
+        {
+            if (SetProperty(ref _uprightNoticeText, value ?? string.Empty))
+                OnPropertyChanged(nameof(HasUprightNotice));
+        }
+    }
+
+    public bool HasUprightNotice => !string.IsNullOrEmpty(_uprightNoticeText);
 
     /// <summary>Transient confirmations (rotate/delete/straighten) share the app's one expiry rule.</summary>
     private readonly TransientStatus _transientStatus;
@@ -584,6 +635,19 @@ public sealed partial class PdfPreviewViewModel : ObservableObject
 
     /// <summary>Points the strip at the fallback copy written when the original was locked.</summary>
     internal void RelocateTo(string newPath) => _file.RelocateTo(newPath);
+
+    /// <summary>
+    /// Mirrors the row's display name (乐观改名) without touching the document's real path: the
+    /// header may show a recognised name while <see cref="_file"/> still points at the file.
+    /// </summary>
+    internal void SetDisplayName(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name) || string.Equals(Title, name, StringComparison.Ordinal))
+            return;
+
+        Title = name;
+        OnPropertyChanged(nameof(Title));
+    }
 
     /// <summary>One place where a rename or locked-copy fallback updates the header and host.</summary>
     private void OnPdfPathChanged(string path)

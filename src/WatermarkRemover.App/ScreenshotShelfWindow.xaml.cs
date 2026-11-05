@@ -22,9 +22,7 @@ namespace WatermarkRemover.App;
 /// each peg swings with a damped spring, new shots drop in from 46px above and kick the line,
 /// hover grows the glass card by 3.5%, and a copy shows the checkmark capsule and a 3° nudge.
 /// The line hides itself above the screen until the pointer rests in a configured trigger zone
-/// (截图设置 → 触发区域: four screen edges, each independently enabled). While the pointer is
-/// inside a zone but the line has not slid down yet, a translucent cloud (TriggerZoneIndicator,
-/// the same asset the settings mock uses) marks the zone so the gesture is discoverable.
+/// (截图设置 → 触发区域: four screen edges, each independently enabled).
 /// </summary>
 public partial class ScreenshotShelfWindow : Window
 {
@@ -85,11 +83,8 @@ public partial class ScreenshotShelfWindow : Window
     /// <summary>窗口句柄钩子（探针：激活/失焦/鼠标离开等系统消息）。</summary>
     private HwndSource? _hwndSource;
 
-    /// <summary>触发区域「云朵」指示器：命中热区时浮出， lazily 创建后复用。</summary>
-    private TriggerZoneIndicator? _zoneIndicator;
-
     /// <summary>截图会话进行中：热区整体静默——取景时鼠标会划过屏幕边缘，
-    /// 晾衣绳和云朵都不该在那一刻弹出来（长截图还会反复截屏，污染拼接图）。</summary>
+    /// 晾衣绳不该在那一刻弹出来（长截图还会反复截屏，污染拼接图）。</summary>
     private bool _captureSuppressed;
 
     /// <summary>已进入关闭流程：线程定时器回调直接退场，不再往调度器投递。</summary>
@@ -167,7 +162,6 @@ public partial class ScreenshotShelfWindow : Window
             _pointerTimer.Dispose();
             _longPressTimer.Stop();
             _gustTimer.Stop();
-            _zoneIndicator?.Close();
             foreach (ShelfItem item in _items)
                 item.Root.ClearValue(RenderTransformProperty);
         };
@@ -178,6 +172,12 @@ public partial class ScreenshotShelfWindow : Window
 
     /// <summary>Tendedero's "hold to mark up": long-pressing a photo opens the markup editor.</summary>
     public event EventHandler<FileJobViewModel>? MarkupRequested;
+
+    /// <summary>右下角「识别文字」小图标：跑 OCR，不离开晾衣绳。</summary>
+    public event EventHandler<FileJobViewModel>? OcrRequested;
+
+    /// <summary>右下角「贴图」小图标：把这张截图置顶显示。</summary>
+    public event EventHandler<FileJobViewModel>? PinRequested;
 
     private int Capacity => Clamp((int)Math.Floor((LineWidth - 200) / Spacing), 3, MaxCapacity);
 
@@ -297,9 +297,8 @@ public partial class ScreenshotShelfWindow : Window
         Top = _windowTop;
         IsHitTestVisible = false;
 
-        // 会话全程静默热区（配对调用见 ResumeAfterCapture）：云朵也不该浮出来。
+        // 会话全程静默热区（配对调用见 ResumeAfterCapture）。
         _captureSuppressed = true;
-        HideZoneCloud();
         ShelfProbe.Log("截图会话开始：热区响应静默");
     }
 
@@ -316,7 +315,6 @@ public partial class ScreenshotShelfWindow : Window
     {
         _trigger = trigger ?? throw new ArgumentNullException(nameof(trigger));
         ClampTrigger();
-        HideZoneCloud(); // 云朵按旧配置定位已无意义，下一轮命中会按新配置重新浮出
         ShelfProbe.Log($"触发区域已更新：[{DescribeZones()}]");
     }
 
@@ -329,9 +327,6 @@ public partial class ScreenshotShelfWindow : Window
         _manual |= manual;
         IsHitTestVisible = true;
         _topHotSince = DateTime.MinValue;
-
-        // 弹出态由晾衣绳本身占位，云朵退场（不压在绳子/照片上）。
-        HideZoneCloud();
 
         if (!_frameTimer.IsEnabled)
         {
@@ -406,10 +401,6 @@ public partial class ScreenshotShelfWindow : Window
                 cursor.X, cursor.Y, _workArea.Left, _workArea.Top, _workArea.Width, _workArea.Height);
             bool gated = _manual || _dragStarted;
 
-            // 云朵只看「命中哪条边」：命中即浮出（gated 时也浮，只是不弹晾衣绳）。
-            if (hot is not null) ShowZoneCloud(hot.Value);
-            else HideZoneCloud();
-
             if (hot is null || gated)
             {
                 if (_topHotSince != DateTime.MinValue)
@@ -434,9 +425,7 @@ public partial class ScreenshotShelfWindow : Window
             return;
         }
 
-        // 弹出态由晾衣绳占位，云朵退场。
-        HideZoneCloud();
-
+        // 弹出态由晾衣绳占位。
         bool inside = cursor.Y >= _workArea.Top - 2 &&
                       cursor.Y <= _workArea.Top + Height + 8 &&
                       cursor.X >= _workArea.Left && cursor.X <= _workArea.Right;
@@ -491,21 +480,6 @@ public partial class ScreenshotShelfWindow : Window
         _awaySince = DateTime.Now;
         ShelfProbe.Log($"{reason}：开始离开计时（需{RetractDelayMilliseconds:F0}ms）");
     }
-
-    /// <summary>命中热区：把云朵指示器挪到该边热区（屏幕坐标）并淡入；指示器只创建一次。</summary>
-    private void ShowZoneCloud(ScreenEdge edge)
-    {
-        if (_trigger.ZoneRect(edge, _workArea.Width, _workArea.Height) is not { } rect) return;
-
-        _zoneIndicator ??= new TriggerZoneIndicator();
-        _zoneIndicator.ShowAt(new ScreenRect(
-            rect.X + _workArea.Left,
-            rect.Y + _workArea.Top,
-            rect.Width,
-            rect.Height));
-    }
-
-    private void HideZoneCloud() => _zoneIndicator?.HideCloud();
 
     // --- 触发区域 / 探针 ---------------------------------------------------------
 
@@ -578,6 +552,7 @@ public partial class ScreenshotShelfWindow : Window
 
         Border card = FindNamed<Border>(root, "PhotoCard")!;
         Border remove = FindNamed<Border>(root, "RemoveChip")!;
+        StackPanel quickActions = FindNamed<StackPanel>(root, "QuickActions")!;
         Border copied = FindNamed<Border>(root, "CopiedBadge")!;
         Image photo = FindNamed<Image>(root, "PhotoImage")!;
         // The photo itself is rounded to 12px inside the 16px glass, like .card img.
@@ -609,6 +584,7 @@ public partial class ScreenshotShelfWindow : Window
             Root = root,
             Card = card,
             RemoveChip = remove,
+            QuickActions = quickActions,
             CopiedBadge = copied,
             CrossScale = crossScale,
             CopiedShift = copiedShift,
@@ -707,6 +683,7 @@ public partial class ScreenshotShelfWindow : Window
         item.CardScale.BeginAnimation(ScaleTransform.ScaleXProperty, null);
         item.CardScale.BeginAnimation(ScaleTransform.ScaleYProperty, null);
         item.RemoveChip.BeginAnimation(OpacityProperty, null);
+        item.QuickActions.BeginAnimation(OpacityProperty, null);
     }
 
     // --- Frame loop ------------------------------------------------------------
@@ -813,6 +790,8 @@ public partial class ScreenshotShelfWindow : Window
         item.CardScale.ScaleX = 1;
         item.CardScale.ScaleY = 1;
         item.RemoveChip.Opacity = 0;
+        item.QuickActions.Opacity = 0;
+        item.QuickActions.IsHitTestVisible = false;
         _falling.Add(item);
         if (!_frameTimer.IsEnabled)
         {
@@ -893,6 +872,9 @@ public partial class ScreenshotShelfWindow : Window
         AnimateScale(item.CardScale, 1.035, 300);
         item.RemoveChip.BeginAnimation(OpacityProperty,
             new DoubleAnimation(1, TimeSpan.FromMilliseconds(180)));
+        item.QuickActions.IsHitTestVisible = true;
+        item.QuickActions.BeginAnimation(OpacityProperty,
+            new DoubleAnimation(1, TimeSpan.FromMilliseconds(180)));
         item.CrossScale.BeginAnimation(ScaleTransform.ScaleXProperty,
             new DoubleAnimation(1, TimeSpan.FromMilliseconds(180)));
         item.CrossScale.BeginAnimation(ScaleTransform.ScaleYProperty,
@@ -913,6 +895,9 @@ public partial class ScreenshotShelfWindow : Window
         AnimateScale(item.CardScale, 1, 300);
         item.RemoveChip.BeginAnimation(OpacityProperty,
             new DoubleAnimation(0, TimeSpan.FromMilliseconds(150)));
+        item.QuickActions.BeginAnimation(OpacityProperty,
+            new DoubleAnimation(0, TimeSpan.FromMilliseconds(150)));
+        item.QuickActions.IsHitTestVisible = false;
         item.CrossScale.BeginAnimation(ScaleTransform.ScaleXProperty,
             new DoubleAnimation(0.6, TimeSpan.FromMilliseconds(150)));
         item.CrossScale.BeginAnimation(ScaleTransform.ScaleYProperty,
@@ -1143,6 +1128,23 @@ public partial class ScreenshotShelfWindow : Window
 
     private void OnRemovePreviewMouseDown(object sender, MouseButtonEventArgs e) => e.Handled = true;
 
+    /// <summary>快捷动作图标的按下事件必须吞掉，否则照片卡会把它当单击复制/拖拽起点。</summary>
+    private void OnActionPreviewMouseDown(object sender, MouseButtonEventArgs e) => e.Handled = true;
+
+    private void OnRecognizeTextClick(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is FrameworkElement { DataContext: FileJobViewModel job })
+            OcrRequested?.Invoke(this, job);
+        e.Handled = true;
+    }
+
+    private void OnPinClick(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is FrameworkElement { DataContext: FileJobViewModel job })
+            PinRequested?.Invoke(this, job);
+        e.Handled = true;
+    }
+
     private void OnRemoveClick(object sender, MouseButtonEventArgs e)
     {
         if (sender is FrameworkElement { DataContext: FileJobViewModel job })
@@ -1214,6 +1216,7 @@ public partial class ScreenshotShelfWindow : Window
         public required FrameworkElement Root { get; init; }
         public required Border Card { get; init; }
         public required Border RemoveChip { get; init; }
+        public required StackPanel QuickActions { get; init; }
         public required Border CopiedBadge { get; init; }
         public required ScaleTransform CrossScale { get; init; }
         public required TranslateTransform CopiedShift { get; init; }

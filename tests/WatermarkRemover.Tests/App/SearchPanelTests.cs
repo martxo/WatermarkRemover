@@ -121,6 +121,54 @@ public class SearchPanelTests
             Task.FromResult<IReadOnlyList<FileSearchResult>>(Array.Empty<FileSearchResult>());
     }
 
+    private sealed class MissingEngineProvider : IFileSearchProvider, IIndexAvailability, IIndexSetup
+    {
+        public string DisplayName => "内置索引";
+
+        public bool IsAvailable { get; private set; }
+
+        public bool IsInstalled => false;
+
+        public bool NeedsUpdate => false;
+
+        public string InstalledVersion => string.Empty;
+
+        public int Installs { get; private set; }
+
+        public IndexStatusDto? LastStatus =>
+            new(true, false, 100, 10, new[] { @"C:\" }, null);
+
+        public Task<bool> CheckAvailableAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(IsAvailable);
+
+        public Task<bool> InstallAsync(CancellationToken cancellationToken = default)
+        {
+            Installs++;
+            IsAvailable = true;
+            return Task.FromResult(true);
+        }
+
+        public Task<IReadOnlyList<FileSearchResult>> SearchAsync(
+            string query, int maxResults, CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<FileSearchResult>>(Array.Empty<FileSearchResult>());
+    }
+
+    [Fact]
+    public async Task Opening_the_page_installs_a_missing_engine_once()
+    {
+        var provider = new MissingEngineProvider();
+        var vm = new SearchPanelViewModel(provider, new FakeShell());
+
+        // First visit: the page starts the one-time elevated install by itself.
+        await vm.ActivateAsync();
+        Assert.Equal(1, provider.Installs);
+        Assert.True(vm.IsAvailable);
+
+        // Later visits must not nag with another UAC prompt.
+        await vm.ActivateAsync();
+        Assert.Equal(1, provider.Installs);
+    }
+
     [Fact]
     public async Task A_pending_engine_update_is_offered_even_while_the_engine_runs()
     {
@@ -189,7 +237,6 @@ public class SearchPanelTests
         Assert.Equal("a", provider.Calls[0].Query);
         Assert.Equal(200, provider.Calls[0].Max);
         Assert.Equal("2 项结果", vm.StatusText);
-        Assert.Null(vm.SelectedResult);
 
         SearchResultItemViewModel file = vm.Results[0];
         Assert.Equal("a.png", file.Name);
@@ -221,30 +268,38 @@ public class SearchPanelTests
     }
 
     [Fact]
-    public async Task Deleting_a_hit_asks_first_and_removes_the_row()
+    public async Task Checking_multiple_hits_and_deleting_asks_once_and_removes_them()
     {
         var provider = new FakeProvider();
         provider.Results.Add(new FileSearchResult(@"C:\photos\a.png", false, 10, null));
+        provider.Results.Add(new FileSearchResult(@"C:\photos\b.pdf", false, 20, null));
         var dialogs = new FakeDialogs();
         var bin = new FakeRecycleBin();
         var vm = new SearchPanelViewModel(provider, new FakeShell(), dialogs, bin);
 
         vm.SearchText = "a";
         await vm.RunSearchAsync();
-        vm.SelectedResult = vm.Results[0];
 
-        vm.DeleteCommand.Execute(null);
+        Assert.False(vm.DeleteCheckedCommand.CanExecute(null));
+        vm.Results[0].IsChecked = true;
+        vm.Results[1].IsChecked = true;
+
+        Assert.Equal(2, vm.CheckedCount);
+        Assert.True(vm.HasChecked);
+        Assert.True(vm.DeleteCheckedCommand.CanExecute(null));
+
+        vm.DeleteCheckedCommand.Execute(null);
 
         Assert.Single(dialogs.Confirms);
-        Assert.Contains("回收站", dialogs.Confirms[0]);
-        Assert.Equal((@"C:\photos\a.png", false), bin.Deleted[0]);
+        Assert.Contains("2 项", dialogs.Confirms[0]);
+        Assert.Equal(2, bin.Deleted.Count);
         Assert.Empty(vm.Results);
-        Assert.Null(vm.SelectedResult);
-        Assert.Equal("已移到回收站：a.png", vm.StatusText);
+        Assert.False(vm.HasChecked);
+        Assert.Equal("已将 2 项移到回收站", vm.StatusText);
     }
 
     [Fact]
-    public async Task A_declined_delete_keeps_the_row_and_touches_nothing()
+    public async Task A_declined_batch_delete_keeps_every_row_checked_and_touches_nothing()
     {
         var provider = new FakeProvider();
         provider.Results.Add(new FileSearchResult(@"C:\photos\a.png", false, 10, null));
@@ -254,14 +309,14 @@ public class SearchPanelTests
 
         vm.SearchText = "a";
         await vm.RunSearchAsync();
-        vm.SelectedResult = vm.Results[0];
+        vm.Results[0].IsChecked = true;
 
-        vm.DeleteCommand.Execute(null);
+        vm.DeleteCheckedCommand.Execute(null);
 
         Assert.Single(dialogs.Confirms);
         Assert.Empty(bin.Deleted);
         Assert.Single(vm.Results);
-        Assert.NotNull(vm.SelectedResult);
+        Assert.True(vm.Results[0].IsChecked);
     }
 
     [Fact]
@@ -274,11 +329,12 @@ public class SearchPanelTests
 
         vm.SearchText = "photos";
         await vm.RunSearchAsync();
-        vm.SelectedResult = vm.Results[0];
+        vm.Results[0].IsChecked = true;
 
-        vm.DeleteCommand.Execute(null);
+        vm.DeleteCheckedCommand.Execute(null);
 
-        Assert.Equal("删除失败：拒绝访问。", vm.StatusText);
+        Assert.StartsWith("删除失败：", vm.StatusText);
+        Assert.Contains("拒绝访问。", vm.StatusText);
         Assert.Single(vm.Results);
     }
 
@@ -298,23 +354,16 @@ public class SearchPanelTests
     }
 
     [Fact]
-    public void Selection_gates_the_action_commands_and_reveal_uses_the_shell()
+    public async Task A_rows_path_command_reveals_its_parent_folder()
     {
-        var (vm, _, shell) = NewPanel();
-        vm.Results.Add(new SearchResultItemViewModel(
-            new FileSearchResult(@"C:\photos\a.png", false, 10, null)));
+        var (vm, provider, shell) = NewPanel();
+        provider.Results.Add(new FileSearchResult(@"C:\photos\a.png", false, 10, null));
 
-        Assert.False(vm.OpenCommand.CanExecute(null));
-        Assert.False(vm.OpenFolderCommand.CanExecute(null));
-        Assert.False(vm.DeleteCommand.CanExecute(null));
+        vm.SearchText = "a";
+        await vm.RunSearchAsync();
 
-        vm.SelectedResult = vm.Results[0];
-
-        Assert.True(vm.OpenCommand.CanExecute(null));
-        Assert.True(vm.OpenFolderCommand.CanExecute(null));
-        Assert.True(vm.DeleteCommand.CanExecute(null));
-
-        vm.OpenFolderCommand.Execute(null);
+        Assert.True(vm.Results[0].OpenFolderCommand.CanExecute(null));
+        vm.Results[0].OpenFolderCommand.Execute(null);
 
         Assert.Equal(new[] { @"C:\photos" }, shell.Opened);
     }

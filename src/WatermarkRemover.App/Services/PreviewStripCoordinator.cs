@@ -60,6 +60,7 @@ public sealed class PreviewStripCoordinator
             {
                 // Folded strips hand back both the page cache and the decoded tile bitmaps: a
                 // long session otherwise keeps every row's thumbnails resident.
+                job.Strip.FlushDatasetTruth("preview-fold");
                 job.Strip.ReleaseThumbnailImages();
             }
             AppLog.Info(job.StripOpen ? $"打开预览：{job.OutputPath}" : "收起预览");
@@ -82,7 +83,10 @@ public sealed class PreviewStripCoordinator
     public void Open(
         FileJobViewModel job,
         IReadOnlyList<ImageSource>? seedThumbnails = null,
-        bool skipScanPostProcess = false)
+        bool skipScanPostProcess = false,
+        IReadOnlyList<int>? undecidedPageIndices = null,
+        int decidedPages = 0,
+        string? datasetDirectory = null)
     {
         string? path = job.OutputPath;
         if (string.IsNullOrWhiteSpace(path) || !File.Exists(path) ||
@@ -96,7 +100,7 @@ public sealed class PreviewStripCoordinator
         // preview loads; files opened via the preview button keep the manual button only.
         bool scanRow = job.OwnerFeatureId == "scan.page";
         var strip = new PdfPreviewViewModel(
-            path, Path.GetFileName(path), _renderer,
+            path, job.DisplayName, _renderer,
             confirmPageDelete: index => _dialogs.Confirm(
                 $"确定要删除第 {index + 1} 页吗？\n\n该页将从 PDF 中移除并立即保存，删除后无法恢复。",
                 "删除确认"),
@@ -105,7 +109,11 @@ public sealed class PreviewStripCoordinator
             onRelocated: job.UpdateRenamed, // a renamed file is tracked, the row follows
             autoCleanBlank: scanRow && !skipScanPostProcess, // duplex scans drop their blank back sides by themselves
             scanProvider: scanRow ? _scanIntoStrip : null, // scan rows can insert scans into gaps
-            seedThumbnails: seedThumbnails);
+            seedThumbnails: seedThumbnails,
+            undecidedPageIndices: undecidedPageIndices,
+            decidedPages: decidedPages,
+            chooseBatchUpright: count => BatchUprightDialog.Show(Application.Current?.MainWindow, count),
+            datasetDirectory: datasetDirectory);
         strip.EnlargeRequested += (_, _) => EnlargeRequested(strip);
         job.AttachStrip(strip);
         // Accordion: the row being opened is the only one whose decoded tiles stay resident.
@@ -144,9 +152,21 @@ public sealed class PreviewStripCoordinator
         foreach (var other in _jobs)
         {
             if (ReferenceEquals(other, keep)) continue;
-            if (other.StripOpen) other.StripOpen = false;
+            if (other.StripOpen)
+            {
+                other.Strip?.FlushDatasetTruth("preview-fold");
+                other.StripOpen = false;
+            }
             other.Strip?.ReleaseThumbnailImages();
         }
+    }
+
+    /// <summary>App-exit flush: every open strip writes the final on-disk /Rotate back to its
+    /// dataset truth before the process ends. Best-effort, never throws.</summary>
+    public void FlushAllDatasets()
+    {
+        foreach (var job in _jobs)
+            job.Strip?.FlushDatasetTruth("app-exit");
     }
 
     /// <summary>

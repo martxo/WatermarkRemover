@@ -90,6 +90,10 @@ public sealed partial class PdfPreviewViewModel
         int filled = 0;
         foreach (var thumb in thumbs)
         {
+            // A tile that already has pixels is current by construction (page edits either shift
+            // its index or rebuild the tile); decoding it again would only flicker the strip.
+            if (thumb.Image is not null) continue;
+
             // Re-supplied tiles after a reload belong to a superseded session: drop out.
             if (IsCancelled || generation != _thumbnailLoadGeneration || !Thumbnails.Contains(thumb))
             {

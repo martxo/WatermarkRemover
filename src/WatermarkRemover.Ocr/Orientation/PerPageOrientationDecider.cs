@@ -11,11 +11,11 @@ namespace WatermarkRemover.Ocr.Orientation;
 /// 3. 投影基线的大类（横排 vs 竖排）与分类器矛盾 → 弃权；
 /// 4. 同份文档多数投票：≥3 页有票且最高票占比 ≥ 2/3 时，与多数矛盾的离群票改为多数
 ///   （装订阴影/贴纸压字造成的单页误判被整份一致性吸收）；
-/// 4b. 双面奇偶自洽：翻面使背面图像与正面相差恰 180°——正、反两组各自 ≥2 票且组内 ≥2/3
-///   同向、两组相差恰 2 时，按组多数采纳（组内个别杂音票由物理约束吸收）；
-/// 5. 短边装订奇偶约束：物理上正反面朝向相差 180°——未定页的反面按「多数 + 2」推定；
-///   已定页不因约束被推翻（物理例外：混纸、插页）。
-/// 6. 仍未定的页保持原样（0），日志留痕。
+/// 5. 仍未定的页保持原样（0），日志留痕。
+///
+/// 已删除（v1.16.93）：双面奇偶自洽与短边「多数 + 2」推定。两者都假设「正反面必然相差
+/// 180°」，被真机数据证伪：4 份文档的人工修正后 truth 正反面朝向完全一致，奇偶采纳 24 页
+/// 中 13 页误翻 180°；短边推定唯一一次触发 3/3 全错。规则层不再凭物理假设跨页改写票。
 ///
 /// 第二阶段扩展点：textline_ori（0.96 MB）的行级裁决可作为第三种票源接入
 /// <see cref="PageOrientationVote"/>——决策层只看票，不关心票从哪来。
@@ -37,7 +37,6 @@ public static class PerPageOrientationDecider
         Undecided,      // 保持原样（漏翻，可手动转）
         Classifier,     // 分类器高置信 + 基线交叉一致
         Majority,       // 离群票被整份多数吸收
-        Parity,         // 短边装订奇偶推定（未定反面 = 多数 + 2）
         LandscapeGuard, // 横版页不转
     }
 
@@ -46,7 +45,6 @@ public static class PerPageOrientationDecider
         int? ClassifierTurns,
         float ClassifierConfidence,
         bool? BaselineIsHorizontal,
-        bool IsBackSide,
         bool IsLandscape);
 
     /// <summary>裁决结果：每页转数 + 来源（两数组按阅读序对齐）。</summary>
@@ -60,15 +58,7 @@ public static class PerPageOrientationDecider
         }
     }
 
-    /// <summary>DuplexMode.Off/LongEdge/ShortEdge 的数值镜像，避免决策层依赖扫描工程集。</summary>
-    public enum Binding
-    {
-        None = 0,
-        LongEdge = 1,
-        ShortEdge = 2,
-    }
-
-    public static Decision Decide(IReadOnlyList<PageVote> pages, Binding binding)
+    public static Decision Decide(IReadOnlyList<PageVote> pages)
     {
         var turns = new int[pages.Count];
         var sources = new Provenance[pages.Count];
@@ -95,46 +85,7 @@ public static class PerPageOrientationDecider
             }
         }
 
-        // ---- 第 4b 条：双面奇偶自洽采纳（真机 2026-11-03 两轮票面校准，黄小婷件）：
-        // 双面扫描翻面后，背面存储图像与正面相差恰 180°——「正面组同向、背面组同向、两组
-        // 相差恰 2」是物理约束。组内允许个别杂音票（≥2/3 同向即成立），由组多数背书；两组
-        // 各需 ≥2 票。1.16.86 票面（正 3/3/1、反 1/1，conf 0.572-0.733）由此采纳为
-        // [3,1,3,1,3]，与人工看图逐页核对一致（正 3 票、反 1 票）。
-        // 反例：1.16.85 首轮票面五票全 3——两组同向但相差 0，物理上不可能，说明背面票本身
-        // 就是错的；此时保持弃权（宁可漏翻，绝不误翻）。
-        if (majority is null)
-        {
-            int? frontMode = GroupMode(pages, isBack: false, out int frontCount);
-            int? backMode = GroupMode(pages, isBack: true, out int backCount);
-            if (frontMode is { } f && backMode is { } b &&
-                frontCount >= 2 && backCount >= 2 &&
-                ((f - b) % 4 + 4) % 4 == 2)
-            {
-                // 物理自洽成立：全部有票页按奇偶采纳，无票页按奇偶补齐。
-                for (int i = 0; i < turns.Length; i++)
-                {
-                    if (sources[i] is Provenance.Undecided or Provenance.Classifier)
-                    {
-                        turns[i] = pages[i].IsBackSide ? b : f;
-                        sources[i] = Provenance.Parity;
-                    }
-                }
-            }
-        }
-
-        // ---- 第 5 条：短边装订奇偶约束——只推定未定反面，绝不推翻已定页 ----
-        if (binding == Binding.ShortEdge && majority is { } front)
-        {
-            int expectedBack = (front + 2) % 4;
-            for (int i = 0; i < turns.Length; i++)
-            {
-                if (sources[i] == Provenance.Undecided && pages[i].IsBackSide)
-                {
-                    turns[i] = expectedBack;
-                    sources[i] = Provenance.Parity;
-                }
-            }
-        }
+        // ---- 第 5 条：仍未定的页保持原样（0），由预览/手动摆正兜底 ----
 
         return new Decision(turns, sources);
     }
@@ -175,23 +126,5 @@ public static class PerPageOrientationDecider
 
         KeyValuePair<int, int> best = counts.MaxBy(kv => kv.Value);
         return best.Value >= Math.Ceiling(voted * MajorityShare) ? best.Key : null;
-    }
-
-    /// <summary>指定正/反侧的原始票（含低置信）组多数：组内 ≥2 票且最高票占比 ≥ 2/3 时返回该
-    /// 票向，否则 null。个别杂音票（单页误判）不阻止采纳——物理约束是组间的，不是组内的。</summary>
-    private static int? GroupMode(IReadOnlyList<PageVote> pages, bool isBack, out int count)
-    {
-        var votes = pages
-            .Where(p => p.IsBackSide == isBack && !p.IsLandscape && p.ClassifierTurns is not null)
-            .Select(p => p.ClassifierTurns!.Value)
-            .ToList();
-        count = votes.Count;
-        if (count < 2) return null;
-
-        KeyValuePair<int, int> best = votes
-            .GroupBy(v => v)
-            .Select(g => new KeyValuePair<int, int>(g.Key, g.Count()))
-            .MaxBy(kv => kv.Value);
-        return best.Value >= Math.Ceiling(count * MajorityShare) ? best.Key : null;
     }
 }

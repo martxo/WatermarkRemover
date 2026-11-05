@@ -32,12 +32,30 @@ public partial class AppConfirmDialog : Window
     {
         var prompt = new AppPromptViewModel(title, message, kind, buttons);
         var window = new AppConfirmDialog(prompt);
-        if (owner is { IsLoaded: true })
+        Window? resolved = ResolveOwner(owner);
+        if (resolved is { IsLoaded: true })
         {
-            window.Owner = owner;
+            window.Owner = resolved;
+            // 属主是置顶窗（全屏看图窗、贴图窗等）时，确认框必须同处置顶层：
+            // 普通窗口永远压不过置顶遮罩，模态框会被藏到全屏暗幕后面——用户看到的
+            // 就是「点删除后整个应用卡死、回不了桌面」（2026-11-04 13:57 实测复现）。
+            if (resolved.Topmost) window.Topmost = true;
         }
         window.ShowDialog();
         return prompt.Accepted;
+    }
+
+    /// <summary>
+    /// 模态弹窗的属主解析：优先取当前激活的窗口（全屏看图窗、主窗口……谁在前台谁负责
+    /// 接住弹窗），没有激活窗口时退回调用方指定的 owner，再退回主窗口。写死主窗口会把
+    /// 弹窗挂在一个被置顶窗盖住的窗口上，视觉上等于凭空消失。
+    /// </summary>
+    internal static Window? ResolveOwner(Window? fallback)
+    {
+        Window? active = Application.Current?.Windows
+            .OfType<Window>()
+            .FirstOrDefault(w => w.IsActive);
+        return active ?? fallback;
     }
 
     private void OnTitleDragMove(object sender, MouseButtonEventArgs e)

@@ -36,7 +36,9 @@ public sealed record ScanOutcome(
     int SkippedBlankPages = 0,
     int? OrientationTurns = null,
     bool OrientationPerPage = false,
-    int UndecidedPages = 0);
+    int UndecidedPages = 0,
+    IReadOnlyList<int>? UndecidedPageIndices = null,
+    string? DatasetDirectory = null);
 
 /// <summary>One page just pulled from the device, delivered while the scan is still running.
 /// The final PDF does not exist yet; the small PNG lets the row show the page immediately.</summary>
@@ -219,6 +221,11 @@ public sealed class ScanService
         IScanSession session = await chosen.OpenAsync(device, settings, cancellationToken);
         op.Step("启动扫描会话", $"{device.Name}，{settings.Resolution}，{settings.Color}，{settings.Duplex}");
 
+        // 训练数据导出（默认关闭）：每份会话一个本地目录；开关打开后，采集期写入原始帧，
+        // 收尾按最终阅读序写探针/票面/truth。导出失败绝不波及扫描。
+        long scanStartTicks = Stopwatch.GetTimestamp();
+        ScanDatasetExporter? exporter = ScanDatasetExporter.Create(_settings);
+
         // Pages are encoded as they arrive and their raw frames dropped; a thick stack therefore
         // holds N small payloads instead of N ~35 MB bitmaps. A depth-2 queue keeps the encode
         // overlapped with the next page read without ever holding the whole document in memory.
@@ -256,6 +263,10 @@ public sealed class ScanService
                     // 一次 256px 探针编码，两处复用：空白像素判定 + 盲扫方向票（分类器/投影基线）。
                     byte[] probe = Probe256(page);
                     bool isBlank = BlankPageDetector.IsBlank(probe);
+                    // 训练数据：原始帧按采集序先落盘（最终页序在装配后才确定）；空白页除首页外
+                    // 不进 PDF，其帧也不留。
+                    if (!isBlank || pageNumber == 1)
+                        exporter?.SaveCaptureFrame(pageNumber, page);
                     // A blank page enters no encode and no PDF; the FIRST captured page is always
                     // encoded so the all-blank keep-first rule always has something to keep.
                     EncodedScanPage? payload = isBlank && pageNumber > 1
@@ -286,7 +297,8 @@ public sealed class ScanService
                     }
 
                     return new TimedEncode(payload, encode.ElapsedMilliseconds, pageNumber, width, height,
-                        readMs, isBlank, classifierTurns, confidence, baseline);
+                        readMs, isBlank, classifierTurns, confidence, baseline,
+                        exporter is not null ? probe : null);
                 }));
 
                 if (pendingEncodes.Count >= 2)
@@ -400,23 +412,14 @@ public sealed class ScanService
             var votes = new List<PerPageOrientationDecider.PageVote>(keptEncodes.Count);
             foreach (TimedEncode t in keptEncodes)
             {
-                var (_, isBack) = PageOrderNormalizer.ClassifyPage(t.PageNumber - 1, duplex);
                 votes.Add(new PerPageOrientationDecider.PageVote(
                     ClassifierTurns: t.ClassifierTurns,
                     ClassifierConfidence: t.ClassifierConfidence,
                     BaselineIsHorizontal: t.BaselineHorizontal,
-                    IsBackSide: isBack,
                     IsLandscape: t.Width > t.Height));
             }
 
-            var binding = duplex switch
-            {
-                DuplexMode.LongEdge => PerPageOrientationDecider.Binding.LongEdge,
-                DuplexMode.ShortEdge => PerPageOrientationDecider.Binding.ShortEdge,
-                _ => PerPageOrientationDecider.Binding.None,
-            };
-            PerPageOrientationDecider.Decision decision =
-                PerPageOrientationDecider.Decide(votes, binding);
+            PerPageOrientationDecider.Decision decision = PerPageOrientationDecider.Decide(votes);
             pageDecision = decision;
             perPageTurns = decision.Turns;
             op.Step("逐页方向裁决", DescribeDecision(decision));
@@ -479,6 +482,33 @@ public sealed class ScanService
             path = recoveryPath;
         }
 
+        // 训练数据收尾：按最终阅读序把采集帧重命名，写探针/逐页票面/session，并从落盘 PDF
+        // 回读每页 /Rotate 作为真值。导出器内部吞异常，这里不加任何失败分支。
+        if (exporter is not null)
+        {
+            var records = new List<ScanDatasetPage>(keptEncodes.Count);
+            for (var index = 0; index < keptEncodes.Count; index++)
+            {
+                TimedEncode page = keptEncodes[index];
+                int turns = perPageTurns is { } perPage ? perPage[index] : orientationTurns ?? 0;
+                int rotate = 90 * (((turns % 4) + 4) % 4);
+                string source = pageDecision is { } decision
+                    ? decision.Sources[index].ToString()
+                    : orientationTurns is null ? "None" : "Classifier";
+                records.Add(new ScanDatasetPage(
+                    index + 1, page.PageNumber, page.ProbePng ?? Array.Empty<byte>(),
+                    page.ClassifierTurns, page.ClassifierConfidence, page.BaselineHorizontal,
+                    page.Width > page.Height, rotate, source));
+            }
+
+            long scanMs = (long)Stopwatch.GetElapsedTime(scanStartTicks).TotalMilliseconds;
+            exporter.Complete(records, new ScanDatasetSession(
+                device.Name, settings.Resolution.ToString(),
+                duplex.ToString(),
+                duplex == DuplexMode.Off ? "None" : duplex.ToString(),
+                pages.Count, skippedBlanks, scanMs), path);
+        }
+
         AppLog.Info(cancelled
             ? $"扫描已取消，已保留 {pages.Count} 页：{path}（{pdf.Length / 1024.0:0} KB）"
             : $"扫描完成：{path}（{pages.Count} 页，{pdf.Length / 1024.0:0} KB，来源 {device.Name}，版面 {duplex}）");
@@ -490,7 +520,15 @@ public sealed class ScanService
             OrientationPerPage: perPageTurns is not null,
             UndecidedPages: pageDecision is null
                 ? 0
-                : pageDecision.Sources.Count(s => s == PerPageOrientationDecider.Provenance.Undecided));
+                : pageDecision.Sources.Count(s => s == PerPageOrientationDecider.Provenance.Undecided),
+            UndecidedPageIndices: pageDecision is null
+                ? null
+                : pageDecision.Sources
+                    .Select((source, index) => (source, index))
+                    .Where(pair => pair.source == PerPageOrientationDecider.Provenance.Undecided)
+                    .Select(pair => pair.index)
+                    .ToArray(),
+            DatasetDirectory: exporter?.SessionDirectory);
     }
 
     /// <summary>逐页裁决摘要：转数列表 + 按来源分层计数（上线后日志采样监控按此分层看误翻率）。</summary>
@@ -507,7 +545,8 @@ public sealed class ScanService
     /// the first, or when encoding failed), the blank verdict, and the 盲扫 orientation votes.</summary>
     internal sealed record TimedEncode(
         EncodedScanPage? Payload, long EncodeMs, int PageNumber, int Width, int Height, long ReadMs, bool IsBlank,
-        int? ClassifierTurns = null, float ClassifierConfidence = 0f, bool? BaselineHorizontal = null);
+        int? ClassifierTurns = null, float ClassifierConfidence = 0f, bool? BaselineHorizontal = null,
+        byte[]? ProbePng = null);
 
     /// <summary>
     /// P2's pure core: pages in reading order → what enters the PDF. Blank pages (judged at

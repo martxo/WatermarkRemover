@@ -87,6 +87,39 @@ public class PdfRenameTrackingTests
     }
 
     [Fact]
+    public async Task A_fold_time_truth_flush_follows_the_rename_instead_of_failing()
+    {
+        string pdf = Path.Combine(Path.GetTempPath(), "wm-rename-" + Guid.NewGuid().ToString("N") + ".pdf");
+        File.WriteAllBytes(pdf, PdfFixture.CamScannerLike()
+            .WithContent($"q Q\n% rename-truth {Guid.NewGuid():N}\n").Build());
+        string renamed = Path.ChangeExtension(pdf, ".renamed.pdf");
+        string session = Path.Combine(Path.GetTempPath(), "wm-truth-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(session);
+        File.WriteAllText(Path.Combine(session, "truth.txt"), "# pageIndex,rotate\n1,90\n");
+        try
+        {
+            var vm = new PdfPreviewViewModel(pdf, "scan.pdf", new FakeRenderer(1),
+                datasetDirectory: session);
+            await vm.LoadAsync();
+            await DrainAsync(vm);
+
+            File.Move(pdf, renamed); // the naming pass renames the scan after it lands
+            vm.FlushDatasetTruth("preview-fold");
+
+            // The flush resolved the rename and re-read the file: one page, no rotation.
+            Assert.Contains("1,0", File.ReadAllText(Path.Combine(session, "truth.txt")));
+            // A refresh note is the proof it did not fail with "could not find file".
+            Assert.True(File.Exists(Path.Combine(session, "truth-refresh.txt")));
+        }
+        finally
+        {
+            File.Delete(pdf);
+            File.Delete(renamed);
+            Directory.Delete(session, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task A_deleted_file_reports_clearly_instead_of_failing_silently()
     {
         string pdf = Path.Combine(Path.GetTempPath(), "wm-rename-" + Guid.NewGuid().ToString("N") + ".pdf");

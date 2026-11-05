@@ -302,10 +302,9 @@
                             Visibility="{Binding Search.ShowInstallButton, Converter={StaticResource BoolToVis}}"/>
                 </Grid>
 
-                <!-- Hits: double-click opens, single click selects for the action row below. -->
+                <!-- Hits: checkbox for batch actions; double-click opens, clicking the path reveals it. -->
                 <ListBox Grid.Row="2"
                          ItemsSource="{Binding Search.Results}"
-                         SelectedItem="{Binding Search.SelectedResult, Mode=TwoWay}"
                          BorderThickness="0"
                          Background="Transparent"
                          ScrollViewer.HorizontalScrollBarVisibility="Disabled">
@@ -347,33 +346,63 @@
                                 <Grid>
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="Auto"/>
                                         <ColumnDefinition Width="*"/>
                                         <ColumnDefinition Width="Auto"/>
                                         <ColumnDefinition Width="Auto"/>
                                     </Grid.ColumnDefinitions>
-                                    <TextBlock Text="{Binding Glyph}"
+                                    <CheckBox Grid.Column="0"
+                                              IsChecked="{Binding IsChecked, Mode=TwoWay}"
+                                              VerticalAlignment="Center"
+                                              Margin="0,0,8,0"
+                                              ToolTip="勾选后可批量删除"/>
+                                    <TextBlock Grid.Column="1"
+                                               Text="{Binding Glyph}"
                                                FontFamily="Segoe MDL2 Assets"
                                                FontSize="16"
                                                Foreground="{StaticResource AccentBrush}"
                                                VerticalAlignment="Center"/>
-                                    <StackPanel Grid.Column="1" Margin="10,0,12,0">
+                                    <StackPanel Grid.Column="2" Margin="10,0,12,0">
                                         <TextBlock Text="{Binding Name}"
                                                    FontSize="13" FontWeight="SemiBold"
                                                    Foreground="{StaticResource TextPrimaryBrush}"
                                                    TextTrimming="CharacterEllipsis"/>
-                                        <TextBlock Text="{Binding Directory}"
-                                                   FontSize="11"
-                                                   Foreground="{StaticResource TextSecondaryBrush}"
-                                                   TextTrimming="CharacterEllipsis"
-                                                   Margin="0,2,0,0"/>
+                                        <Grid Margin="0,2,0,0">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0"
+                                                       Text="{Binding Directory}"
+                                                       FontSize="11"
+                                                       Foreground="{StaticResource TextSecondaryBrush}"
+                                                       TextTrimming="CharacterEllipsis"
+                                                       Cursor="Hand"
+                                                       ToolTip="点击打开所在文件夹"
+                                                       MouseLeftButtonUp="OnSearchPathClick"/>
+                                            <Button Grid.Column="1"
+                                                    Command="{Binding CopyPathCommand}"
+                                                    ToolTip="复制完整路径"
+                                                    Background="Transparent"
+                                                    BorderThickness="0"
+                                                    Padding="3,0"
+                                                    Cursor="Hand"
+                                                    Focusable="False"
+                                                    VerticalAlignment="Center">
+                                                <TextBlock Text="&#xE8C8;"
+                                                           FontFamily="Segoe MDL2 Assets"
+                                                           FontSize="12"
+                                                           Foreground="{StaticResource TextSecondaryBrush}"/>
+                                            </Button>
+                                        </Grid>
                                     </StackPanel>
-                                    <TextBlock Grid.Column="2"
+                                    <TextBlock Grid.Column="3"
                                                Text="{Binding SizeText}"
                                                FontSize="11"
                                                Foreground="{StaticResource TextSecondaryBrush}"
                                                VerticalAlignment="Center"
                                                Margin="0,0,12,0"/>
-                                    <TextBlock Grid.Column="3"
+                                    <TextBlock Grid.Column="4"
                                                Text="{Binding ModifiedText}"
                                                FontSize="11"
                                                Foreground="{StaticResource TextSecondaryBrush}"
@@ -384,31 +413,29 @@
                     </ListBox.ItemTemplate>
                 </ListBox>
 
-                <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="0,12,0,0">
-                    <Button Content="打开"
-                            Style="{StaticResource PrimaryButton}"
-                            Command="{Binding Search.OpenCommand}"
-                            MinWidth="90"/>
-                    <Button Content="打开所在文件夹"
-                            Style="{StaticResource SmallButton}"
-                            Command="{Binding Search.OpenFolderCommand}"
-                            Margin="10,0,0,0"/>
-                    <Button Content="复制路径"
-                            Style="{StaticResource SmallButton}"
-                            Command="{Binding Search.CopyPathCommand}"
-                            Margin="10,0,0,0"/>
-                    <Button Content="删除"
-                            Style="{StaticResource SmallButton}"
-                            Command="{Binding Search.DeleteCommand}"
-                            Foreground="{StaticResource DangerBrush}"
-                            ToolTip="移到回收站（可还原）"
-                            Margin="10,0,0,0"/>
-                    <TextBlock Text="双击结果也可直接打开"
+                <Grid Grid.Row="3" Margin="0,12,0,0">
+                    <TextBlock Text="双击结果打开 · 点击路径打开所在文件夹"
                                FontSize="11"
                                Foreground="{StaticResource TextSecondaryBrush}"
-                               VerticalAlignment="Center"
-                               Margin="16,0,0,0"/>
-                </StackPanel>
+                               VerticalAlignment="Center"/>
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"
+                                Visibility="{Binding Search.HasChecked, Converter={StaticResource BoolToVis}}">
+                        <TextBlock Text="{Binding Search.CheckedSummary}"
+                                   FontSize="12"
+                                   Foreground="{StaticResource TextSecondaryBrush}"
+                                   VerticalAlignment="Center"
+                                   Margin="0,0,10,0"/>
+                        <Button Content="取消勾选"
+                                Style="{StaticResource SmallButton}"
+                                Command="{Binding Search.ClearCheckedCommand}"/>
+                        <Button Content="删除选中"
+                                Style="{StaticResource SmallButton}"
+                                Command="{Binding Search.DeleteCheckedCommand}"
+                                Foreground="{StaticResource DangerBrush}"
+                                ToolTip="移到回收站（可还原）"
+                                Margin="8,0,0,0"/>
+                    </StackPanel>
+                </Grid>
             </Grid>
         </Border>
             </Grid>
@@ -1499,7 +1526,9 @@
                                                 Command="{Binding CopyErrorCommand}"
                                                 ToolTip="复制完整报错信息（含系统环境与异常堆栈）用于反馈问题"/>
 
-                                        <!-- screenshot rows: click to copy, or open the PNG in the default viewer -->
+                                        <!-- screenshot rows: click to copy. Opening the PNG is the
+                                             row thumbnail's click (same gesture as every other record),
+                                             so there is no separate 打开图片 button here. -->
                                         <Button Style="{StaticResource SmallButton}"
                                                 Content="复制图片"
                                                 Padding="10,3"
@@ -1521,13 +1550,6 @@
                                                 Visibility="{Binding ShowScreenshotActions, Converter={StaticResource BoolToVis}}"
                                                 Command="{Binding RecognizeTextCommand}"
                                                 ToolTip="用 OCR 提取截图中的文字"/>
-                                        <Button Style="{StaticResource SmallButton}"
-                                                Content="打开图片"
-                                                Padding="10,3"
-                                                Margin="0,0,8,0"
-                                                Visibility="{Binding ShowScreenshotActions, Converter={StaticResource BoolToVis}}"
-                                                Command="{Binding OpenImageCommand}"
-                                                ToolTip="用系统默认看图程序打开这张截图"/>
 
                                         <!-- finished rows: expand the inline thumbnail strip (again = fold).
                                              The row that just finished unfolds on its own, so its button
@@ -1743,6 +1765,19 @@
                                                     </Style>
                                                 </Button.Style>
                                             </Button>
+                                            <!-- One-click batch upright: whole document or only the
+                                                 pages the per-page verdict left undecided. The
+                                                 direction/scope dialog is the host's, so the user
+                                                 picks once instead of rotating page by page. -->
+                                            <Button Command="{Binding Strip.BatchUprightCommand}"
+                                                    Content="摆正"
+                                                    Style="{StaticResource SmallButton}"
+                                                    ToolTipService.ShowOnDisabled="True"
+                                                    ToolTip="批量摆正：按选择的方向整份或逐页旋转"
+                                                    FontSize="11"
+                                                    Padding="4,2"
+                                                    Margin="0,6,0,0"
+                                                    Focusable="False"/>
                                             <!-- Appends a fresh scan after the LAST page. It lives
                                                  here, outside the wrap panel, on purpose: as a
                                                  trailing plus slot inside the strip it made the
@@ -1786,6 +1821,22 @@
                                            Foreground="{StaticResource TextSecondaryBrush}"
                                            TextTrimming="CharacterEllipsis"
                                            Visibility="{Binding Strip.HasStatusText, Converter={StaticResource BoolToVis}}"/>
+                                <!-- Direct, clickable notice for pages the automatic verdict left
+                                     skewed: the whole line opens the batch-upright dialog. -->
+                                <Button Command="{Binding Strip.BatchUprightCommand}"
+                                        HorizontalAlignment="Left"
+                                        Margin="0,6,0,0"
+                                        Padding="0"
+                                        Background="Transparent"
+                                        BorderThickness="0"
+                                        Cursor="Hand"
+                                        ToolTip="批量摆正：按选择的方向整份或逐页旋转"
+                                        Visibility="{Binding Strip.HasUprightNotice, Converter={StaticResource BoolToVis}}">
+                                    <TextBlock Text="{Binding Strip.UprightNoticeText}"
+                                               FontSize="12"
+                                               Foreground="{StaticResource AccentBrush}"
+                                               TextWrapping="Wrap"/>
+                                </Button>
                                 </StackPanel>
                             </Border>
                         </DataTemplate>

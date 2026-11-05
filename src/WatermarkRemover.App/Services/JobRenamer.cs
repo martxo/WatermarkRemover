@@ -30,6 +30,8 @@ public sealed class JobRenamer
             return;
 
         string directory = Path.GetDirectoryName(job.OutputPath)!;
+        // 用户手动改名优先：磁盘上还是时间戳文件，乐观显示值立即失效，随后的移动以真实路径为准。
+        job.RevertOptimisticDisplayName();
         _ = RenameCoreAsync(job, directory, newName);
     }
 

@@ -1,5 +1,6 @@
 using PdfSharp.Pdf.IO;
 using SkiaSharp;
+using WatermarkRemover.App.Services;
 using WatermarkRemover.App.ViewModels;
 using WatermarkRemover.Core.Features.Ocr;
 using WatermarkRemover.Tests.Infrastructure;
@@ -188,6 +189,51 @@ public class PdfAutoOrientTests
         {
             File.Delete(pdf);
         }
+    }
+
+    [Fact]
+    public void Half_turn_outliers_are_overruled_by_the_document_majority()
+    {
+        // 刘健 (3).pdf 的真实票面：6 页里 4 页 270°、2 页 90°，同轴同向 → 整份 270°。
+        var turns = PdfScanPostProcessor.ReconcileHalfTurns(new[]
+        {
+            (0, 3), (1, 3), (2, 1), (3, 3), (4, 3), (5, 3),
+        });
+
+        Assert.Equal(6, turns.Count);
+        Assert.All(turns, turn => Assert.Equal(3, turn.Steps));
+    }
+
+    [Fact]
+    public void A_tied_document_keeps_each_page_verdict()
+    {
+        var turns = PdfScanPostProcessor.ReconcileHalfTurns(new[]
+        {
+            (0, 1), (1, 3), (2, 1), (3, 3),
+        });
+
+        Assert.Equal(new[] { 1, 3, 1, 3 }, turns.Select(turn => turn.Steps));
+    }
+
+    [Fact]
+    public void A_different_text_axis_is_never_dragged_into_the_majority()
+    {
+        // 竖版多数（3 页 270°）不能把真正横躺的一页（180°）拖成 270°。
+        var turns = PdfScanPostProcessor.ReconcileHalfTurns(new[]
+        {
+            (0, 3), (1, 3), (2, 3), (3, 2),
+        });
+
+        Assert.Equal(3, turns.Count(turn => turn.Steps == 3));
+        Assert.Contains(turns, turn => turn.Index == 3 && turn.Steps == 2);
+    }
+
+    [Fact]
+    public void Fewer_than_three_pages_keep_their_own_verdicts()
+    {
+        var turns = PdfScanPostProcessor.ReconcileHalfTurns(new[] { (0, 1), (1, 3) });
+
+        Assert.Equal(new[] { 1, 3 }, turns.Select(turn => turn.Steps));
     }
 
     [Fact]

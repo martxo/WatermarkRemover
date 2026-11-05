@@ -730,6 +730,7 @@ public sealed class SettingsViewModel : ObservableObject
         _target.PreferredLayoutStage = Settings.PreferredLayoutStage;
         _target.ScanColor = Settings.ScanColor;
         _target.ContinuousScan = Settings.ContinuousScan;
+        _target.ScanDatasetExportEnabled = Settings.ScanDatasetExportEnabled;
         _target.ScanOutputDirectory = Settings.ScanOutputDirectory?.Trim() ?? string.Empty;
         _target.TransferOutputDirectory = Settings.TransferOutputDirectory?.Trim() ?? string.Empty;
         _target.ScreenshotHotkey = Settings.ScreenshotHotkey;

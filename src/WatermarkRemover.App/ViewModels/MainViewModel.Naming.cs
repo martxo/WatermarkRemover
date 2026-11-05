@@ -83,6 +83,17 @@ public sealed partial class MainViewModel
 
             if (string.Equals(finalPath, pdfPath, StringComparison.OrdinalIgnoreCase))
             {
+                // 首屏命名已经把识别名显示出来了，但 File.Move 没有落盘（被占用/失败）：
+                // 显示退回真实文件名并说清楚，不能让卡片一直挂着一个磁盘上不存在的名字。
+                if (job.IsDisplayNameOptimistic)
+                {
+                    job.RevertOptimisticDisplayName("改名失败，已恢复原文件名");
+                    AppLog.Warn($"后台命名未落盘：{Path.GetFileName(pdfPath)}，已恢复显示原名");
+                    op.Complete("改名失败，已恢复原名");
+                    LogScanChain(chainTicks, finalPath, "改名失败，已恢复原名");
+                    return;
+                }
+
                 if (namingOn) job.SetNamingNote("未识别到标题，保留时间戳名");
                 op.Complete("无更名");
                 LogScanChain(chainTicks, finalPath, "保留时间戳名");
@@ -112,6 +123,7 @@ public sealed partial class MainViewModel
         catch (Exception ex)
         {
             AppLog.Trace("命名：后台自动命名异常，保留时间戳命名", ex);
+            job.RevertOptimisticDisplayName();
             if (namingOn) job.SetNamingNote("命名失败，保留时间戳名");
             op.Fail("后台自动命名异常，保留时间戳命名", ex);
             LogScanChain(chainTicks, pdfPath, "命名失败，保留时间戳名");

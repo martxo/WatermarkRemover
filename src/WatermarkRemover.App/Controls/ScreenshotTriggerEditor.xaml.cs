@@ -7,10 +7,10 @@ using WatermarkRemover.Core.Features.Screenshot;
 namespace WatermarkRemover.App.Controls;
 
 /// <summary>
-/// 截图设置 → 触发区域编辑器：左侧示意图里四条边的云朵热区可按住沿边拖动调位置，
+/// 截图设置 → 触发区域编辑器：左侧示意图里四条边的热区块可按住沿边拖动调位置，
 /// 右侧各行改启停 / 厚度 / 长度。全部直接绑定设置工作副本，随「返回应用」持久化。
 /// 示意图按主屏工作区等比映射——位置用比例表示，换分辨率不会错位。
-/// 云朵形状与运行时指示器（TriggerZoneIndicator）共用 Themes/TriggerZone.xaml 的资源。
+/// 厚度/长度在输入时即时写回工作副本并重排示意图，不等失焦才刷新。
 /// </summary>
 public partial class ScreenshotTriggerEditor : UserControl
 {
@@ -40,6 +40,27 @@ public partial class ScreenshotTriggerEditor : UserControl
     private void OnEdgeToggleChanged(object sender, RoutedEventArgs e) => RefreshMockup();
 
     private void OnNumericBoxLostFocus(object sender, RoutedEventArgs e) => RefreshMockup();
+
+    /// <summary>
+    /// 输入即刷新：绑定是 LostFocus 的，光标还在框里时源对象并没有更新，旧实现因此要等
+    /// 用户点别处才看得到示意图变化。这里把合法数字直接写回工作副本并重排，越界值由
+    /// RefreshMockup 里的 Clamp 收敛。空串/半截输入不落值，等下一次合法输入。
+    /// </summary>
+    private void OnNumericBoxTextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (sender is not TextBox { Tag: string tag } box) return;
+        ScreenshotTriggerSettings? trigger = Trigger;
+        if (trigger is null) return;
+
+        int separator = tag.IndexOf(':');
+        if (separator <= 0 || !Enum.TryParse(tag[..separator], out ScreenEdge edge)) return;
+        string field = tag[(separator + 1)..];
+        if (!int.TryParse(box.Text, out int value)) return;
+
+        if (field == "Thickness") trigger.Of(edge).Thickness = value;
+        else trigger.Of(edge).Length = value;
+        RefreshMockup();
+    }
 
     /// <summary>按当前配置重排四条热区色块；同时把越界值收敛回合法范围。</summary>
     private void RefreshMockup()

@@ -166,7 +166,7 @@ public sealed partial class MainViewModel
         // 逐页模式跳过预览摆正是预期行为；有页面未定（未被纠正）时必须说出口，否则用户只看到
         // 改名、不知道页面还歪着（黄小婷件反馈）。
         string orientNote = outcome.UndecidedPages > 0
-            ? $"，{outcome.UndecidedPages} 页未能自动摆正（可在预览中手动旋转）"
+            ? $"，{outcome.UndecidedPages} 页未能自动摆正，可点「批量摆正」一次改好"
             : string.Empty;
         string summary = outcome.Cancelled
             ? $"已取消，保留 {outcome.PageCount} 页{blankNote}"
@@ -208,13 +208,21 @@ public sealed partial class MainViewModel
         // just one document's pixels resident. With a settled orientation verdict the file is
         // already upright (and blank pages never entered it), so the strip's automatic passes
         // are skipped entirely — the manual buttons stay.
+        // 只有“每一页都有有效裁决”才跳过预览后处理；只要还有未定页就不跳过，走定向 OCR
+        // 兜底并在预览条给出「批量摆正」入口（逐页模式此前一律跳过，用户只看到已裁决但页面仍歪）。
         var livePages = job.LiveThumbnails.ToArray();
         int? settledTurns = earlyNaming is null ? null : await orientationVote.Task.ConfigureAwait(true);
-        bool orientationSettled = outcome.OrientationPerPage || settledTurns is not null;
-        _preview.Open(job, livePages, skipScanPostProcess: orientationSettled);
+        bool orientationSettled = outcome.OrientationPerPage
+            ? outcome.UndecidedPages == 0
+            : settledTurns is not null;
+        _preview.Open(job, livePages,
+            skipScanPostProcess: orientationSettled,
+            undecidedPageIndices: outcome.UndecidedPageIndices,
+            decidedPages: outcome.PageCount - outcome.UndecidedPages,
+            datasetDirectory: outcome.DatasetDirectory);
         job.ClearLiveThumbnails();
         op.Step("记录已展开", $"{Path.GetFileName(path)}，{livePages.Length} 页缩略图，" +
-                             (orientationSettled ? "方向已裁决，跳过自动后处理" : "保留预览自动后处理"));
+                             (orientationSettled ? "方向已裁决，跳过自动后处理" : "存在未裁决页，保留兜底与批量摆正"));
 
         // Naming may already have finished from page 1 while the scan continued; the rename
         // still waits for the PDF (and the strip's writes) before moving the file.
@@ -241,6 +249,11 @@ public sealed partial class MainViewModel
         AutoNameResult? suggestion = await _naming
             .TrySuggestFromImageAsync(namingImage, preOrientedSteps)
             .ConfigureAwait(true);
+
+        // 乐观改名（v1.16.92）：识别结果一出来就先把名字写到卡片和预览标题上，磁盘上仍是
+        // 时间戳文件；真正的 File.Move 仍等 PDF 落盘与预览稳定之后。路径字段完全不动。
+        if (suggestion is not null)
+            job.SetOptimisticDisplayName(suggestion.SuggestedStem + ".pdf");
 
         // 扫描已经落盘时，行上的命名状态由后台命名接手；这份「扫描结束后改名」的旧话不能再写，
         // 否则一页文档这种"落地比识别还快"的情况会把最终状态盖掉。

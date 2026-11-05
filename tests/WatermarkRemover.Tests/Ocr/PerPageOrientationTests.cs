@@ -13,9 +13,9 @@ namespace WatermarkRemover.Tests.Ocr;
 public class PerPageOrientationTests
 {
     private static PerPageOrientationDecider.PageVote Vote(
-        int? turns, float conf = 0.95f, bool? baseline = null, bool back = false, bool landscape = false) =>
+        int? turns, float conf = 0.95f, bool? baseline = null, bool landscape = false) =>
         new(ClassifierTurns: turns, ClassifierConfidence: conf, BaselineIsHorizontal: baseline,
-            IsBackSide: back, IsLandscape: landscape);
+            IsLandscape: landscape);
 
     // ---------- 逐页独立票 ----------
 
@@ -25,7 +25,7 @@ public class PerPageOrientationTests
         var decision = PerPageOrientationDecider.Decide(new[]
         {
             Vote(0), Vote(2, baseline: true), Vote(1, baseline: false), Vote(3, baseline: false),
-        }, PerPageOrientationDecider.Binding.None);
+        });
 
         Assert.Equal(new[] { 0, 2, 1, 3 }, decision.Turns);
         Assert.All(decision.Sources, s => Assert.Equal(PerPageOrientationDecider.Provenance.Classifier, s));
@@ -37,7 +37,7 @@ public class PerPageOrientationTests
         var decision = PerPageOrientationDecider.Decide(new[]
         {
             Vote(2, conf: 0.60f), Vote(0, conf: 0.70f),
-        }, PerPageOrientationDecider.Binding.None);
+        });
 
         Assert.Equal(new[] { 0, 0 }, decision.Turns);
         Assert.All(decision.Sources, s => Assert.Equal(PerPageOrientationDecider.Provenance.Undecided, s));
@@ -50,7 +50,7 @@ public class PerPageOrientationTests
         var decision = PerPageOrientationDecider.Decide(new[]
         {
             Vote(1, baseline: true),
-        }, PerPageOrientationDecider.Binding.None);
+        });
 
         Assert.Equal(0, decision.Turns[0]);
         Assert.Equal(PerPageOrientationDecider.Provenance.Undecided, decision.Sources[0]);
@@ -63,7 +63,7 @@ public class PerPageOrientationTests
         var decision = PerPageOrientationDecider.Decide(new[]
         {
             Vote(1, baseline: false),
-        }, PerPageOrientationDecider.Binding.None);
+        });
 
         Assert.Equal(1, decision.Turns[0]);
         Assert.Equal(PerPageOrientationDecider.Provenance.Classifier, decision.Sources[0]);
@@ -76,7 +76,7 @@ public class PerPageOrientationTests
         var decision = PerPageOrientationDecider.Decide(new[]
         {
             Vote(2, baseline: null),
-        }, PerPageOrientationDecider.Binding.None);
+        });
 
         Assert.Equal(2, decision.Turns[0]);
     }
@@ -89,7 +89,7 @@ public class PerPageOrientationTests
         var decision = PerPageOrientationDecider.Decide(new[]
         {
             Vote(1, landscape: true), Vote(0),
-        }, PerPageOrientationDecider.Binding.None);
+        });
 
         Assert.Equal(0, decision.Turns[0]);
         Assert.Equal(PerPageOrientationDecider.Provenance.LandscapeGuard, decision.Sources[0]);
@@ -104,7 +104,7 @@ public class PerPageOrientationTests
         var decision = PerPageOrientationDecider.Decide(new[]
         {
             Vote(2), Vote(2), Vote(2), Vote(2), Vote(0, conf: 0.97f),
-        }, PerPageOrientationDecider.Binding.None);
+        });
 
         Assert.Equal(new[] { 2, 2, 2, 2, 2 }, decision.Turns);
         Assert.Equal(PerPageOrientationDecider.Provenance.Majority, decision.Sources[4]);
@@ -117,7 +117,7 @@ public class PerPageOrientationTests
         var decision = PerPageOrientationDecider.Decide(new[]
         {
             Vote(0), Vote(0), Vote(2), Vote(3),
-        }, PerPageOrientationDecider.Binding.None);
+        });
 
         Assert.Equal(new[] { 0, 0, 2, 3 }, decision.Turns);
         Assert.All(decision.Sources, s => Assert.Equal(PerPageOrientationDecider.Provenance.Classifier, s));
@@ -129,56 +129,10 @@ public class PerPageOrientationTests
         var decision = PerPageOrientationDecider.Decide(new[]
         {
             Vote(2), Vote(2),
-        }, PerPageOrientationDecider.Binding.None);
+        });
 
         Assert.Equal(new[] { 2, 2 }, decision.Turns);
         Assert.All(decision.Sources, s => Assert.Equal(PerPageOrientationDecider.Provenance.Classifier, s));
-    }
-
-    // ---------- 短边装订奇偶约束 ----------
-
-    [Fact]
-    public void Undecided_backs_follow_the_short_edge_parity_of_the_majority()
-    {
-        // 短边装订：反面物理上与正面相差 180°。正面多数 0° → 未定反面推定 2。
-        var decision = PerPageOrientationDecider.Decide(new[]
-        {
-            Vote(0), Vote(turns: null, back: true), // 反面低置信弃权
-            Vote(0), Vote(turns: null, back: true),
-            Vote(0), Vote(turns: null, back: true),
-        }, PerPageOrientationDecider.Binding.ShortEdge);
-
-        Assert.Equal(new[] { 0, 2, 0, 2, 0, 2 }, decision.Turns);
-        Assert.Equal(PerPageOrientationDecider.Provenance.Parity, decision.Sources[1]);
-        Assert.Equal(PerPageOrientationDecider.Provenance.Parity, decision.Sources[3]);
-    }
-
-    [Fact]
-    public void Long_edge_backs_inherit_the_majority_without_the_flip()
-    {
-        var decision = PerPageOrientationDecider.Decide(new[]
-        {
-            Vote(0), Vote(turns: null, back: true),
-            Vote(0), Vote(turns: null, back: true),
-            Vote(0), Vote(turns: null, back: true),
-        }, PerPageOrientationDecider.Binding.LongEdge);
-
-        Assert.Equal(new[] { 0, 0, 0, 0, 0, 0 }, decision.Turns);
-    }
-
-    [Fact]
-    public void A_decided_page_is_never_overridden_by_the_parity_constraint()
-    {
-        // 物理例外（混纸、插页）：已定页绝不因奇偶约束被推翻。
-        var decision = PerPageOrientationDecider.Decide(new[]
-        {
-            Vote(0), Vote(0, back: true), // 反面明确说 0°（非短边物理预期）→ 信任页面
-            Vote(0), Vote(turns: null, back: true),
-            Vote(0), Vote(turns: null, back: true),
-        }, PerPageOrientationDecider.Binding.ShortEdge);
-
-        Assert.Equal(0, decision.Turns[1]);
-        Assert.Equal(PerPageOrientationDecider.Provenance.Classifier, decision.Sources[1]);
     }
 
     // ---------- 投影几何基线 ----------
@@ -377,10 +331,8 @@ public class PerPageOrientationTests
                         new[]
                         {
                             new PerPageOrientationDecider.PageVote(
-                                vote.QuarterTurns, vote.Confidence, baseline,
-                                IsBackSide: false, IsLandscape: landscape),
-                        },
-                        PerPageOrientationDecider.Binding.None);
+                                vote.QuarterTurns, vote.Confidence, baseline, IsLandscape: landscape),
+                        });
                     int finalTurns = decision.Turns[0];
                     totalMs += (long)Stopwatch.GetElapsedTime(start).TotalMilliseconds;
                     total++;
@@ -460,116 +412,59 @@ public class PerPageOrientationTests
             $"单页平均耗时 {totalMs / (double)total:0.0} ms 超过 50 ms 防线（目标 15 ms）{Environment.NewLine}{report}");
     }
 
-    // ---------- 奇偶自洽采纳（真机校准 2026-11-03 黄小婷件） ----------
+    // ---------- 钉死：已删除的「双面奇偶」与短边「多数 + 2」不再生效（v1.16.93） ----------
+    // 真机取证：4 份文档的奇偶采纳 24 页中 13 页误翻 180°（人工修正后正反面朝向一致），
+    // 短边推定唯一一次触发 3/3 全错。规则层不得再凭「正反必然差 180°」跨页改写票。
 
-    /// <summary>真机复现：长边双面 5 页全歪（正 3 票需转 270、反 2 票需转 90），conf 0.55-0.86
-    /// 全被 0.85 门槛挡下、3:2 形不成多数——奇偶自洽（两组相差恰 2）应让全部页面被采纳摆正。</summary>
+    /// <summary>1.16.86 票面（正 3/3/1、反 1/1，全部低于 0.85 门槛）：不再按奇偶整份采纳，
+    /// 低置信票保持弃权、未定页保持 0——宁可漏翻，绝不误翻。</summary>
     [Fact]
-    public void Parity_consistent_low_confidence_votes_are_adopted_on_duplex_scans()
+    public void The_11686_parity_pattern_now_stays_undecided()
     {
         var decision = PerPageOrientationDecider.Decide(new[]
         {
-            // 页位交替 front/back；正面 conf 偏低（0.55-0.71），背面更高（0.62-0.85）。
-            Vote(3, conf: 0.55f),                       // front → 需转 270
-            Vote(1, conf: 0.62f, back: true),           // back  → 需转 90
-            Vote(3, conf: 0.71f),                       // front
-            Vote(1, conf: 0.85f, back: true),           // back（压线）
-            Vote(3, conf: 0.65f),                       // front
-        }, PerPageOrientationDecider.Binding.LongEdge);
-
-        Assert.Equal(new[] { 3, 1, 3, 1, 3 }, decision.Turns);
-        Assert.All(decision.Sources, s => Assert.Equal(PerPageOrientationDecider.Provenance.Parity, s));
-    }
-
-    [Fact]
-    public void A_noisy_vote_breaks_parity_adoption()
-    {
-        // 背面组内一张杂音票 → 组不一致 → 奇偶自洽不启用：低置信票保持弃权；那张杂音票
-        // conf 0.90 自身过门槛按既有单页规则独立采纳（互不牵连）。
-        var decision = PerPageOrientationDecider.Decide(new[]
-        {
-            Vote(3, conf: 0.55f),
-            Vote(1, conf: 0.62f, back: true),
-            Vote(3, conf: 0.71f),
-            Vote(2, conf: 0.90f, back: true),  // 背面组内杂音（自身高置信）
-            Vote(3, conf: 0.65f),
-        }, PerPageOrientationDecider.Binding.LongEdge);
-
-        Assert.Equal(new[] { 0, 0, 0, 2, 0 }, decision.Turns);
-        Assert.Equal(PerPageOrientationDecider.Provenance.Classifier, decision.Sources[3]);
-        Assert.Equal(PerPageOrientationDecider.Provenance.Undecided, decision.Sources[0]);
-    }
-
-    [Fact]
-    public void Parity_adoption_requires_two_votes_per_side()
-    {
-        // 正反各只有 1 票：组合证据太弱，不启用。
-        var decision = PerPageOrientationDecider.Decide(new[]
-        {
-            Vote(3, conf: 0.55f), Vote(1, conf: 0.60f, back: true),
-        }, PerPageOrientationDecider.Binding.LongEdge);
-
-        Assert.Equal(new[] { 0, 0 }, decision.Turns);
-    }
-
-    // ---------- 组多数 + 奇偶自洽（真机 1.16.86 复扫票面 2026-11-03 19:08） ----------
-
-    /// <summary>真机 1:1 票面（第 5 页分类器误判成 1）：正面组 3/3/1（组多数 3）、背面组
-    /// 1/1（组多数 1），相差恰 2 → 按组多数采纳 [3,1,3,1,3]。人工逐页看图核对：正 3 票、
-    /// 反 1 票，全部摆正。</summary>
-    [Fact]
-    public void The_11686_vote_pattern_is_adopted_by_parity_majority()
-    {
-        var decision = PerPageOrientationDecider.Decide(new[]
-        {
-            Vote(3, conf: 0.584f), Vote(1, conf: 0.597f, back: true, baseline: false),
-            Vote(3, conf: 0.576f), Vote(1, conf: 0.716f, back: true, baseline: false),
-            Vote(1, conf: 0.733f, baseline: false), // 第 5 页误判：正面组离群票
-        }, PerPageOrientationDecider.Binding.LongEdge);
-
-        Assert.Equal(new[] { 3, 1, 3, 1, 3 }, decision.Turns);
-        Assert.All(decision.Sources, s => Assert.Equal(PerPageOrientationDecider.Provenance.Parity, s));
-    }
-
-    /// <summary>反例（1.16.85 首轮票面）：五票全 3——两组同向、相差 0，物理上不可能，
-    /// 说明背面票本身错。不得据此旋转（宁可漏翻，绝不误翻）。</summary>
-    [Fact]
-    public void Uniform_votes_without_the_two_step_offset_stay_undecided()
-    {
-        var decision = PerPageOrientationDecider.Decide(new[]
-        {
-            Vote(3, conf: 0.645f), Vote(3, conf: 0.779f, back: true),
-            Vote(3, conf: 0.606f), Vote(3, conf: 0.572f, back: true),
-            Vote(3, conf: 0.728f),
-        }, PerPageOrientationDecider.Binding.LongEdge);
+            Vote(3, conf: 0.584f), Vote(1, conf: 0.597f, baseline: false),
+            Vote(3, conf: 0.576f), Vote(1, conf: 0.716f, baseline: false),
+            Vote(1, conf: 0.733f, baseline: false),
+        });
 
         Assert.Equal(new[] { 0, 0, 0, 0, 0 }, decision.Turns);
         Assert.All(decision.Sources, s => Assert.Equal(PerPageOrientationDecider.Provenance.Undecided, s));
     }
 
-    /// <summary>纯正面文档没有背面组，奇偶约束不成立——低置信同向票保持弃权。</summary>
+    /// <summary>相差恰 2 的高低置信混合票面：每页保留自己的票，不再组间统一。</summary>
     [Fact]
-    public void A_front_only_document_is_not_adopted_by_parity()
+    public void Front_and_back_groups_keep_their_own_votes_instead_of_parity_override()
     {
         var decision = PerPageOrientationDecider.Decide(new[]
         {
-            Vote(3, conf: 0.55f), Vote(3, conf: 0.60f), Vote(3, conf: 0.65f),
-        }, PerPageOrientationDecider.Binding.None);
+            Vote(0), Vote(2), Vote(0), Vote(2), Vote(0),
+        });
 
-        Assert.Equal(new[] { 0, 0, 0 }, decision.Turns);
+        Assert.Equal(new[] { 0, 2, 0, 2, 0 }, decision.Turns);
+        Assert.All(decision.Sources, s => Assert.Equal(PerPageOrientationDecider.Provenance.Classifier, s));
     }
 
-    /// <summary>正面组内 1:1 分裂（最高票占比 1/2 < 2/3）→ 组多数不成立，不采纳。</summary>
+    /// <summary>短边多数不再把未定页推成「多数 + 2」：只有过门槛的页有票，其余保持 0。</summary>
     [Fact]
-    public void A_split_group_never_backs_parity_adoption()
+    public void A_majority_no_longer_rotates_undecided_pages_by_two()
     {
         var decision = PerPageOrientationDecider.Decide(new[]
         {
-            Vote(3, conf: 0.55f), Vote(1, conf: 0.60f, back: true),
-            Vote(1, conf: 0.58f), Vote(1, conf: 0.62f, back: true),
-        }, PerPageOrientationDecider.Binding.LongEdge);
+            Vote(0), Vote(turns: null),
+            Vote(0), Vote(turns: null),
+            Vote(0), Vote(turns: null),
+        });
 
-        Assert.Equal(new[] { 0, 0, 0, 0 }, decision.Turns);
+        Assert.Equal(new[] { 0, 0, 0, 0, 0, 0 }, decision.Turns);
+        Assert.Equal(
+            new[]
+            {
+                PerPageOrientationDecider.Provenance.Classifier, PerPageOrientationDecider.Provenance.Undecided,
+                PerPageOrientationDecider.Provenance.Classifier, PerPageOrientationDecider.Provenance.Undecided,
+                PerPageOrientationDecider.Provenance.Classifier, PerPageOrientationDecider.Provenance.Undecided,
+            },
+            decision.Sources);
     }
 
     // ---------- 模型映射校准（换模型/再导出必须重跑） ----------
