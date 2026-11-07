@@ -21,6 +21,10 @@
     <!-- PDF page rendering (pdfium) now lives in WatermarkRemover.Pdf; the app only consumes
          IPdfPageRenderer, so Docnet no longer needs a direct reference here. -->
     <!-- PP-OCR (PaddleOCR ONNX) recognition for machines without WeChat. -->
+    <!-- Embedded Edge browser for 天翼云盘's one-click login (captcha happens on the real page,
+         then the window harvests the session cookies). GeneratePathProperty lets the explicit
+         native-loader copy below find the package folder without hardcoding ~/.nuget. -->
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4314.35" GeneratePathProperty="true" />
     <PackageReference Include="RapidOcrNet" Version="4.2.0" />
     <!-- QR code for the 手机传文件 page: PngByteQRCode has no System.Drawing dependency. -->
     <PackageReference Include="QRCoder" Version="1.6.0" />
@@ -40,7 +44,7 @@
     <AssemblyName>WatermarkRemover</AssemblyName>
     <RootNamespace>WatermarkRemover.App</RootNamespace>
     <ApplicationIcon Condition="Exists('app.ico')">app.ico</ApplicationIcon>
-    <Version>1.16.106</Version>
+    <Version>1.16.125</Version>
     <AssemblyVersion>$(Version)</AssemblyVersion>
     <FileVersion>$(Version)</FileVersion>
     <Product>Watermark Remover</Product>
@@ -59,6 +63,10 @@
     <!-- Bundled 阿里云盘 CLI: renews the imported login pack's token without requiring a manual
          install on every PC. Its config lives in %APPDATA%, never beside this exe. -->
     <SidecarAsset Include="tools\aliyunpan\aliyunpan.exe" />
+    <!-- Bundled 钉钉 CLI (dws): the only channel to 钉钉云盘 — it hosts the app credentials and
+         the encrypted token store, so every drive call runs through this process. Same layout as
+         the aliyunpan CLI; DwsCliRunner.LocateExecutable finds it in tools\dws\. -->
+    <SidecarAsset Include="tools\dws\dws.exe" />
     <SidecarAsset Include="Models\ch_PP-OCRv5_det_mobile.onnx" />
     <SidecarAsset Include="Models\ch_PP-LCNet_x0_25_textline_ori_cls_mobile.onnx" />
     <SidecarAsset Include="Models\ch_PP-OCRv5_rec_mobile.onnx" />
@@ -82,6 +90,9 @@
          32-bit only, so the bridge is a separate self-contained x86 exe in its own folder beside
          the x64 app; published by PublishBrotherBridge below. -->
     <SidecarAsset Include="BrotherEngine\WatermarkRemover.Scan.Bridge.exe" />
+    <!-- WebView2's native loader must sit beside the single-file exe: the bundle does not extract
+         it on its own, and every WPF WebView2 launch would fail without it. -->
+    <SidecarAsset Include="WebView2Loader.dll" />
   </ItemGroup>
 
   <!-- wcocr shim (github.com/swigger/wechat-ocr, x64 prebuilt): drives WeChat's offline OCR.
@@ -93,6 +104,8 @@
     </None>
     <!-- Bundled CLI stays a plain file in tools\aliyunpan so it can be replaced/updated alone. -->
     <None Include="tools\aliyunpan\aliyunpan.exe" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
+    <!-- Same for the 钉钉 dws CLI: plain sidecar file, replaceable without rebuilding the app. -->
+    <None Include="tools\dws\dws.exe" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
   </ItemGroup>
 
   <!-- PP-OCRv5 mobile Chinese model set (det + cls + rec + dict, ~21.5 MB, RapidAI/PaddleOCR,
@@ -134,10 +147,8 @@
       <_BridgeProject>..\WatermarkRemover.Scan.Bridge\WatermarkRemover.Scan.Bridge.csproj</_BridgeProject>
       <_BridgePublishDir>$(MSBuildThisFileDirectory)$(IntermediateOutputPath)BridgePublish\</_BridgePublishDir>
     </PropertyGroup>
-    <MSBuild Projects="$(_BridgeProject)" Targets="Restore"
-             Properties="RuntimeIdentifier=win-x86;SelfContained=true" />
-    <MSBuild Projects="$(_BridgeProject)" Targets="Publish"
-             Properties="Configuration=$(Configuration);RuntimeIdentifier=win-x86;SelfContained=true;PublishSingleFile=true;PublishDir=$(_BridgePublishDir)" />
+    <MSBuild Projects="$(_BridgeProject)" Targets="Restore" Properties="RuntimeIdentifier=win-x86;SelfContained=true" />
+    <MSBuild Projects="$(_BridgeProject)" Targets="Publish" Properties="Configuration=$(Configuration);RuntimeIdentifier=win-x86;SelfContained=true;PublishSingleFile=true;PublishDir=$(_BridgePublishDir)" />
     <ItemGroup>
       <_BridgeExe Include="$(_BridgePublishDir)WatermarkRemover.Scan.Bridge.exe" />
     </ItemGroup>
@@ -157,15 +168,22 @@
       <_IndexerProject>..\WatermarkRemover.Indexer\WatermarkRemover.Indexer.csproj</_IndexerProject>
       <_IndexerPublishDir>$(MSBuildThisFileDirectory)$(IntermediateOutputPath)IndexerPublish\</_IndexerPublishDir>
     </PropertyGroup>
-    <MSBuild Projects="$(_IndexerProject)" Targets="Restore"
-             Properties="RuntimeIdentifier=win-x64;SelfContained=true" />
-    <MSBuild Projects="$(_IndexerProject)" Targets="Publish"
-             Properties="Configuration=$(Configuration);RuntimeIdentifier=win-x64;SelfContained=true;PublishSingleFile=true;PublishDir=$(_IndexerPublishDir)" />
+    <MSBuild Projects="$(_IndexerProject)" Targets="Restore" Properties="RuntimeIdentifier=win-x64;SelfContained=true" />
+    <MSBuild Projects="$(_IndexerProject)" Targets="Publish" Properties="Configuration=$(Configuration);RuntimeIdentifier=win-x64;SelfContained=true;PublishSingleFile=true;PublishDir=$(_IndexerPublishDir)" />
     <ItemGroup>
       <_IndexerExe Include="$(_IndexerPublishDir)WatermarkRemover.Indexer.exe" />
     </ItemGroup>
     <Copy SourceFiles="@(_IndexerExe)" DestinationFolder="$(PublishDir)" SkipUnchangedFiles="true" />
     <Copy SourceFiles="@(_IndexerExe)" DestinationFolder="$(TargetDir)" SkipUnchangedFiles="true" />
+  </Target>
+
+  <!-- WebView2's native loader ships inside the package's runtimes/win-x64/native path; the
+       single-file bundle does not extract it and the SDK P/Invokes it from the app folder, so
+       copy it beside the exe before the layout gate runs. -->
+  <Target Name="CopyWebView2NativeLoader" BeforeTargets="VerifyPublishLayout">
+    <Copy SourceFiles="$(PkgMicrosoft_Web_WebView2)\runtimes\win-x64\native\WebView2Loader.dll"
+          DestinationFolder="$(PublishDir)"
+          SkipUnchangedFiles="true" />
   </Target>
 
   <!-- PUBLISH GATE — turns "asset missing on the user's machine" (a runtime failure discovered on
@@ -181,13 +199,11 @@
       <_LeakedArtifact Include="$(PublishDir)*.lib" />
     </ItemGroup>
 
-    <Error Condition="'@(_MissingAsset)' != ''"
-           Text="发布布局校验失败：缺少旁挂资源 $(PublishDir)@(_MissingAsset)。请检查 csproj 的 SidecarAsset 清单与对应复制项。" />
+    <Error Condition="'@(_MissingAsset)' != ''" Text="发布布局校验失败：缺少旁挂资源 $(PublishDir)@(_MissingAsset)。请检查 csproj 的 SidecarAsset 清单与对应复制项。" />
 
-    <Error Condition="'@(_LeakedArtifact)' != ''"
-           Text="发布布局校验失败：开发文件泄露进发布目录 @(_LeakedArtifact)。" />
+    <Error Condition="'@(_LeakedArtifact)' != ''" Text="发布布局校验失败：开发文件泄露进发布目录 @(_LeakedArtifact)。" />
 
-    <Message Importance="high" Text="发布布局校验通过：@(SidecarAsset->Count()) 个旁挂资源就位，无开发文件泄露。" />
+    <Message Importance="high" Text="发布布局校验通过：@(SidecarAsset-&gt;Count()) 个旁挂资源就位，无开发文件泄露。" />
   </Target>
 
   <!-- Single-file, self-contained publish: run on any Windows machine with no install.
