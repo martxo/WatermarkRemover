@@ -36,8 +36,9 @@ internal static class PdfDocumentEditor
         bool locked = IsLockedForWrite(pdfPath);
         if (locked && !keepCopyOnLock)
         {
-            throw new IOException(
-                $"PDF 正在被其他程序占用（{LockHolders()}），无法保存修改。请关闭后重试，原文件未改动。");
+            throw new PdfFileLockedException(
+                $"PDF 正在被其他程序占用（{LockHolders()}），无法保存修改。请关闭后重试，原文件未改动。",
+                pdfPath, LockHolders());
         }
 
         // A viewer's read lock cannot block reading, so a locked target is edited as a private
@@ -54,8 +55,9 @@ internal static class PdfDocumentEditor
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                throw new IOException(
-                    $"PDF 正在被其他程序占用（{LockHolders()}），无法读取。请关闭后重试，原文件未改动。", ex);
+                throw new PdfFileLockedException(
+                    $"PDF 正在被其他程序占用（{LockHolders()}），无法读取。请关闭后重试，原文件未改动。",
+                    pdfPath, LockHolders(), ex);
             }
 
             editSourcePath = sourceCopyPath;
@@ -72,8 +74,9 @@ internal static class PdfDocumentEditor
                 }
                 catch (IOException ex)
                 {
-                    throw new IOException(
-                        $"PDF 正在被其他程序占用（{LockHolders()}），无法打开编辑。请关闭后重试，原文件未改动。", ex);
+                    throw new PdfFileLockedException(
+                        $"PDF 正在被其他程序占用（{LockHolders()}），无法打开编辑。请关闭后重试，原文件未改动。",
+                        pdfPath, LockHolders(), ex);
                 }
 
                 edit(doc);
@@ -99,8 +102,9 @@ internal static class PdfDocumentEditor
         {
             if (!keepCopyOnLock)
             {
-                throw new IOException(
-                    $"PDF 正在被其他程序占用（{LockHolders()}），无法保存修改。请关闭后重试，原文件未改动。", ex);
+                throw new PdfFileLockedException(
+                    $"PDF 正在被其他程序占用（{LockHolders()}），无法保存修改。请关闭后重试，原文件未改动。",
+                    pdfPath, LockHolders(), ex);
             }
 
             string fallbackPath = BuildFallbackPath(pdfPath, fallbackSuffix);
@@ -114,18 +118,7 @@ internal static class PdfDocumentEditor
     }
 
     /// <summary>True when another handle prevents an in-place write (viewer open / read-only).</summary>
-    private static bool IsLockedForWrite(string path)
-    {
-        try
-        {
-            using var stream = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
-            return false;
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            return true;
-        }
-    }
+    private static bool IsLockedForWrite(string path) => FileLockInspector.IsLockedForWrite(path);
 
     /// <summary>Copies with full sharing so a viewer's read lock cannot block the edit.</summary>
     private static void CopyShared(string source, string target)

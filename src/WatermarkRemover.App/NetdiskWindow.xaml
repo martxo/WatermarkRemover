@@ -20,6 +20,12 @@
         upload / download / delete through the shared INetdiskSession vocabulary. All behaviour is
         in NetdiskViewModel; this file only projects state.
 
+        Layout follows the 百度网盘 web information architecture: two stacked tool strips (account /
+        storage space on top, file operations below) above one dominant file panel, so no control
+        cluster is pushed off-screen at the default window size. The file panel owns its breadcrumb
+        header and status footer; selection actions sit in the operations strip instead of being
+        appended to the same horizontal line as the account pickers.
+
         Visual language mirrors MainWindow: ShellBrush shell, flat 44px caption strip with the
         brand chip, floating cards (Surface + BorderLight, radius) instead of full-bleed strips,
         and shared button styles from Themes/Controls.xaml. The file list drops the default
@@ -39,6 +45,18 @@
             <Setter Property="Width" Value="1"/>
             <Setter Property="Margin" Value="8,4"/>
             <Setter Property="Background" Value="{StaticResource BorderBrushLight}"/>
+        </Style>
+
+        <!-- Compact toolbar buttons: same styles as the rest of the app, tighter padding so a
+             full row of actions fits at the window's minimum width without wrapping or clipping. -->
+        <Style x:Key="ToolbarButton" TargetType="Button" BasedOn="{StaticResource GhostButton}">
+            <Setter Property="Padding" Value="12,6"/>
+            <Setter Property="FontSize" Value="12.5"/>
+        </Style>
+
+        <Style x:Key="ToolbarPrimaryButton" TargetType="Button" BasedOn="{StaticResource PrimaryButton}">
+            <Setter Property="Padding" Value="12,6"/>
+            <Setter Property="FontSize" Value="12.5"/>
         </Style>
 
         <!-- Modern list look: no gridlines, light separators, hover + soft-accent selection -->
@@ -125,125 +143,95 @@
         <!-- ===================== 内容区 ===================== -->
         <DockPanel Grid.Row="1" Margin="12,0,12,12">
 
-            <!-- 工具栏：浮起卡片，连接簇 | 上下文簇 | 搜索 | 文件操作簇 -->
+            <!-- 工具区：一张卡片分两层。上层是账号/存储空间（导航层），下层是文件操作
+                 （上传/新建/全选/搜索/下载/移动/删除）。两层各自独立排布，任何一层的
+                 控件都不会把另一层挤出可视区。 -->
             <Border DockPanel.Dock="Top" Background="{StaticResource SurfaceBrush}"
                     BorderBrush="{StaticResource BorderBrushLight}" BorderThickness="1"
                     CornerRadius="10" Padding="10,8" Margin="0,0,0,10">
-                <DockPanel LastChildFill="False">
-                    <StackPanel DockPanel.Dock="Left" Orientation="Horizontal">
-                        <Button Content="连接" Command="{Binding ConnectCommand}"
-                                Style="{StaticResource GhostButton}" Padding="14,6"/>
-                        <Button Content="刷新" Command="{Binding RefreshCommand}"
-                                Style="{StaticResource GhostButton}" Padding="14,6" Margin="6,0,0,0"/>
-                        <Button Content="重新授权" Click="OnReauthorizeClick"
-                                Style="{StaticResource GhostButton}" Padding="14,6" Margin="6,0,0,0"/>
-                    </StackPanel>
+                <StackPanel>
+                    <!-- 第一层：连哪个账号、进哪个存储空间 -->
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
 
-                    <Border DockPanel.Dock="Left" Style="{StaticResource ToolbarSeparator}"/>
+                        <StackPanel Grid.Column="0" Orientation="Horizontal">
+                            <TextBlock Text="产品" Style="{StaticResource FieldLabel}"/>
+                            <ComboBox Width="120" VerticalContentAlignment="Center" FontSize="12.5"
+                                      ItemsSource="{Binding Providers}" DisplayMemberPath="DisplayName"
+                                      SelectedItem="{Binding SelectedProvider, Mode=TwoWay}"/>
+                            <TextBlock Text="账号" Style="{StaticResource FieldLabel}" Margin="10,0,4,0"/>
+                            <ComboBox Width="116" VerticalContentAlignment="Center" FontSize="12.5"
+                                      ItemsSource="{Binding AccountNames}"
+                                      SelectedItem="{Binding SelectedAccountName, Mode=TwoWay}"/>
+                            <TextBlock Text="存储空间" Style="{StaticResource FieldLabel}" Margin="10,0,4,0"
+                                       Visibility="{Binding HasMultipleDrives, Converter={StaticResource BoolToVis}}"/>
+                            <ComboBox Width="140" VerticalContentAlignment="Center" FontSize="12.5"
+                                      ToolTip="我的空间 / 家庭空间等存储空间"
+                                      Visibility="{Binding HasMultipleDrives, Converter={StaticResource BoolToVis}}"
+                                      ItemsSource="{Binding Drives}" DisplayMemberPath="Name"
+                                      SelectedItem="{Binding SelectedDrive, Mode=TwoWay}"/>
+                        </StackPanel>
 
-                    <StackPanel DockPanel.Dock="Left" Orientation="Horizontal">
-                        <TextBlock Text="产品" Style="{StaticResource FieldLabel}"/>
-                        <ComboBox Width="130" VerticalContentAlignment="Center"
-                                  ItemsSource="{Binding Providers}" DisplayMemberPath="DisplayName"
-                                  SelectedItem="{Binding SelectedProvider, Mode=TwoWay}"/>
-                        <TextBlock Text="账号" Style="{StaticResource FieldLabel}" Margin="10,0,4,0"/>
-                        <ComboBox Width="120" VerticalContentAlignment="Center"
-                                  ItemsSource="{Binding AccountNames}"
-                                  SelectedItem="{Binding SelectedAccountName, Mode=TwoWay}"/>
-                        <TextBlock Text="盘" Style="{StaticResource FieldLabel}" Margin="10,0,4,0"
-                                   Visibility="{Binding HasMultipleDrives, Converter={StaticResource BoolToVis}}"/>
-                        <ComboBox Width="100" VerticalContentAlignment="Center"
-                                  ToolTip="多盘账号可切换存储空间（备份盘/资源库/相册）"
-                                  Visibility="{Binding HasMultipleDrives, Converter={StaticResource BoolToVis}}"
-                                  ItemsSource="{Binding Drives}" DisplayMemberPath="Name"
-                                  SelectedItem="{Binding SelectedDrive, Mode=TwoWay}"/>
-                    </StackPanel>
+                        <StackPanel Grid.Column="2" Orientation="Horizontal"
+                                    VerticalAlignment="Center">
+                            <Button Content="连接" Command="{Binding ConnectCommand}"
+                                    Style="{StaticResource ToolbarPrimaryButton}"/>
+                            <Button Content="刷新" Command="{Binding RefreshCommand}"
+                                    Style="{StaticResource ToolbarButton}" Margin="6,0,0,0"/>
+                            <Button Content="重新授权" Click="OnReauthorizeClick"
+                                    Style="{StaticResource ToolbarButton}" Margin="6,0,0,0"
+                                    ToolTip="展开下方的账号授权面板，重新扫码或手动填写凭据"/>
+                        </StackPanel>
+                    </Grid>
 
-                    <Border DockPanel.Dock="Left" Style="{StaticResource ToolbarSeparator}"/>
+                    <Border Height="1" Background="{StaticResource BorderBrushLight}" Margin="0,8"/>
 
-                    <StackPanel DockPanel.Dock="Left" Orientation="Horizontal">
-                        <TextBox Width="150" Style="{StaticResource InputBox}" Padding="8,6"
-                                 VerticalContentAlignment="Center"
-                                 ToolTip="按名称搜索当前盘的文件/文件夹；清空后回车回到当前目录"
-                                 Text="{Binding SearchText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                 KeyDown="OnSearchBoxKeyDown"/>
-                        <Button Content="搜索" Command="{Binding SearchCommand}"
-                                Style="{StaticResource GhostButton}" Padding="14,6" Margin="6,0,0,0"/>
-                    </StackPanel>
-
-                    <Border DockPanel.Dock="Right" Style="{StaticResource ToolbarSeparator}"/>
-
-                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
-                        <StackPanel Orientation="Horizontal" Margin="0,0,2,0">
-                            <TextBox Width="120" Style="{StaticResource InputBox}" Padding="8,6"
-                                     VerticalContentAlignment="Center"
+                    <!-- 第二层：文件操作。按「上传/新建/全选」「搜索」「下载/移动/删除」分成三组，
+                         窄窗口时整组换行，任何按钮都不会被裁掉。 -->
+                    <WrapPanel Orientation="Horizontal">
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,12,4">
+                            <Button Content="上传…" Command="{Binding UploadCommand}"
+                                    Style="{StaticResource ToolbarPrimaryButton}"
+                                    ToolTip="上传本地文件到当前目录"/>
+                            <Border Style="{StaticResource ToolbarSeparator}"/>
+                            <TextBox Width="100" Style="{StaticResource InputBox}" Padding="8,5"
+                                     FontSize="12.5" VerticalContentAlignment="Center"
                                      ToolTip="输入名称后点击「新建」，在当前目录创建文件夹"
                                      Text="{Binding NewFolderName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
                             <Button Content="新建" Command="{Binding NewFolderCommand}"
-                                    Style="{StaticResource GhostButton}" Padding="14,6" Margin="6,0,0,0"/>
+                                    Style="{StaticResource ToolbarButton}" Margin="6,0,0,0"/>
+                            <Border Style="{StaticResource ToolbarSeparator}"/>
+                            <Button Content="全选" Click="OnSelectAllClick"
+                                    Style="{StaticResource ToolbarButton}"/>
                         </StackPanel>
-                        <Button Content="全选" Click="OnSelectAllClick"
-                                Style="{StaticResource GhostButton}" Padding="14,6" Margin="10,0,0,0"/>
-                        <Button Content="上传…" Command="{Binding UploadCommand}"
-                                Style="{StaticResource GhostButton}" Padding="14,6" Margin="6,0,0,0"/>
-                        <Button Content="下载" Command="{Binding DownloadCommand}"
-                                Style="{StaticResource GhostButton}" Padding="14,6" Margin="6,0,0,0"/>
-                        <Button Content="移动" Command="{Binding MoveCommand}"
-                                Style="{StaticResource GhostButton}" Padding="14,6" Margin="6,0,0,0"/>
-                        <Button Content="删除" Command="{Binding DeleteCommand}"
-                                Style="{StaticResource GhostButton}" Padding="14,6" Margin="6,0,0,0"/>
-                    </StackPanel>
-                </DockPanel>
-            </Border>
 
-            <!-- 面包屑：浮起卡片 -->
-            <Border DockPanel.Dock="Top" Background="{StaticResource SurfaceBrush}"
-                    BorderBrush="{StaticResource BorderBrushLight}" BorderThickness="1"
-                    CornerRadius="10" Padding="10,6" Margin="0,0,0,10">
-                <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
-                    <ItemsControl ItemsSource="{Binding Breadcrumbs}">
-                        <ItemsControl.ItemsPanel>
-                            <ItemsPanelTemplate>
-                                <StackPanel Orientation="Horizontal"/>
-                            </ItemsPanelTemplate>
-                        </ItemsControl.ItemsPanel>
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate>
-                                <StackPanel Orientation="Horizontal">
-                                    <Button Content="{Binding Name}" Padding="6,2" Margin="0,0,2,0"
-                                            Background="Transparent" BorderThickness="0" Cursor="Hand"
-                                            Foreground="{StaticResource AccentBrush}"
-                                            Command="{Binding DataContext.NavigateToCommand,
-                                                              RelativeSource={RelativeSource AncestorType=Window}}"
-                                            CommandParameter="{Binding}"/>
-                                    <TextBlock Text="›" Foreground="{StaticResource TextTertiaryBrush}"
-                                               VerticalAlignment="Center" Margin="0,0,2,0"/>
-                                </StackPanel>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-                </ScrollViewer>
-            </Border>
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,12,4">
+                            <TextBox Width="150" Style="{StaticResource InputBox}" Padding="8,5"
+                                     FontSize="12.5" VerticalContentAlignment="Center"
+                                     ToolTip="按名称搜索当前盘的文件/文件夹；清空后回车回到当前目录"
+                                     Text="{Binding SearchText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                     KeyDown="OnSearchBoxKeyDown"/>
+                            <Button Content="搜索" Command="{Binding SearchCommand}"
+                                    Style="{StaticResource ToolbarButton}" Margin="6,0,0,0"/>
+                        </StackPanel>
 
-            <!-- 状态栏 -->
-            <Border DockPanel.Dock="Bottom" Background="{StaticResource SurfaceBrush}"
-                    BorderBrush="{StaticResource BorderBrushLight}" BorderThickness="1"
-                    CornerRadius="10" Padding="10,8" Margin="0,10,0,0">
-                <DockPanel>
-                    <ProgressBar DockPanel.Dock="Right" Width="200" Margin="10,0,0,0"
-                                 Style="{StaticResource SlimProgress}"
-                                 Value="{Binding ProgressPercent, Mode=OneWay}"
-                                 Visibility="{Binding IsBusy, Converter={StaticResource BoolToVis}}"/>
-                    <TextBlock DockPanel.Dock="Right" Text="{Binding QuotaText}"
-                               Foreground="{StaticResource TextTertiaryBrush}" FontSize="12"
-                               VerticalAlignment="Center" Margin="10,0,0,0"/>
-                    <TextBlock DockPanel.Dock="Right" Text="{Binding SelectionText}"
-                               Foreground="{StaticResource AccentBrush}" FontSize="12"
-                               VerticalAlignment="Center" Margin="10,0,0,0"/>
-                    <TextBlock Text="{Binding StatusText}" VerticalAlignment="Center" FontSize="12"
-                               Foreground="{StaticResource TextSecondaryBrush}"
-                               TextTrimming="CharacterEllipsis"/>
-                </DockPanel>
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,0,4">
+                            <Button Content="下载" Command="{Binding DownloadCommand}"
+                                    Style="{StaticResource ToolbarButton}"
+                                    ToolTip="下载选中的文件（可 Ctrl/Shift 多选）"/>
+                            <Button Content="移动" Command="{Binding MoveCommand}"
+                                    Style="{StaticResource ToolbarButton}" Margin="6,0,0,0"
+                                    ToolTip="把选中项移动到网盘内的其他目录"/>
+                            <Button Content="删除" Command="{Binding DeleteCommand}"
+                                    Style="{StaticResource ToolbarButton}" Margin="6,0,0,0"
+                                    ToolTip="把选中项移入网盘回收站"/>
+                        </StackPanel>
+                    </WrapPanel>
+                </StackPanel>
             </Border>
 
             <!-- 账号授权（重新授权时展开） -->
@@ -253,38 +241,94 @@
                 <Expander x:Name="AuthExpander"
                           Header="账号授权与密钥（重新授权 / 手动填写凭据）"
                           Background="Transparent" BorderThickness="0" Padding="10,8">
-                    <view:NetdiskAccountPanel/>
+                    <!-- Cap the form so opening it never squeezes the file list out of view. -->
+                    <ScrollViewer MaxHeight="300" VerticalScrollBarVisibility="Auto"
+                                  HorizontalScrollBarVisibility="Disabled">
+                        <view:NetdiskAccountPanel/>
+                    </ScrollViewer>
                 </Expander>
             </Border>
 
-            <!-- 文件列表：浮起卡片，圆角裁切 -->
+            <!-- 文件面板：面包屑（上）+ 文件列表（中）+ 状态栏（下）收进同一张卡片，
+                 主列表因此获得整块剩余高度，不再是三个互相挤占的独立卡片。 -->
             <Border Background="{StaticResource SurfaceBrush}"
                     BorderBrush="{StaticResource BorderBrushLight}" BorderThickness="1"
                     CornerRadius="10" ClipToBounds="True">
-                <DataGrid x:Name="FileGrid" ItemsSource="{Binding Items}"
-                          SelectedItem="{Binding SelectedItem, Mode=TwoWay}"
-                          SelectionChanged="OnFileSelectionChanged"
-                          AutoGenerateColumns="False" IsReadOnly="True"
-                          SelectionMode="Extended" SelectionUnit="FullRow"
-                          CanUserAddRows="False" HeadersVisibility="Column"
-                          GridLinesVisibility="Horizontal" HorizontalGridLinesBrush="#FFF3F4F7"
-                          Background="Transparent" BorderThickness="0" RowHeight="34"
-                          RowBackground="Transparent" AlternatingRowBackground="Transparent">
-                    <DataGrid.InputBindings>
-                        <MouseBinding MouseAction="LeftDoubleClick"
-                                      Command="{Binding DataContext.OpenFolderCommand,
-                                                        RelativeSource={RelativeSource AncestorType=DataGrid}}"
-                                      CommandParameter="{Binding SelectedItem,
-                                                                  RelativeSource={RelativeSource AncestorType=DataGrid}}"/>
-                    </DataGrid.InputBindings>
-                    <DataGrid.Columns>
-                        <DataGridTextColumn Header="名称" Binding="{Binding Name}" Width="*"/>
-                        <DataGridTextColumn Header="位置" Binding="{Binding Location}" Width="150"/>
-                        <DataGridTextColumn Header="类型" Binding="{Binding Kind}" Width="80"/>
-                        <DataGridTextColumn Header="大小" Binding="{Binding SizeText}" Width="100"/>
-                        <DataGridTextColumn Header="修改时间" Binding="{Binding ModifiedText}" Width="140"/>
-                    </DataGrid.Columns>
-                </DataGrid>
+                <DockPanel>
+                    <!-- 面包屑 -->
+                    <Border DockPanel.Dock="Top" Padding="10,6"
+                            BorderBrush="{StaticResource BorderBrushLight}" BorderThickness="0,0,0,1">
+                        <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+                            <ItemsControl ItemsSource="{Binding Breadcrumbs}">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <StackPanel Orientation="Horizontal"/>
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <StackPanel Orientation="Horizontal">
+                                            <Button Content="{Binding Name}" Padding="6,2" Margin="0,0,2,0"
+                                                    Background="Transparent" BorderThickness="0" Cursor="Hand"
+                                                    Foreground="{StaticResource AccentBrush}"
+                                                    Command="{Binding DataContext.NavigateToCommand,
+                                                                      RelativeSource={RelativeSource AncestorType=Window}}"
+                                                    CommandParameter="{Binding}"/>
+                                            <TextBlock Text="›" Foreground="{StaticResource TextTertiaryBrush}"
+                                                       VerticalAlignment="Center" Margin="0,0,2,0"/>
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
+                    </Border>
+
+                    <!-- 状态栏（容量/已选/进度/状态） -->
+                    <Border DockPanel.Dock="Bottom" Padding="10,7"
+                            BorderBrush="{StaticResource BorderBrushLight}" BorderThickness="0,1,0,0">
+                        <DockPanel>
+                            <ProgressBar DockPanel.Dock="Right" Width="180" Margin="10,0,0,0"
+                                         Style="{StaticResource SlimProgress}"
+                                         Value="{Binding ProgressPercent, Mode=OneWay}"
+                                         Visibility="{Binding IsBusy, Converter={StaticResource BoolToVis}}"/>
+                            <TextBlock DockPanel.Dock="Right" Text="{Binding QuotaText}"
+                                       Foreground="{StaticResource TextTertiaryBrush}" FontSize="12"
+                                       VerticalAlignment="Center" Margin="10,0,0,0"/>
+                            <TextBlock DockPanel.Dock="Right" Text="{Binding SelectionText}"
+                                       Foreground="{StaticResource AccentBrush}" FontSize="12"
+                                       VerticalAlignment="Center" Margin="10,0,0,0"/>
+                            <TextBlock Text="{Binding StatusText}" VerticalAlignment="Center" FontSize="12"
+                                       Foreground="{StaticResource TextSecondaryBrush}"
+                                       TextTrimming="CharacterEllipsis"/>
+                        </DockPanel>
+                    </Border>
+
+                    <!-- 文件列表 -->
+                    <DataGrid x:Name="FileGrid" ItemsSource="{Binding Items}"
+                              SelectedItem="{Binding SelectedItem, Mode=TwoWay}"
+                              SelectionChanged="OnFileSelectionChanged"
+                              AutoGenerateColumns="False" IsReadOnly="True"
+                              SelectionMode="Extended" SelectionUnit="FullRow"
+                              CanUserAddRows="False" HeadersVisibility="Column"
+                              GridLinesVisibility="Horizontal" HorizontalGridLinesBrush="#FFF3F4F7"
+                              Background="Transparent" BorderThickness="0" RowHeight="34"
+                              RowBackground="Transparent" AlternatingRowBackground="Transparent">
+                        <DataGrid.InputBindings>
+                            <MouseBinding MouseAction="LeftDoubleClick"
+                                          Command="{Binding DataContext.OpenFolderCommand,
+                                                            RelativeSource={RelativeSource AncestorType=DataGrid}}"
+                                          CommandParameter="{Binding SelectedItem,
+                                                                      RelativeSource={RelativeSource AncestorType=DataGrid}}"/>
+                        </DataGrid.InputBindings>
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="名称" Binding="{Binding Name}" Width="*"/>
+                            <DataGridTextColumn Header="位置" Binding="{Binding Location}" Width="150"/>
+                            <DataGridTextColumn Header="类型" Binding="{Binding Kind}" Width="80"/>
+                            <DataGridTextColumn Header="大小" Binding="{Binding SizeText}" Width="100"/>
+                            <DataGridTextColumn Header="修改时间" Binding="{Binding ModifiedText}" Width="140"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </DockPanel>
             </Border>
         </DockPanel>
     </Grid>

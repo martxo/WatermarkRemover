@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using Microsoft.Win32;
+using System.Windows;
 using WatermarkRemover.App.Logging;
 using WatermarkRemover.App.Settings;
 using WatermarkRemover.App.ViewModels;
@@ -41,6 +42,11 @@ public sealed class NetdiskCoordinator : ObservableObject
             Upsert,
             (providerId, name) => Remove(providerId, name),
             AppLog.Trace);
+        // A login may finish on the 设置 page or in the management window's own panel; both share
+        // this state object, so listening here makes the freshly authorized account the one that
+        // is opened next (and switches an already-open window) instead of resurrecting the
+        // previously selected product.
+        Settings.AccountSaved += OnAccountSaved;
         OpenCommand = new RelayCommand(Open);
         QuickUploadCommand = new RelayCommand(() => _ = QuickUploadAsync(), () => !_isBusy());
         RefreshSummary();
@@ -243,11 +249,86 @@ public sealed class NetdiskCoordinator : ObservableObject
         // z-orders normally.
         _window = new NetdiskWindow(
             new NetdiskViewModel(Catalog, Accounts, Upsert, _dialogs, AppLog.Trace,
-                requestMoveTarget: NetdiskMoveDialog.Prompt),
+                requestMoveTarget: NetdiskMoveDialog.Prompt,
+                lastProviderId: _settings.NetdiskLastProviderId,
+                lastAccountName: _settings.NetdiskLastAccountName,
+                rememberSelection: RememberSelection,
+                rememberUploadLocation: RememberUploadLocation),
             Settings);
         _window.Closed += (_, _) => _window = null;
         _window.Show();
         AppLog.Info("打开网盘管理窗口");
+    }
+
+    /// <summary>
+    /// A login/import saved an account: make it the resume target and, when the management window
+    /// is open, switch the listing right away — otherwise the page still shows the old product's
+    /// (possibly empty) drive, which reads as "login did nothing".
+    /// </summary>
+    private void OnAccountSaved(string providerId, string accountName)
+    {
+        RememberSelection(providerId, accountName);
+        if (_window is { IsLoaded: true })
+        {
+            _ = _window.ShowAccountAsync(providerId, accountName);
+        }
+    }
+
+    /// <summary>
+    /// Remembers the connecting account so the next 网盘管理 open resumes it. Written straight to
+    /// the settings file: a crash before the next save must not lose the user's selection.
+    /// </summary>
+    private void RememberSelection(string providerId, string accountName)
+    {
+        if (string.Equals(_settings.NetdiskLastProviderId, providerId, StringComparison.Ordinal) &&
+            string.Equals(_settings.NetdiskLastAccountName, accountName, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _settings.NetdiskLastProviderId = providerId;
+        _settings.NetdiskLastAccountName = accountName;
+        SettingsService.Save(_settings);
+    }
+
+    /// <summary>
+    /// 在网盘管理窗口的哪个目录上传过，那里就成为「快速上传位置」— 任务行与快速上传的下一次
+    /// 默认目标。同样直写设置文件，管理窗口不必先关再开设置页。
+    /// </summary>
+    private void RememberUploadLocation(string driveName, string remotePath)
+    {
+        if (string.Equals(_settings.NetdiskUploadDrive, driveName, StringComparison.Ordinal) &&
+            string.Equals(_settings.NetdiskUploadDirectory, remotePath, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _settings.NetdiskUploadDrive = driveName;
+        _settings.NetdiskUploadDirectory = remotePath;
+        SettingsService.Save(_settings);
+        AppLog.Info($"快速上传位置已更新：{driveName} {remotePath}");
+    }
+
+    /// <summary>
+    /// Opens the cloud folder picker for the settings page's 「浏览…」 button; the picked
+    /// drive + directory land in the settings form. Returns null when cancelled or when no
+    /// account is configured (the user is told so).
+    /// </summary>
+    public (string DriveName, string RemotePath)? BrowseForUploadFolder()
+    {
+        if (!HasAccounts)
+        {
+            _dialogs.Warn("还没有配置网盘账号。请先在「设置 → 网盘设置」中添加一个账号。", "选择上传目录");
+            return null;
+        }
+
+        return NetdiskFolderPickerWindow.Prompt(
+            Application.Current?.MainWindow,
+            Catalog,
+            Accounts,
+            _settings.NetdiskLastProviderId,
+            _settings.NetdiskLastAccountName,
+            AppLog.Trace);
     }
 
     /// <summary>Upload picked files to the first configured account's root folder.</summary>

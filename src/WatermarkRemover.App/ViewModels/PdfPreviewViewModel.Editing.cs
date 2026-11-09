@@ -32,6 +32,8 @@ public sealed partial class PdfPreviewViewModel
 
             // 逐页裁决只要还有未定页就不算“已完成”：部分页已决时只兜底那些未定页，避免整份
             // 旋转把已经摆正的页又转歪；全未决时整份 OCR 兜底仍是唯一可用的保守做法。
+            // 有 180° 烤入页时也进后处理：半圈是分类器的已知混淆点，落盘后用 OCR 复核。
+            bool hasHalfTurns = _halfTurnedPageIndices.Count > 0;
             bool scopedFallback =
                 _undecidedPageIndices.Count > 0 && _decidedPages > 0 && PageCount > 0;
             bool blankFirstPage = _autoCleanBlank && await IsPageBlankAsync(0);
@@ -42,7 +44,7 @@ public sealed partial class PdfPreviewViewModel
                 await FallbackUndecidedPagesAsync();
                 op.Step("未裁决页兜底");
             }
-            else
+            else if (!hasHalfTurns)
             {
                 if (blankFirstPage)
                 {
@@ -52,6 +54,32 @@ public sealed partial class PdfPreviewViewModel
 
                 await AutoOrientAsync();
                 op.Step("方向检测");
+            }
+
+            // 180° 复核：渲染含 /Rotate 的当前视图，OCR 认为还要再转半圈的页转回归位。
+            // 与兜底共用“旋转不改页序”的性质，页索引与扫描期一致；必须先于空白页清理
+            // （删除会重排页码）。
+            if (hasHalfTurns)
+            {
+                IsOrienting = true; // 复核期间挡住插页/批量摆正等并发改写，与兜底同一把闸
+                try
+                {
+                    int reverted = await _postProcessor
+                        .VerifyHalfTurnsAsync(PageCount, _halfTurnedPageIndices, OrientationDpi)
+                        .ConfigureAwait(true);
+                    op.Step("180°复核", reverted == 0 ? "烤入方向全部正确" : $"转回 {reverted} 页");
+                    if (reverted > 0 && !IsCancelled)
+                    {
+                        BuildThumbnails();
+                        StartThumbnailLoad();
+                        await RenderAsync(PageIndex, force: true).ConfigureAwait(true);
+                        ShowTransientStatus($"已转回 {reverted} 页被误转的页面");
+                    }
+                }
+                finally
+                {
+                    IsOrienting = false;
+                }
             }
 
             if (_autoCleanBlank && !blankFirstPage)

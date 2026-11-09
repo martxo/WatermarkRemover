@@ -21,11 +21,16 @@ internal sealed class NetdiskHttpStub : HttpMessageHandler
         CancellationToken cancellationToken)
     {
         var body = request.Content?.ReadAsStringAsync(cancellationToken).GetAwaiter().GetResult();
+        var headers = request.Headers.ToDictionary(
+            header => header.Key,
+            header => string.Join(",", header.Value),
+            StringComparer.OrdinalIgnoreCase);
         var call = new StubCall(
             request.Method.Method,
             request.RequestUri!.ToString(),
             body,
-            request.Headers.Authorization?.Parameter);
+            request.Headers.Authorization?.Parameter,
+            headers);
         Calls.Add(call);
         return Task.FromResult(Responder(call));
     }
@@ -47,5 +52,10 @@ internal sealed class NetdiskHttpStub : HttpMessageHandler
         return Encode(new { alg = "none", typ = "JWT" }) + "." + Encode(payload) + ".sig";
     }
 
-    public sealed record StubCall(string Method, string Url, string? Body, string? Authorization);
+    public sealed record StubCall(
+        string Method,
+        string Url,
+        string? Body,
+        string? Authorization,
+        IReadOnlyDictionary<string, string>? Headers = null);
 }

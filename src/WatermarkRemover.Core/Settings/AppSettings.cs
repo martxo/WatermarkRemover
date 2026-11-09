@@ -184,6 +184,15 @@ public sealed class AppSettings
     /// </summary>
     public string NetdiskUploadDirectory { get; set; } = string.Empty;
 
+    /// <summary>
+    /// Product/account the 网盘管理 window last connected to. Reopening resumes there, so a user
+    /// who just authorized 钉钉 does not land on 阿里云盘 again.
+    /// </summary>
+    public string NetdiskLastProviderId { get; set; } = string.Empty;
+
+    /// <summary>Account name paired with <see cref="NetdiskLastProviderId"/>.</summary>
+    public string NetdiskLastAccountName { get; set; } = string.Empty;
+
     /// <summary>Deep copy: safe to hand to background work while the original keeps being edited.</summary>
     public AppSettings Clone() => new()
     {
@@ -219,5 +228,7 @@ public sealed class AppSettings
         NetdiskAccounts = NetdiskAccounts.ToList(),
         NetdiskUploadDrive = NetdiskUploadDrive,
         NetdiskUploadDirectory = NetdiskUploadDirectory,
+        NetdiskLastProviderId = NetdiskLastProviderId,
+        NetdiskLastAccountName = NetdiskLastAccountName,
     };
 }

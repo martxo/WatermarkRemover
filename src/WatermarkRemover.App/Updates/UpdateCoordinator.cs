@@ -33,7 +33,7 @@ public static class UpdateCoordinator
     /// is exactly the "installed and restarted, still 1.16.24" report. Returns true when startup
     /// should stop here: the app is either restarting into the update or a warning was shown.
     /// </summary>
-    private static bool TryApplyPendingUpdate(IDialogService dialogs)
+    private static bool TryApplyPendingUpdate(IDialogService dialogs, bool force = false)
     {
         VelopackAsset? pending;
         try
@@ -53,19 +53,31 @@ public static class UpdateCoordinator
                     VelopackUpdateService.DescribeInstall());
 
         string guardDir = Path.Combine(AppFolders.Root, "updates");
-        if (!UpdateApplyGuard.ShouldAttempt(
-                guardDir, target, running, Environment.ProcessPath ?? string.Empty, DateTime.UtcNow))
+        bool allowed = UpdateApplyGuard.ShouldAttempt(
+            guardDir, target, running, Environment.ProcessPath ?? string.Empty, DateTime.UtcNow);
+        if (!allowed && force)
         {
+            AppLog.Info($"用户手动重试更新 v{target}：忽略冷却期，再次交给 Update.exe");
+        }
+        else if (!allowed)
+        {
+            // Update.exe 是唯一真正换文件的一方，它自己的日志才写明了失败原因；以前只丢下一句
+            // "可能的原因"，用户和开发者都只能猜。这里把日志里的原文交给用户，并整段落进程序日志。
             string root = VelopackUpdateService.InstallRoot ?? "未识别";
+            string? updaterLog = VelopackUpdaterLog.Locate();
             AppLog.Error($"更新 v{target} 已下载但重启后仍未应用，停止自动重试。" +
-                         $"运行位置 {Environment.ProcessPath}，安装根目录 {root}");
+                         $"运行位置 {Environment.ProcessPath}，安装根目录 {root}，" +
+                         $"更新程序日志 {updaterLog ?? "未找到"}");
+            if (updaterLog is not null)
+                foreach (string line in VelopackUpdaterLog.LastSession(updaterLog, 40))
+                    AppLog.Error($"  update.exe │ {line}");
+
             dialogs.Warn(
                 $"新版本 v{target} 已下载，但重启后仍在运行 v{running}。\n\n" +
-                "可能的原因：\n" +
-                $"• 当前启动的不是安装版程序（运行位置：{Environment.ProcessPath}）；\n" +
-                "• 安装目录无法写入，更新程序没能替换文件。\n\n" +
-                $"安装位置：{root}\n\n" +
-                "请从桌面或开始菜单的「办公助理」重新打开；仍不行请到发布页下载最新安装包重新安装。",
+                "更新程序没能替换文件：\n" +
+                VelopackUpdaterLog.Describe(updaterLog) +
+                $"\n\n运行位置：{Environment.ProcessPath}\n安装位置：{root}\n\n" +
+                "点标题栏的更新图标可以再试一次；仍不行请到发布页下载最新安装包重新安装。",
                 "软件更新");
             return true;
         }
@@ -76,11 +88,27 @@ public static class UpdateCoordinator
             VelopackService.ApplyPendingAndRestart(pending);
             return true; // the process exits inside the call
         }
+        catch (InstallLockedException ex)
+        {
+            // 占用者已经查清楚：不必再让用户去读 Update.exe 的日志，也不要让它白白重试 10 秒。
+            AppLog.Error($"启动时应用更新 v{target} 被占用阻止：{ex.Message}");
+            dialogs.Warn(
+                ex.Message +
+                $"\n\n运行位置：{Environment.ProcessPath}\n安装位置：{VelopackUpdateService.InstallRoot ?? "未识别"}",
+                "软件更新");
+            return true;
+        }
         catch (Exception ex)
         {
-            AppLog.Error($"启动时应用更新 v{target} 失败", ex);
+            string? updaterLog = VelopackUpdaterLog.Locate();
+            AppLog.Error($"启动时应用更新 v{target} 失败（更新程序日志 {updaterLog ?? "未找到"}）", ex);
+            if (updaterLog is not null)
+                foreach (string line in VelopackUpdaterLog.LastSession(updaterLog, 40))
+                    AppLog.Error($"  update.exe │ {line}");
+
             dialogs.Warn(
-                $"更新 v{target} 已下载，但启动时应用失败。\n\n原因：{ex.Message}\n\n" +
+                $"更新 v{target} 已下载，但启动时应用失败。\n\n原因：{ex.Message}\n" +
+                VelopackUpdaterLog.Describe(updaterLog) + "\n\n" +
                 $"运行位置：{Environment.ProcessPath}\n" +
                 $"安装位置：{VelopackUpdateService.InstallRoot ?? "未识别"}\n\n" +
                 "可到设置中重新检查更新，或到发布页下载最新安装包。",
@@ -95,14 +123,15 @@ public static class UpdateCoordinator
     /// Every phase the user waits through is reflected in the progress window — the only silent step
     /// is the startup check itself.
     /// </summary>
-    public static async Task RunCheckAsync(Window? owner, AppSettings settings, bool silent)
+    public static async Task RunCheckAsync(
+        Window? owner, AppSettings settings, bool silent, bool forceApply = false)
     {
         var dialogs = new DialogService(owner);
 
         // A package downloaded by an earlier session is applied before anything else: this is
         // what makes a plain close-and-reopen ("安装后重启") actually update. Startup checks being
         // disabled or the network being down must not leave a verified package unapplied.
-        if (silent && TryApplyPendingUpdate(dialogs)) return;
+        if (silent && TryApplyPendingUpdate(dialogs, forceApply)) return;
 
         if (!UpdateConfig.IsConfigured)
         {
@@ -139,7 +168,9 @@ public static class UpdateCoordinator
     {
         // A downloaded update is already waiting: a manual click means "restart into it", and a
         // background pass has nothing left to do (never download the same package twice).
-        if (UpdateReadyNotifier.Current.HasUpdate)
+        // Only Ready qualifies — Failed also reports HasUpdate, and treating it as "waiting for
+        // restart" made the icon's retry click a silent no-op (the reported 70 MB failure).
+        if (UpdateReadyNotifier.Current is { State: UpdateVisualState.Ready })
         {
             if (!silent)
             {
@@ -426,8 +457,16 @@ public static class UpdateCoordinator
     /// Retry after a failed background download (the icon's click action). Same quiet path as
     /// startup: the result returns to the icon, not to a dialog the user has to dismiss.
     /// </summary>
-    public static Task RetryAsync(AppSettings settings) =>
-        RunCheckAsync(Application.Current?.MainWindow, settings, silent: true);
+    public static Task RetryAsync(AppSettings settings)
+    {
+        // A Failed icon still counts as HasUpdate; clear it first so the check below is not
+        // mistaken for "a package is already waiting for restart".
+        if (UpdateReadyNotifier.Current.State == UpdateVisualState.Failed)
+            UpdateReadyNotifier.Current.Clear();
+        // 用户主动点了更新图标：跳过"同一版本 10 分钟内不再自动尝试"的冷却期，否则这颗按钮
+        // 在刚失败过的机器上等于没有反应。
+        return RunCheckAsync(Application.Current?.MainWindow, settings, silent: true, forceApply: true);
+    }
 
     private static int? ToPercent(UpdateProgress progress) =>
         progress.Percent is { } percent ? (int)Math.Round(percent) : null;

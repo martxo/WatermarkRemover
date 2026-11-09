@@ -3,14 +3,18 @@ using PdfSharp.Pdf.IO;
 
 namespace WatermarkRemover.Pdf;
 
-/// <summary>Outcome of one insertion: page count, final path, and whether a locked original forced a copy.</summary>
+/// <summary>Outcome of one page splice: page count, final path, and whether a locked original
+/// forced the append into a copy beside it (insert never copies — it asks the user to close the
+/// holder instead).</summary>
 public sealed record PdfInsertResult(int AddedPages, string PdfPath, bool SavedAsCopy);
 
 /// <summary>
 /// Splices every page of one PDF into another at a chosen position, in a single side-file save —
 /// the preview's gap button inserts freshly scanned pages between existing ones without
-/// rebuilding (and re-encoding) the document. When the target is open in WPS, the edited copy is
-/// kept beside it as "原名 (已插入).pdf" instead of failing.
+/// rebuilding (and re-encoding) the document. When the target is open in WPS, the insert fails
+/// with <see cref="PdfFileLockedException"/> and the original stays untouched: the preview asks
+/// the user to close the holder and then saves in place, instead of leaving a second
+/// "原名 (已插入).pdf" behind (v1.16.123).
 /// </summary>
 public static class PdfPageInserter
 {
@@ -82,8 +86,7 @@ public static class PdfPageInserter
                 doc.Pages.InsertRange(position, source);
                 inserted = source.PageCount;
             },
-            keepCopyOnLock: true,
-            fallbackSuffix: "已插入");
+            keepCopyOnLock: false);
 
         return CreateResult(targetPdfPath, resultPath, inserted);
     }

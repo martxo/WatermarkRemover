@@ -62,10 +62,38 @@
                          Text="{Binding AccountName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"/>
             </DockPanel>
         </Grid>
+        <!-- 钉钉: dws keeps one profile per DingTalk identity, each with its own drive. Listing
+             them here lets a second/third account be added without another scan; scanning still
+             adds a brand-new identity. -->
+        <Grid Margin="0,0,0,6" Visibility="{Binding IsDingTalk, Converter={StaticResource BoolToVis}}">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" SharedSizeGroup="NetdiskFieldLabel" MinWidth="110"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+            <TextBlock Grid.Column="0" Text="本机钉钉账号" Style="{StaticResource FieldLabel}"
+                       ToolTip="dws 已登录的钉钉身份，每个账号的网盘数据互相独立"/>
+            <DockPanel Grid.Column="1">
+                <Button DockPanel.Dock="Right" Content="添加为账号"
+                        Command="{Binding AddDwsProfileCommand}"
+                        Style="{StaticResource SmallButton}" Margin="8,0,0,0"
+                        ToolTip="把选中的钉钉身份添加为独立账号，无需重新扫码"/>
+                <Button DockPanel.Dock="Right" Content="刷新"
+                        Command="{Binding RefreshDwsProfilesCommand}"
+                        Style="{StaticResource SmallButton}" Margin="8,0,0,0"/>
+                <ComboBox MinWidth="0" FontSize="13" Padding="8,6"
+                          VerticalContentAlignment="Center"
+                          ItemsSource="{Binding DwsProfiles}" DisplayMemberPath="DisplayName"
+                          SelectedItem="{Binding SelectedDwsProfile, Mode=TwoWay}"/>
+            </DockPanel>
+        </Grid>
         <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
             <Button Content="扫码登录（推荐）" Command="{Binding ScanLoginCommand}"
                     Visibility="{Binding HasCliLogin, Converter={StaticResource BoolToVis}}"
                     Style="{StaticResource PrimaryButton}"/>
+            <Button Content="一键登录（自动获取 Cookie）" Click="OnTianyiLoginClick"
+                    Visibility="{Binding IsTianyi, Converter={StaticResource BoolToVis}}"
+                    Style="{StaticResource PrimaryButton}"
+                    ToolTip="打开内置浏览器完成天翼账号登录，Cookie 自动填入并保存"/>
             <Button Content="测试连接" Command="{Binding TestConnectionCommand}"
                     Style="{StaticResource SmallButton}" Margin="8,0,0,0"/>
             <Button Content="删除账号" Command="{Binding DeleteAccountCommand}"

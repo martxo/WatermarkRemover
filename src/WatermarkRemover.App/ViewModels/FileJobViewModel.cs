@@ -74,6 +74,10 @@ public sealed class FileJobViewModel : ObservableObject
     /// the list is filtered per section so records never mix across pages.</summary>
     public string? OwnerFeatureId { get; internal set; }
 
+    /// <summary>True for a PDF dropped onto the scan page: the record is an existing document,
+    /// so the scan-only auto passes (orientation vote, blank-page removal) must not touch it.</summary>
+    internal bool SuppressAutoPostProcess { get; set; }
+
     public FileJobViewModel(string inputPath, IReadOnlyList<string> quickSuffixes)
     {
         InputPath = inputPath;

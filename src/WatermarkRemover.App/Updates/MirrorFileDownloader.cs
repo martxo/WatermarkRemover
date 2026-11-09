@@ -1,6 +1,7 @@
 using System.IO;
 using System.Net;
 using System.Net.Http;
+using System.Net.Http.Headers;
 
 namespace WatermarkRemover.App.Updates;
 
@@ -102,8 +103,12 @@ public sealed class MirrorFileDownloader : Velopack.Sources.IFileDownloader
 
     /// <summary>
     /// Download an update package to a file, reporting integer percent when the size is known.
-    /// Each candidate writes from scratch (Create truncates), so a failed attempt never leaves a
-    /// partial download that a later candidate would append to.
+    /// <para><paramref name="timeout"/> is Velopack's contract — the maximum time in <b>minutes</b>
+    /// for the whole download. Reading it as seconds (the old code) cancelled every package that
+    /// took longer than 30 s: a small delta survived, a 70 MB full package never did.</para>
+    /// <para>Bytes land in <c>targetFile + ".part"</c> and a leftover partial is resumed with an
+    /// HTTP Range request, so a dropped connection or a mirror switch costs only the bytes in
+    /// flight instead of the whole package.</para>
     /// </summary>
     public async Task DownloadFile(
         string url, string targetFile, Action<int>? progress,
@@ -119,51 +124,128 @@ public sealed class MirrorFileDownloader : Velopack.Sources.IFileDownloader
                     .ConfigureAwait(false);
                 return;
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            catch (OperationCanceledException) when (cancelToken.IsCancellationRequested)
+            {
+                // User cancelled: the partial file stays so the next attempt resumes it.
+                throw;
+            }
+            catch (Exception ex)
             {
                 lastError = ex;
-                TryDelete(targetFile);
+                // Keep the partial file — the next candidate (or the next run) resumes it.
             }
         }
         throw new IOException($"下载更新包失败：{lastError?.Message ?? "未知错误"}", lastError);
     }
 
+    /// <summary>Suffix of the resumable download file kept beside the package target.</summary>
+    private const string PartialSuffix = ".part";
+
+    /// <summary>No new bytes for this long means the link is dead, not just slow.</summary>
+    private const int StallTimeoutSeconds = 60;
+
     private async Task DownloadToFileAsync(
         string url, string targetFile, Action<int>? progress,
-        IDictionary<string, string>? headers, double timeout, CancellationToken cancelToken)
+        IDictionary<string, string>? headers, double timeoutMinutes, CancellationToken cancelToken)
     {
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancelToken);
-        timeoutCts.CancelAfter(TimeSpan.FromSeconds(timeout));
+        string partialPath = targetFile + PartialSuffix;
 
-        using var response = await SendAsync(HttpMethod.Get, url, headers, timeout, timeoutCts.Token)
-            .ConfigureAwait(false);
+        using var overall = CancellationTokenSource.CreateLinkedTokenSource(cancelToken);
+        // Velopack documents this parameter in minutes (IFileDownloader.DownloadFile).
+        overall.CancelAfter(TimeSpan.FromMinutes(Math.Max(1, timeoutMinutes)));
 
-        long? totalBytes = response.Content.Headers.ContentLength;
-        await using Stream source = await response.Content
-            .ReadAsStreamAsync(timeoutCts.Token).ConfigureAwait(false);
-        await using var target = new FileStream(
-            targetFile, FileMode.Create, FileAccess.Write, FileShare.None, 81920, useAsync: true);
-
-        var buffer = new byte[81920];
-        long received = 0;
-        int lastReportedPercent = -1;
-        int read;
-        while ((read = await source.ReadAsync(buffer, timeoutCts.Token).ConfigureAwait(false)) > 0)
+        for (var attempt = 0; ; attempt++)
         {
-            await target.WriteAsync(buffer.AsMemory(0, read), timeoutCts.Token).ConfigureAwait(false);
-            received += read;
+            long existing = File.Exists(partialPath) ? new FileInfo(partialPath).Length : 0;
 
-            // Velopack already dedupes and rounds its progress callbacks; still, only report
-            // when the integer percent moves to keep the dispatcher quiet on fast links.
-            if (progress is not null && totalBytes is > 0)
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            if (headers is not null)
             {
-                int percent = (int)Math.Min(100, received * 100 / totalBytes.Value);
-                if (percent != lastReportedPercent)
+                foreach ((string name, string value) in headers)
+                    request.Headers.TryAddWithoutValidation(name, value);
+            }
+            if (existing > 0)
+                request.Headers.Range = new RangeHeaderValue(existing, null);
+
+            using HttpResponseMessage response = await _client
+                .SendAsync(request, HttpCompletionOption.ResponseHeadersRead, overall.Token)
+                .ConfigureAwait(false);
+
+            // A partial that is already longer than the remote object (stale/corrupt): drop it and
+            // start over once instead of failing the whole candidate.
+            if (response.StatusCode == HttpStatusCode.RequestedRangeNotSatisfiable && attempt == 0)
+            {
+                TryDelete(partialPath);
+                continue;
+            }
+
+            response.EnsureSuccessStatusCode();
+
+            bool resumed = existing > 0 && response.StatusCode == HttpStatusCode.PartialContent;
+            long? contentLength = response.Content.Headers.ContentLength;
+            long? totalBytes = contentLength is null
+                ? null
+                : resumed ? existing + contentLength.Value : contentLength.Value;
+            long received = resumed ? existing : 0;
+            int lastReportedPercent = -1;
+
+            await using (Stream source = await response.Content
+                             .ReadAsStreamAsync(overall.Token).ConfigureAwait(false))
+            await using (var target = new FileStream(
+                             partialPath,
+                             resumed ? FileMode.Append : FileMode.Create,
+                             FileAccess.Write, FileShare.None, 81920, useAsync: true))
+            {
+                var buffer = new byte[81920];
+                int read;
+                while ((read = await ReadWithStallGuardAsync(source, buffer, overall.Token)
+                           .ConfigureAwait(false)) > 0)
                 {
-                    lastReportedPercent = percent;
-                    progress(percent);
+                    await target.WriteAsync(buffer.AsMemory(0, read), overall.Token).ConfigureAwait(false);
+                    received += read;
+
+                    // Velopack already dedupes and rounds its progress callbacks; still, only report
+                    // when the integer percent moves to keep the dispatcher quiet on fast links.
+                    if (progress is not null && totalBytes is > 0)
+                    {
+                        int percent = (int)Math.Min(100, received * 100 / totalBytes.Value);
+                        if (percent != lastReportedPercent)
+                        {
+                            lastReportedPercent = percent;
+                            progress(percent);
+                        }
+                    }
                 }
             }
+
+            // A truncated body would otherwise reach Velopack as a "complete" package and fail
+            // there with a hash error; fail here so the partial is kept for a resume.
+            if (totalBytes is { } expected && received < expected)
+            {
+                throw new IOException($"下载不完整：已收到 {received}/{expected} 字节。");
+            }
+
+            File.Move(partialPath, targetFile, overwrite: true);
+            return;
+        }
+    }
+
+    /// <summary>
+    /// Reads once, failing only when the stream goes quiet — a total deadline is what used to
+    /// kill multi-minute downloads, so the guard is a stall (no bytes) timeout instead.
+    /// </summary>
+    private static async Task<int> ReadWithStallGuardAsync(
+        Stream source, byte[] buffer, CancellationToken cancellationToken)
+    {
+        using var stall = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        stall.CancelAfter(TimeSpan.FromSeconds(StallTimeoutSeconds));
+        try
+        {
+            return await source.ReadAsync(buffer.AsMemory(), stall.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new TimeoutException($"下载停滞：{StallTimeoutSeconds} 秒内没有收到新数据。");
         }
     }
 

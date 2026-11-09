@@ -92,6 +92,16 @@ public sealed partial class PdfPreviewViewModel : ObservableObject
     /// unjudged, so a whole-document OCR pass is the only safe fallback.</summary>
     private readonly int _decidedPages;
 
+    /// <summary>Pages the scan baked as /Rotate 180 on the classifier's vote (0-based). The
+    /// half turn is the classifier's known confusion and the baseline cannot cross-check it
+    /// (both faces of the axis are portrait text), so the post-process re-verifies each of
+    /// them with the OCR detector and turns back the ones it got wrong.</summary>
+    private readonly IReadOnlyList<int> _halfTurnedPageIndices;
+
+    /// <summary>每页烤进 PDF 的顺时针 90° 次数（0–3，按页序）。条带的种子图是扫描时未裁决的
+    /// 原始画面，只有照样转过去才能和写进文件的方向一致；缺省 = 不转。</summary>
+    private readonly IReadOnlyList<int> _pageTurns;
+
     /// <summary>Host dialog for batch upright: page count in, direction + scope out (null =
     /// cancelled or no host). Null = the command is unavailable (tests).</summary>
     private readonly Func<int, BatchUprightChoice?>? _chooseBatchUpright;
@@ -99,6 +109,9 @@ public sealed partial class PdfPreviewViewModel : ObservableObject
     /// <summary>Scan dataset session directory, when the export switch was on for this scan.
     /// Manual rotations refresh its truth.txt and append to manual-rotations.txt.</summary>
     private readonly string? _datasetDirectory;
+
+    /// <summary>User prompts; insert asks it to close whoever holds the PDF before saving.</summary>
+    private readonly IDialogService _dialogs;
 
     private string _uprightNoticeText = string.Empty;
 
@@ -150,8 +163,11 @@ public sealed partial class PdfPreviewViewModel : ObservableObject
         IReadOnlyList<ImageSource>? seedThumbnails = null,
         IReadOnlyList<int>? undecidedPageIndices = null,
         int decidedPages = 0,
+        IReadOnlyList<int>? halfTurnedPageIndices = null,
         Func<int, BatchUprightChoice?>? chooseBatchUpright = null,
-        string? datasetDirectory = null)
+        string? datasetDirectory = null,
+        IDialogService? dialogs = null,
+        IReadOnlyList<int>? pageTurns = null)
     {
         _renderer = renderer;
         _cancellationToken = cancellationToken;
@@ -164,8 +180,11 @@ public sealed partial class PdfPreviewViewModel : ObservableObject
         _seedThumbnails = seedThumbnails;
         _undecidedPageIndices = undecidedPageIndices ?? Array.Empty<int>();
         _decidedPages = decidedPages;
+        _halfTurnedPageIndices = halfTurnedPageIndices ?? Array.Empty<int>();
+        _pageTurns = pageTurns ?? Array.Empty<int>();
         _chooseBatchUpright = chooseBatchUpright;
         _datasetDirectory = datasetDirectory;
+        _dialogs = dialogs ?? DialogService.Default;
 
         _file = new PdfDocumentFile(
             pdfPath,

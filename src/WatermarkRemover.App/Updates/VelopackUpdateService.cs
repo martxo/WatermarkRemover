@@ -2,6 +2,7 @@ using System.IO;
 using Velopack;
 using Velopack.Locators;
 using Velopack.Sources;
+using WatermarkRemover.App.Logging;
 using WatermarkRemover.Core.Updates;
 // The legacy channel's UpdateInfo record lives in this same namespace; alias the Velopack type
 // so every UpdateInfo below unambiguously refers to Velopack's.
@@ -226,8 +227,11 @@ public sealed class VelopackUpdateService
     }
 
     /// <summary>Applies a package that was downloaded earlier, possibly by a previous process.</summary>
-    public void ApplyPendingAndRestart(VelopackAsset pending) =>
+    public void ApplyPendingAndRestart(VelopackAsset pending)
+    {
+        ThrowIfInstallLocked();
         _manager.ApplyUpdatesAndRestart(pending);
+    }
 
     /// <summary>
     /// Downloads the pending update (delta preferred; Velopack retries with the full package if
@@ -256,8 +260,34 @@ public sealed class VelopackUpdateService
     /// checksum-verified package and relaunches. The current process terminates inside the call —
     /// no code after it runs, so close progress windows before calling this.
     /// </summary>
-    public void ApplyAndRestart(VelopackUpdateInfo update) =>
+    public void ApplyAndRestart(VelopackUpdateInfo update)
+    {
+        ThrowIfInstallLocked();
         _manager.ApplyUpdatesAndRestart(update.TargetFullRelease);
+    }
+
+    /// <summary>
+    /// 交给 Update.exe 之前的最后一道检查。Update.exe 只会在备份 current 失败后说“有进程占用”，
+    /// 重试 10 秒就放弃（真机日志：连续 10 条 error 32，然后回到旧版本）。先把占用者找出来，
+    /// 弹窗里就能直接写“哪个文件被哪个程序占着”，而不是让用户反复重启碰运气。
+    /// </summary>
+    private static void ThrowIfInstallLocked()
+    {
+        string? root = InstallRoot;
+        if (root is null) return;
+
+        IReadOnlyList<InstallBlocker> blockers = InstallLockProbe.Find(root);
+        if (blockers.Count == 0)
+        {
+            // 留一行“检查过了”，下次日志能区分“没检查”和“检查干净”。
+            AppLog.Info($"更新前置检查：{root} 下没有外部程序占用安装文件");
+            return;
+        }
+
+        string detail = InstallLockProbe.Describe(blockers, root);
+        AppLog.Error($"更新被占用阻止：安装目录 {root} 下的文件正被其他程序使用：\n{detail}");
+        throw new InstallLockedException(detail);
+    }
 
     private static Version ToVersion(SemanticVersion semantic) =>
         new(semantic.Major, semantic.Minor, semantic.Patch);

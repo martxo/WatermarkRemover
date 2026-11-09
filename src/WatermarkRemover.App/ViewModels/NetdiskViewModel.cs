@@ -59,6 +59,8 @@ public sealed class NetdiskViewModel : ObservableObject
     private readonly IDialogService _dialogs;
     private readonly Action<string, Exception?> _trace;
     private readonly Func<string, string?>? _requestMoveTarget;
+    private readonly Action<string, string>? _rememberSelection;
+    private readonly Action<string, string>? _rememberUploadLocation;
     private readonly List<(string Id, string Name)> _path = new() { (string.Empty, "根目录") };
     private IReadOnlyList<NetdiskItemViewModel> _selectedItems = Array.Empty<NetdiskItemViewModel>();
 
@@ -69,6 +71,9 @@ public sealed class NetdiskViewModel : ObservableObject
     private NetdiskItemViewModel? _selectedItem;
     private NetdiskDrive? _selectedDrive;
     private bool _suppressDriveSwitch;
+    private readonly SemaphoreSlim _operationGate = new(1, 1);
+    private bool _autoConnectArmed;
+    private bool _suppressAutoConnect;
     private string _newFolderName = string.Empty;
     private string _searchText = string.Empty;
     private readonly Dictionary<string, string> _locationCache = new(StringComparer.Ordinal);
@@ -83,7 +88,11 @@ public sealed class NetdiskViewModel : ObservableObject
         Action<NetdiskAccountState> upsertAccount,
         IDialogService dialogs,
         Action<string, Exception?> trace,
-        Func<string, string?>? requestMoveTarget = null)
+        Func<string, string?>? requestMoveTarget = null,
+        string? lastProviderId = null,
+        string? lastAccountName = null,
+        Action<string, string>? rememberSelection = null,
+        Action<string, string>? rememberUploadLocation = null)
     {
         _catalog = catalog;
         _accounts = accounts;
@@ -91,6 +100,8 @@ public sealed class NetdiskViewModel : ObservableObject
         _dialogs = dialogs;
         _trace = trace;
         _requestMoveTarget = requestMoveTarget;
+        _rememberSelection = rememberSelection;
+        _rememberUploadLocation = rememberUploadLocation;
 
         // The auth panel can save/delete accounts while this window is open; keep the list live.
         _accounts.CollectionChanged += (_, _) => RefreshAccountNames();
@@ -109,7 +120,23 @@ public sealed class NetdiskViewModel : ObservableObject
         OpenFolderCommand = new RelayCommand<NetdiskItemViewModel>(item => _ = RunAsync(() => OpenFolderAsync(item)), item => item is { File.IsFolder: true });
         NavigateToCommand = new RelayCommand<NetdiskBreadcrumbItem>(item => _ = RunAsync(() => NavigateToAsync(item)));
 
-        SelectedProvider = Providers.FirstOrDefault();
+        // Resume the account last connected to (a fresh 钉钉 authorization must not be replaced by
+        // 阿里云盘 just because it is registered first). Without a remembered pair, fall back to
+        // the most recently added account, then to the first product that has one.
+        var newest = _accounts.LastOrDefault();
+        var preferred = Providers.FirstOrDefault(p =>
+                            p.Id == lastProviderId && _accounts.Any(a => a.ProviderId == p.Id))
+                        ?? Providers.FirstOrDefault(p => p.Id == newest?.ProviderId)
+                        ?? Providers.FirstOrDefault(p => _accounts.Any(a => a.ProviderId == p.Id))
+                        ?? Providers.FirstOrDefault();
+        SelectedProvider = preferred;
+        if (preferred is not null &&
+            !string.IsNullOrEmpty(lastAccountName) &&
+            AccountNames.Contains(lastAccountName))
+        {
+            SelectedAccountName = lastAccountName;
+        }
+
         RebuildBreadcrumbs();
     }
 
@@ -148,11 +175,63 @@ public sealed class NetdiskViewModel : ObservableObject
             if (SetProperty(ref _selectedProvider, value))
             {
                 RefreshAccountNames();
+                if (_autoConnectArmed && !_suppressAutoConnect)
+                {
+                    _suppressAutoConnect = true;
+                    try
+                    {
+                        if (SelectedAccountName is null || !AccountNames.Contains(SelectedAccountName))
+                        {
+                            SelectedAccountName = AccountNames.FirstOrDefault();
+                        }
+                    }
+                    finally
+                    {
+                        _suppressAutoConnect = false;
+                    }
+
+                    if (SelectedAccountName is not null)
+                    {
+                        _ = RunAsync(ConnectAsync);
+                    }
+                    else
+                    {
+                        ShowNoAccountFor(value);
+                    }
+                }
             }
         }
     }
 
-    public string? SelectedAccountName { get => _selectedAccountName; set => SetProperty(ref _selectedAccountName, value); }
+    /// <summary>
+    /// A product with no saved account has nothing to connect: clear the previous product's
+    /// listing and say what to do, instead of leaving a "已连接" line that belongs to another cloud.
+    /// </summary>
+    private void ShowNoAccountFor(INetdiskProvider? provider)
+    {
+        Items.Clear();
+        Drives.Clear();
+        OnPropertyChanged(nameof(HasMultipleDrives));
+        QuotaText = string.Empty;
+        StatusText = provider is null
+            ? "请选择网盘产品。"
+            : $"「{provider.DisplayName}」还没有账号，请在下方「账号授权与密钥」里添加。";
+    }
+
+    public string? SelectedAccountName
+    {
+        get => _selectedAccountName;
+        set
+        {
+            if (SetProperty(ref _selectedAccountName, value) &&
+                _autoConnectArmed &&
+                !_suppressAutoConnect &&
+                value is not null)
+            {
+                _ = RunAsync(ConnectAsync);
+            }
+        }
+    }
 
     public NetdiskItemViewModel? SelectedItem { get => _selectedItem; set => SetProperty(ref _selectedItem, value); }
 
@@ -225,13 +304,69 @@ public sealed class NetdiskViewModel : ObservableObject
     {
         if (SelectedProvider is null || SelectedAccountName is null)
         {
+            // Nothing to resume, but the next user pick should connect by itself.
+            _autoConnectArmed = true;
             return;
+        }
+
+        try
+        {
+            await RunAsync(ConnectAsync);
+        }
+        finally
+        {
+            // From now on picking another product/account connects immediately instead of
+            // leaving the window on the previous account's listing.
+            _autoConnectArmed = true;
+        }
+    }
+
+    /// <summary>
+    /// Switches the window to a product + account and connects it. The auth panel calls this right
+    /// after a successful login, so the freshly authorized 钉钉 account is what the user sees
+    /// instead of the previously selected product's listing.
+    /// </summary>
+    public async Task SelectAccountAsync(string providerId, string accountName)
+    {
+        var provider = Providers.FirstOrDefault(p => p.Id == providerId);
+        if (provider is null)
+        {
+            return;
+        }
+
+        _suppressAutoConnect = true;
+        try
+        {
+            SelectedProvider = provider;
+            if (!AccountNames.Contains(accountName))
+            {
+                RefreshAccountNames();
+            }
+
+            if (!AccountNames.Contains(accountName))
+            {
+                return;
+            }
+
+            SelectedAccountName = accountName;
+        }
+        finally
+        {
+            _suppressAutoConnect = false;
         }
 
         await RunAsync(ConnectAsync);
     }
 
     private string CurrentFolderId => _path.Count == 0 ? string.Empty : _path[^1].Id;
+
+    /// <summary>
+    /// The browse stack as a remote path string — the same notation the 快速上传位置 setting
+    /// speaks ("/上传/2026"). Root is <see cref="string.Empty"/> (the settings convention
+    /// "留空 = 该盘根目录"), so a remembered root writes back as empty, not "/".
+    /// </summary>
+    internal static string BuildRemotePath(IReadOnlyList<(string Id, string Name)> path) =>
+        path.Count <= 1 ? string.Empty : "/" + string.Join("/", path.Skip(1).Select(p => p.Name));
 
     private void RefreshAccountNames()
     {
@@ -262,21 +397,48 @@ public sealed class NetdiskViewModel : ObservableObject
             return;
         }
 
+        var latest = _session.CurrentCredentials.Values;
+        if (CredentialsEqual(_currentAccount.Values, latest))
+        {
+            // Listing/browsing does not rotate anything; writing the settings file after every
+            // refresh produced a "账号已保存" log line every few seconds.
+            return;
+        }
+
         var updated = new NetdiskAccountState(
             _currentAccount.ProviderId,
             _currentAccount.Name,
-            _session.CurrentCredentials.Values);
+            latest);
         _currentAccount = updated;
         _upsertAccount(updated);
     }
 
-    private async Task RunAsync(Func<Task> operation)
+    private static bool CredentialsEqual(
+        IReadOnlyDictionary<string, string> left,
+        IReadOnlyDictionary<string, string> right)
     {
-        if (IsBusy)
+        if (left.Count != right.Count)
         {
-            return;
+            return false;
         }
 
+        foreach (var (key, value) in left)
+        {
+            if (!right.TryGetValue(key, out var other) ||
+                !string.Equals(value, other, StringComparison.Ordinal))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private async Task RunAsync(Func<Task> operation)
+    {
+        // Operations are serialized instead of dropped: a drive/account switch issued while the
+        // previous listing was still loading used to be ignored, which read as "switching failed".
+        await _operationGate.WaitAsync();
         IsBusy = true;
         ProgressPercent = 0;
         try
@@ -292,6 +454,7 @@ public sealed class NetdiskViewModel : ObservableObject
         finally
         {
             IsBusy = false;
+            _operationGate.Release();
         }
     }
 
@@ -312,12 +475,24 @@ public sealed class NetdiskViewModel : ObservableObject
             _session = null;
         }
 
+        // Drop the previous account's listing first: leaving it visible while the new product
+        // fails/moves makes the window look like it switched to the wrong drive.
+        _currentAccount = null;
+        Items.Clear();
+        Drives.Clear();
+        OnPropertyChanged(nameof(HasMultipleDrives));
+        QuotaText = string.Empty;
+        _path.Clear();
+        _path.Add((string.Empty, "根目录"));
+        RebuildBreadcrumbs();
+
         _session = await provider.ConnectAsync(account.ToCredentials());
         _currentAccount = account;
         _path.Clear();
         _path.Add((string.Empty, "根目录"));
         RebuildDriveOptions();
         StatusText = $"已连接：{_session.Account.DisplayName}";
+        _rememberSelection?.Invoke(account.ProviderId, account.Name);
         await ListAsync(string.Empty);
         await RefreshQuotaAsync();
     }
@@ -351,6 +526,7 @@ public sealed class NetdiskViewModel : ObservableObject
         _path.Add((string.Empty, "根目录"));
         StatusText = $"已切换到「{SelectedDrive.Name}」。";
         await ListAsync(string.Empty);
+        await RefreshQuotaAsync();
     }
 
     private async Task ListAsync(string folderId)
@@ -459,18 +635,25 @@ public sealed class NetdiskViewModel : ObservableObject
 
     private async Task UploadAsync()
     {
-        var session = _session ?? throw new InvalidOperationException("尚未连接网盘。");
         var dialog = new OpenFileDialog { Multiselect = true, Title = "选择要上传的文件" };
         if (dialog.ShowDialog() != true || dialog.FileNames.Length == 0)
         {
             return;
         }
 
-        var files = dialog.FileNames;
-        for (var i = 0; i < files.Length; i++)
+        await UploadFilesAsync(dialog.FileNames);
+    }
+
+    /// <summary>Upload core, split from the file-dialog entry so tests (and any future caller)
+    /// can upload a known file list headlessly.</summary>
+    internal async Task UploadFilesAsync(IReadOnlyList<string> files)
+    {
+        var session = _session ?? throw new InvalidOperationException("尚未连接网盘。");
+        bool uploadedAny = false;
+        for (var i = 0; i < files.Count; i++)
         {
             var localPath = files[i];
-            StatusText = $"正在上传 {Path.GetFileName(localPath)}（{i + 1}/{files.Length}）…";
+            StatusText = $"正在上传 {Path.GetFileName(localPath)}（{i + 1}/{files.Count}）…";
             var progress = new Progress<NetdiskTransferProgress>(p =>
             {
                 if (p.TotalBytes > 0)
@@ -479,10 +662,17 @@ public sealed class NetdiskViewModel : ObservableObject
                 }
             });
             await session.UploadAsync(CurrentFolderId, localPath, progress);
+            uploadedAny = true;
             AppendFileLog("上传", localPath);
         }
 
-        StatusText = $"已上传 {files.Length} 个文件。";
+        if (uploadedAny)
+        {
+            // 哪个目录上传过，之后任务行/快速上传就默认这个目录 — 记下当前浏览位置。
+            _rememberUploadLocation?.Invoke(SelectedDrive?.Name ?? string.Empty, BuildRemotePath(_path));
+        }
+
+        StatusText = $"已上传 {files.Count} 个文件。";
         await ListAsync(CurrentFolderId);
         await RefreshQuotaAsync();
     }

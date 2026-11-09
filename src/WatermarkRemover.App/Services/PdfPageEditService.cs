@@ -96,18 +96,14 @@ public sealed class PdfPageEditService
     }
 
     /// <summary>
-    /// Splices every page of <paramref name="scannedPdfPath"/> into the document. A locked original
-    /// is saved beside it as a copy and the session follows that path; the caller owns the
-    /// post-insert UI rebuild.
+    /// Splices every page of <paramref name="scannedPdfPath"/> into the document, in place. A
+    /// locked original throws <see cref="PdfFileLockedException"/>: the caller asks the user to
+    /// close the holder and retries, so no "已插入" copy is ever created.
     /// </summary>
-    public async Task<PdfInsertResult> InsertAsync(int insertAfterIndex, string scannedPdfPath)
-    {
-        PdfInsertResult result = await _cache
+    public async Task<PdfInsertResult> InsertAsync(int insertAfterIndex, string scannedPdfPath) =>
+        await _cache
             .RunWriteAsync(() => PdfPageInserter.InsertAfterDetailed(_file.Path, insertAfterIndex, scannedPdfPath))
             .ConfigureAwait(false);
-        if (result.SavedAsCopy) _file.RelocateTo(result.PdfPath);
-        return result;
-    }
 
     /// <summary>Turns the whole document in one save (auto-orientation).</summary>
     public async Task RotateAllAsync(int steps)

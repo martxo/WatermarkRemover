@@ -215,6 +215,37 @@ public sealed class CloudUpdateService
     }
 
     /// <summary>
+    /// Uploads one log report to /WatermarkRemover/private/logs. Opt-in only (设置 → 日志 → 上传到云盘):
+    /// the bytes are exactly what 「导出日志文件」 would write, so the log of another PC can be read
+    /// from any machine logged into the same account instead of being copied off that PC by hand.
+    /// </summary>
+    public async Task<string> UploadLogAsync(
+        string fileName, byte[] content, CancellationToken cancellationToken = default)
+    {
+        if (_account is null)
+        {
+            throw new InvalidOperationException("尚未登录阿里云盘，无法上传日志。");
+        }
+
+        await using AliyunDriveSessionBundle bundle = await OpenAsync(createFolders: true, cancellationToken)
+            .ConfigureAwait(false);
+        if (bundle.RootFolderId is null)
+        {
+            throw new InvalidOperationException("云端更新目录不存在，无法上传日志。");
+        }
+
+        string folder = await bundle.Session
+            .EnsureFolderAsync($"{CloudUpdateFormat.RootFolder}/private/logs", cancellationToken)
+            .ConfigureAwait(false);
+        await bundle.Session.UploadBytesAsync(folder, fileName, content, cancellationToken)
+            .ConfigureAwait(false);
+
+        string cloudPath = $"/{CloudUpdateFormat.RootFolder}/private/logs/{fileName}";
+        AppLog.Info($"日志已上传：{cloudPath}");
+        return cloudPath;
+    }
+
+    /// <summary>
     /// Imports a pack into the stable CLI config used by the app. Encrypted packs need the passphrase
     /// chosen at export; legacy plaintext packs import without one.
     /// </summary>
@@ -515,9 +546,10 @@ public sealed class CloudUpdateService
                 long apiTicks = Stopwatch.GetTimestamp();
                 try
                 {
-                    using var chunkTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                    chunkTimeout.CancelAfter(TimeSpan.FromSeconds(45));
-                    await bundle.Session.DownloadAsync(fileId, temp, null, chunkTimeout.Token).ConfigureAwait(false);
+                    // No extra total deadline here: DownloadAsync already bounds the link lookup
+                    // (90 s) and treats 30 s without bytes as stalled. A 45 s cap on the whole
+                    // chunk killed slow-but-alive links and pushed every chunk through the CLI.
+                    await bundle.Session.DownloadAsync(fileId, temp, null, cancellationToken).ConfigureAwait(false);
                     fetched = true;
                 }
                 catch (Exception ex) when (!IsCallerCancellation(ex, cancellationToken))

@@ -67,9 +67,12 @@ public sealed partial class MainViewModel
     /// Empty-state line of the record list. Tool pages (截图) have no drop zone at all, so the
     /// generic 「拖入文件」 prompt would describe an interaction that does not exist on that page.
     /// </summary>
-    public string EmptyJobsText => _selectedFeature.Id == "screenshot.page"
-        ? "还没有截图 · 点上方「开始截图」或按全局快捷键"
-        : "暂无文件 · 拖入或点击「选择文件」开始";
+    public string EmptyJobsText => _selectedFeature.Id switch
+    {
+        "screenshot.page" => "还没有截图 · 点上方「开始截图」或按全局快捷键",
+        "scan.page" => "还没有扫描记录 · 点「开始扫描」，或把已有的 PDF 拖进来编辑",
+        _ => "暂无文件 · 拖入或点击「选择文件」开始",
+    };
 
     /// <summary>Open-file dialog filter built from what the current feature accepts, so the
     /// picker never offers a format the page would reject (OCR takes photos, watermark does not).</summary>
@@ -176,7 +179,34 @@ public sealed partial class MainViewModel
         foreach (var job in newJobs) Board.Add(job);
         Board.ResetCompleted();
 
+        // 扫描页的另一种输入：已有 PDF 直接成为一条可编辑记录（缩略图里旋转/删除/重排），
+        // 不经过队列——没有要"处理"的东西，也不能让自动摆正/删空白页去动用户的原文档。
+        if (SelectedFeature is ScanFeature)
+        {
+            AttachDroppedPdfs(newJobs);
+            return;
+        }
+
         await ProcessJobsAsync(newJobs, SelectedFeature).ConfigureAwait(true);
+    }
+
+    /// <summary>
+    /// Turns PDFs dropped on the scan page into finished records pointing at the dropped file
+    /// itself, so the inline strip edits exactly the document the user handed over. Only the last
+    /// row unfolds: opening every row would render each document's first page for nothing.
+    /// </summary>
+    private void AttachDroppedPdfs(IReadOnlyList<FileJobViewModel> jobs)
+    {
+        foreach (FileJobViewModel job in jobs)
+        {
+            job.SuppressAutoPostProcess = true;
+            job.Apply(FeatureResult.Success(
+                job.InputPath, job.InputPath, "已加入，展开缩略图即可编辑", 0));
+            Board.MarkCompleted(job);
+        }
+
+        AppLog.Info($"扫描页接收已有 PDF：{jobs.Count} 个");
+        if (jobs.Count > 0) _preview.OpenWhenFinished(jobs[^1]);
     }
 
     /// <summary>Expands dropped folders one level and keeps only what the selected feature takes.

@@ -81,6 +81,22 @@ public static class LogExportService
     public static void Export(string path, string report) =>
         File.WriteAllText(path, report, Encoding.UTF8);
 
+    /// <summary>
+    /// Name for the cloud upload: machine + timestamp, so reports from several PCs land side by
+    /// side in one folder and two uploads never overwrite each other. Everything that is not a
+    /// letter, digit, '-' or '_' becomes '-', because a machine name may carry spaces or CJK.
+    /// </summary>
+    public static string UploadFileName(string machineName, DateTime at)
+    {
+        var safe = new StringBuilder(machineName.Length);
+        foreach (char c in machineName)
+            safe.Append(char.IsLetterOrDigit(c) || c is '-' or '_' ? c : '-');
+
+        string name = safe.ToString().Trim('-');
+        if (name.Length == 0) name = "pc";
+        return $"log-{name}-{at:yyyyMMdd-HHmmss}.log";
+    }
+
     private static string FormatRange(TimeSpan range) => range.TotalHours switch
     {
         >= 24 * 6.5 => "7 天",

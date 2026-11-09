@@ -1,0 +1,41 @@
+<Window x:Class="WatermarkRemover.App.TianyiLoginWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
+        Title="登录天翼云盘 · 自动获取 Cookie"
+        Width="520" Height="760"
+        MinWidth="420" MinHeight="540"
+        WindowStartupLocation="CenterOwner"
+        Background="{StaticResource ShellBrush}">
+    <!--
+        天翼云盘 web login requires a slider captcha, so replaying a password POST is neither
+        reliable nor safe. Instead the user logs in inside an embedded Edge WebView2 — the real
+        page handles captcha/SMS/QR — and the window harvests the session cookies from the
+        browser's cookie store once SESSION_KEY appears on cloud.189.cn.
+    -->
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <wv2:WebView2 x:Name="Browser" Grid.Row="0"/>
+
+        <Border Grid.Row="1" Background="{StaticResource SurfaceBrush}"
+                BorderBrush="{StaticResource BorderBrushLight}" BorderThickness="0,1,0,0"
+                Padding="12,8">
+            <StackPanel>
+                <TextBlock x:Name="StatusTextBlock"
+                           Text="请用你的天翼账号完成登录；成功后本窗口会自动获取 Cookie 并关闭。"
+                           FontSize="12" TextWrapping="Wrap"
+                           Foreground="{StaticResource TextSecondaryBrush}"/>
+                <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                    <Button Content="我已登录，立即获取" Click="OnHarvestClick"
+                            Style="{StaticResource SmallButton}"/>
+                    <Button Content="取消" Click="OnCancelClick"
+                            Style="{StaticResource SmallButton}" Margin="8,0,0,0"/>
+                </StackPanel>
+            </StackPanel>
+        </Border>
+    </Grid>
+</Window>

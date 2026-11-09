@@ -1,0 +1,78 @@
+<Window x:Class="WatermarkRemover.App.NetdiskFolderPickerWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="选择上传目录"
+        Width="560" Height="520"
+        WindowStartupLocation="CenterOwner"
+        MinWidth="480" MinHeight="420"
+        Background="{StaticResource ShellBrush}">
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- 账号 + 存储盘 -->
+        <StackPanel Grid.Row="0" Orientation="Horizontal">
+            <TextBlock Text="账号：" FontSize="13" VerticalAlignment="Center"
+                       Foreground="{StaticResource TextPrimaryBrush}"/>
+            <ComboBox Width="230" ItemsSource="{Binding AccountOptions}"
+                      DisplayMemberPath="Label"
+                      SelectedItem="{Binding SelectedAccount}"/>
+            <TextBlock Text="存储盘：" FontSize="13" VerticalAlignment="Center" Margin="16,0,0,0"
+                       Foreground="{StaticResource TextPrimaryBrush}"
+                       Visibility="{Binding HasDrivesVisibility}"/>
+            <ComboBox Width="150" ItemsSource="{Binding Drives}"
+                      DisplayMemberPath="Name"
+                      SelectedItem="{Binding SelectedDrive}"
+                      Visibility="{Binding HasDrivesVisibility}"/>
+        </StackPanel>
+
+        <!-- 当前位置 + 上一级 -->
+        <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,12,0,0">
+            <Button Content="上一级" Style="{StaticResource SmallButton}" Padding="12,6"
+                    Click="OnUpClick"/>
+            <TextBlock Text="当前目录：" FontSize="12" VerticalAlignment="Center" Margin="10,0,0,0"
+                       Foreground="{StaticResource TextSecondaryBrush}"/>
+            <TextBlock Text="{Binding CurrentPathText}" FontSize="12" FontWeight="SemiBold"
+                       VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
+                       Foreground="{StaticResource TextPrimaryBrush}"/>
+        </StackPanel>
+
+        <TextBlock Grid.Row="2" Text="双击进入文件夹；选好后点「使用此目录」。"
+                   FontSize="11" Foreground="{StaticResource TextSecondaryBrush}" Margin="0,8,0,4"/>
+
+        <!-- 文件夹列表 -->
+        <ListBox Grid.Row="3" x:Name="FolderList" Margin="0,0,0,10"
+                 Background="Transparent" BorderThickness="1"
+                 BorderBrush="{StaticResource BorderBrushLight}"
+                 MouseDoubleClick="OnFolderDoubleClick"
+                 KeyDown="OnFolderListKeyDown">
+            <ListBox.ItemTemplate>
+                <DataTemplate>
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE8B7;" FontFamily="Segoe MDL2 Assets" FontSize="14"
+                                   VerticalAlignment="Center" Margin="0,0,8,0"
+                                   Foreground="{StaticResource AccentBrush}"/>
+                        <TextBlock Text="{Binding Name}" FontSize="13" VerticalAlignment="Center"
+                                   Foreground="{StaticResource TextPrimaryBrush}"/>
+                    </StackPanel>
+                </DataTemplate>
+            </ListBox.ItemTemplate>
+        </ListBox>
+
+        <TextBlock Grid.Row="4" Text="{Binding StatusText}" FontSize="11"
+                   Foreground="{StaticResource TextSecondaryBrush}" TextWrapping="Wrap"/>
+
+        <StackPanel Grid.Row="5" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,10,0,0">
+            <Button Content="取消" Style="{StaticResource SmallButton}" Padding="16,7"
+                    Click="OnCancelClick"/>
+            <Button Content="使用此目录" Style="{StaticResource PrimaryButton}" Padding="18,7"
+                    Margin="8,0,0,0" Click="OnPickClick"/>
+        </StackPanel>
+    </Grid>
+</Window>

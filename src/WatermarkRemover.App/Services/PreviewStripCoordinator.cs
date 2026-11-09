@@ -41,6 +41,30 @@ public sealed class PreviewStripCoordinator
     /// type leaks into this service.</summary>
     public Action<PdfPreviewViewModel>? ViewerOpener { get; set; }
 
+    /// <summary>
+    /// Puts the capture-order live thumbnails into PDF page order. Blank pages are dropped and a
+    /// duplex scan re-orders the backs, so indexing <c>LiveThumbnails</c> by page number would put
+    /// page A's picture on page B — and with it page A's rotation. When the map does not line up
+    /// the caller's list is returned untouched: falling back to rendering the PDF is better than
+    /// pasting the wrong page.
+    /// </summary>
+    internal static IReadOnlyList<ImageSource> AlignSeedsToPdf(
+        IReadOnlyList<ImageSource> live, IReadOnlyList<int>? sourcePageNumbers, int pageCount)
+    {
+        if (sourcePageNumbers is not { Count: > 0 } numbers ||
+            numbers.Count != pageCount || live.Count == 0)
+            return live;
+
+        var seeds = new ImageSource[numbers.Count];
+        for (int i = 0; i < numbers.Count; i++)
+        {
+            int index = numbers[i] - 1;
+            if (index < 0 || index >= live.Count) return live;
+            seeds[i] = live[index];
+        }
+        return seeds;
+    }
+
     /// <summary>Expands (or folds) the thumbnail strip under a finished record.</summary>
     public void Toggle(FileJobViewModel? job)
     {
@@ -86,7 +110,9 @@ public sealed class PreviewStripCoordinator
         bool skipScanPostProcess = false,
         IReadOnlyList<int>? undecidedPageIndices = null,
         int decidedPages = 0,
-        string? datasetDirectory = null)
+        IReadOnlyList<int>? halfTurnedPageIndices = null,
+        string? datasetDirectory = null,
+        IReadOnlyList<int>? pageTurns = null)
     {
         string? path = job.OutputPath;
         if (string.IsNullOrWhiteSpace(path) || !File.Exists(path) ||
@@ -99,21 +125,28 @@ public sealed class PreviewStripCoordinator
         // Scan rows (this method's zero-click entry) self-correct their orientation after the
         // preview loads; files opened via the preview button keep the manual button only.
         bool scanRow = job.OwnerFeatureId == "scan.page";
+        // A PDF dropped onto the scan page is somebody's existing document: the automatic
+        // orientation vote and blank-page removal are scan-capture conveniences and would
+        // silently rewrite a file the user only wanted to edit.
+        bool autoPostProcess = scanRow && !skipScanPostProcess && !job.SuppressAutoPostProcess;
         var strip = new PdfPreviewViewModel(
             path, job.DisplayName, _renderer,
             confirmPageDelete: index => _dialogs.Confirm(
                 $"确定要删除第 {index + 1} 页吗？\n\n该页将从 PDF 中移除并立即保存，删除后无法恢复。",
                 "删除确认"),
             ocrEngine: _ocr,
-            autoOrient: scanRow && !skipScanPostProcess,
+            autoOrient: autoPostProcess,
             onRelocated: job.UpdateRenamed, // a renamed file is tracked, the row follows
-            autoCleanBlank: scanRow && !skipScanPostProcess, // duplex scans drop their blank back sides by themselves
+            autoCleanBlank: autoPostProcess, // duplex scans drop their blank back sides by themselves
             scanProvider: scanRow ? _scanIntoStrip : null, // scan rows can insert scans into gaps
             seedThumbnails: seedThumbnails,
             undecidedPageIndices: undecidedPageIndices,
             decidedPages: decidedPages,
+            halfTurnedPageIndices: halfTurnedPageIndices,
+            pageTurns: pageTurns,
             chooseBatchUpright: count => BatchUprightDialog.Show(Application.Current?.MainWindow, count),
-            datasetDirectory: datasetDirectory);
+            datasetDirectory: datasetDirectory,
+            dialogs: _dialogs);
         strip.EnlargeRequested += (_, _) => EnlargeRequested(strip);
         job.AttachStrip(strip);
         // Accordion: the row being opened is the only one whose decoded tiles stay resident.
@@ -185,7 +218,12 @@ public sealed class PreviewStripCoordinator
         if (dispatcher is null) return;
 
         if (dispatcher.CheckAccess()) Open(job);
-        else dispatcher.Invoke(Open, job);
+        // Wrap in a zero-argument lambda on purpose: the method group's natural delegate type is
+        // Open(job, seedThumbnails, skipScanPostProcess, …) — ALL parameters — so
+        // Dispatcher.Invoke(Open, job) handed DynamicInvoke one argument for a ten-argument
+        // delegate and threw TargetParameterCountException on the UI thread the moment a job
+        // finished on a worker thread (a crash dialog right after every successful run).
+        else dispatcher.Invoke(() => Open(job));
     }
 
     /// <summary>A tile was clicked: the host opens the screen-level viewer on this strip.</summary>

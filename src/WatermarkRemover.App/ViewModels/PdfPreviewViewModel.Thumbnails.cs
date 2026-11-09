@@ -1,5 +1,6 @@
 ﻿using System.IO;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using WatermarkRemover.App.Logging;
 using WatermarkRemover.Core.Logging;
 
@@ -7,7 +8,12 @@ namespace WatermarkRemover.App.ViewModels;
 
 public sealed partial class PdfPreviewViewModel
 {
-    /// <summary>Builds one tile per page and marks the first page as the one being shown.</summary>
+    /// <summary>Builds one tile per page and marks the first page as the one being shown.
+    /// Seed bitmaps come from the scan pipeline's pre-decision rasters, so they never carry the
+    /// rotation the PDF was built with: a page baked as /Rotate 90/180/270 would show its raw
+    /// orientation here while the canvas shows the corrected view — the exact "缩略图还是竖的、
+    /// 打开是横的" confusion. Each seed is turned by its page's baked quarter turns so tile and
+    /// canvas agree; if a later edit rotates the file, the rebuild renders tiles from the PDF.</summary>
     private void BuildThumbnails()
     {
         Thumbnails.Clear();
@@ -17,11 +23,25 @@ public sealed partial class PdfPreviewViewModel
         {
             var thumb = new PdfPreviewThumbnailViewModel(this, i);
             if (seeds is not null && i < seeds.Count)
-                thumb.SetImage(seeds[i]);
+            {
+                thumb.SetImage(ApplyBakedTurn(seeds[i], i));
+            }
             Thumbnails.Add(thumb);
         }
         SyncThumbnailSelection();
         RebuildStripItems();
+    }
+
+    /// <summary>Rotates a seed by the quarter turns the scan already baked into that page.
+    /// 90°/270° swaps the bitmap's width and height, which the strip's layout follows.</summary>
+    private ImageSource ApplyBakedTurn(ImageSource seed, int pageIndex)
+    {
+        int turns = pageIndex < _pageTurns.Count ? ((_pageTurns[pageIndex] % 4) + 4) % 4 : 0;
+        if (turns == 0 || seed is not BitmapSource bitmap) return seed;
+
+        var rotated = new TransformedBitmap(bitmap, new RotateTransform(turns * 90));
+        if (rotated.CanFreeze) rotated.Freeze(); // 跨线程可读（填充/解码线程都碰得到瓦片）
+        return rotated;
     }
 
     /// <summary>Rebuilds the display sequence: one atomic unit per page — [gap | tile]. Unit i

@@ -116,6 +116,30 @@ public class PageInserterTests : IDisposable
     }
 
     [Fact]
+    public void A_locked_target_refuses_the_insert_and_never_leaves_a_copy()
+    {
+        // The WPS case (v1.16.123): a locked insert used to land as "原名 (已插入).pdf" beside the
+        // original — a second file the user never asked for. It must now fail loudly with the
+        // holder's name, so the preview can ask for the file to be closed and save in place.
+        string target = WritePdf("target.pdf", 100, 110);
+        string source = WritePdf("source.pdf", 210);
+        byte[] before = File.ReadAllBytes(target);
+
+        using (var hold = new FileStream(target, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            var ex = Assert.Throws<PdfFileLockedException>(
+                () => PdfPageInserter.InsertAfter(target, 0, source));
+            Assert.Equal(target, ex.Path);
+            Assert.False(string.IsNullOrWhiteSpace(ex.Holders));
+        }
+
+        Assert.Equal(before, File.ReadAllBytes(target));
+        Assert.Empty(Directory.GetFiles(_dir, "*已插入*"));
+        Assert.False(File.Exists(target + ".edit.tmp"), "temporary file must not survive");
+        Assert.False(File.Exists(target + ".edit.src.tmp"), "source copy must not survive");
+    }
+
+    [Fact]
     public void The_target_pages_keep_their_box_through_the_save()
     {
         // The MediaBox swap guard must hold on the insert path too: an inserted document's

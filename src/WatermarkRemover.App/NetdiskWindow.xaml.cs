@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -13,6 +14,7 @@ public partial class NetdiskWindow : Window
 {
     private readonly NetdiskViewModel _viewModel;
     private readonly NetdiskAccountSettingViewModel _authPanel;
+    private bool _syncingSelection;
 
     public NetdiskWindow(NetdiskViewModel viewModel, NetdiskAccountSettingViewModel authPanel)
     {
@@ -21,7 +23,76 @@ public partial class NetdiskWindow : Window
         _authPanel = authPanel ?? throw new ArgumentNullException(nameof(authPanel));
         DataContext = _viewModel;
         AuthExpander.DataContext = _authPanel;
+
+        // The toolbar and the re-authorize panel are two views of the same choice. Without this
+        // they kept independent selections, so the panel could show another product than the one
+        // being browsed — the "layout is a mess / switching did nothing" report.
+        _viewModel.PropertyChanged += OnListingPropertyChanged;
+        _authPanel.PropertyChanged += OnAuthPanelPropertyChanged;
+        Closed += (_, _) =>
+        {
+            _viewModel.PropertyChanged -= OnListingPropertyChanged;
+            _authPanel.PropertyChanged -= OnAuthPanelPropertyChanged;
+        };
+
         Loaded += async (_, _) => await _viewModel.InitializeAsync();
+    }
+
+    /// <summary>
+    /// Switches the listing to an account saved elsewhere (the 设置 page) or by the panel inside
+    /// this window. The coordinator owns the AccountSaved subscription so both entry points behave
+    /// the same — see <c>NetdiskCoordinator.OnAccountSaved</c>.
+    /// </summary>
+    internal Task ShowAccountAsync(string providerId, string accountName) =>
+        _viewModel.SelectAccountAsync(providerId, accountName);
+
+    private void OnListingPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (_syncingSelection)
+        {
+            return;
+        }
+
+        switch (e.PropertyName)
+        {
+            case nameof(NetdiskViewModel.SelectedProvider):
+                SyncSelection(() => _authPanel.SelectedProvider = _viewModel.SelectedProvider);
+                break;
+            case nameof(NetdiskViewModel.SelectedAccountName):
+                SyncSelection(() => _authPanel.SelectedAccountName = _viewModel.SelectedAccountName);
+                break;
+        }
+    }
+
+    private void OnAuthPanelPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (_syncingSelection)
+        {
+            return;
+        }
+
+        switch (e.PropertyName)
+        {
+            case nameof(NetdiskAccountSettingViewModel.SelectedProvider):
+                SyncSelection(() => _viewModel.SelectedProvider = _authPanel.SelectedProvider);
+                break;
+            case nameof(NetdiskAccountSettingViewModel.SelectedAccountName):
+                SyncSelection(() => _viewModel.SelectedAccountName = _authPanel.SelectedAccountName);
+                break;
+        }
+    }
+
+    private void SyncSelection(Action apply)
+    {
+        _syncingSelection = true;
+        try
+        {
+            apply();
+        }
+        finally
+        {
+            _syncingSelection = false;
+        }
     }
 
     private void OnReauthorizeClick(object sender, RoutedEventArgs e)

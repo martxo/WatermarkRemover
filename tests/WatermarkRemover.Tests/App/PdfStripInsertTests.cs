@@ -2,6 +2,7 @@ using PdfSharp.Pdf;
 using PdfSharp.Pdf.IO;
 using SkiaSharp;
 using System.Windows.Media.Imaging;
+using WatermarkRemover.App.Services;
 using WatermarkRemover.App.ViewModels;
 using WatermarkRemover.Core.Features.Layout;
 using WatermarkRemover.Core.Features.Ocr;
@@ -279,6 +280,91 @@ public class PdfStripInsertTests : IDisposable
         finally
         {
             File.Delete(pdf);
+        }
+    }
+
+    /// <summary>Prompt fake whose confirm answering is scripted — the lock tests close the
+    /// holder inside the answer, exactly like the user closing WPS between the prompt and OK.</summary>
+    private sealed class ScriptedDialogs(Func<bool> confirm) : IDialogService
+    {
+        public List<string> Messages { get; } = new();
+
+        public bool Confirm(string message, string title)
+        {
+            Messages.Add(message);
+            return confirm();
+        }
+
+        public bool ConfirmYesNo(string message, string title) => Confirm(message, title);
+
+        public void Info(string message, string title) => Messages.Add(message);
+
+        public void Warn(string message, string title) => Messages.Add(message);
+
+        public void Error(string message, string title) => Messages.Add(message);
+    }
+
+    [Fact]
+    public async Task A_locked_target_prompts_and_saves_in_place_once_the_holder_closes_it()
+    {
+        // The user's case (v1.16.123): the PDF is open in WPS after a scan. Inserting a page used
+        // to leave a second "原名 (已插入).pdf" beside it. Now the strip names the holder, waits
+        // for the lock to go, and finishes the save on the original — no copy, no re-scan.
+        string pdf = WritePdf("target.pdf", 100, 110, 120);
+        string scanned = WritePdf("scanned.pdf", 210, 220);
+        var hold = new FileStream(pdf, FileMode.Open, FileAccess.Read, FileShare.Read);
+        var dialogs = new ScriptedDialogs(() => { hold.Dispose(); return true; });
+        var vm = new PdfPreviewViewModel(pdf, "scan.pdf", new FakeRenderer(3),
+            scanProvider: _ => Task.FromResult<string?>(scanned), dialogs: dialogs);
+        try
+        {
+            await vm.LoadAsync();
+            await DrainAsync(vm);
+
+            await vm.InsertScanAfterAsync(0);
+
+            Assert.Single(dialogs.Messages);
+            Assert.Contains("占用", dialogs.Messages[0]);
+            Assert.Equal(5, vm.PageCount);
+            Assert.Equal(new double[] { 100, 210, 220, 110, 120 }, WidthsOf(pdf));
+            Assert.Empty(Directory.GetFiles(_dir, "*已插入*"));
+            Assert.Contains("已插入 2 页", vm.StatusText);
+        }
+        finally
+        {
+            hold.Dispose();
+            File.Delete(pdf);
+        }
+    }
+
+    [Fact]
+    public async Task Cancelling_the_lock_prompt_leaves_the_document_and_the_scan_untouched()
+    {
+        string pdf = WritePdf("target.pdf", 100, 110);
+        string scanned = WritePdf("scanned.pdf", 210);
+        byte[] before = File.ReadAllBytes(pdf);
+        using var hold = new FileStream(pdf, FileMode.Open, FileAccess.Read, FileShare.Read);
+        var dialogs = new ScriptedDialogs(() => false);
+        var vm = new PdfPreviewViewModel(pdf, "scan.pdf", new FakeRenderer(2),
+            scanProvider: _ => Task.FromResult<string?>(scanned), dialogs: dialogs);
+        try
+        {
+            await vm.LoadAsync();
+            await DrainAsync(vm);
+
+            await vm.InsertScanAfterAsync(0);
+
+            Assert.Equal(2, vm.PageCount);
+            Assert.Equal(before, File.ReadAllBytes(pdf));
+            Assert.Empty(Directory.GetFiles(_dir, "*已插入*"));
+            Assert.Contains("已取消插入", vm.StatusText);
+            Assert.True(File.Exists(scanned), "取消时扫描中间文件保留，页面不丢");
+        }
+        finally
+        {
+            hold.Dispose();
+            File.Delete(pdf);
+            File.Delete(scanned);
         }
     }
 

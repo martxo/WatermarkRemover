@@ -178,6 +178,70 @@ public sealed class PdfScanPostProcessor
     internal const int ConsensusMinPages = 3;
 
     /// <summary>
+    /// 180° 烤入复核：扫描期把分类器裁成 180° 的页直接写成了 /Rotate 180，但半圈是分类器的
+    /// 已知混淆点，且投影基线无法交叉验证（0° 与 180° 都是竖排文字）。这里逐页渲染当前视图
+    /// （含 /Rotate）并用 OCR 四向检测复核：OCR 认为还要再转 180° 才可读 ⇒ 烤反了，转回归位；
+    /// OCR 读不出（null）或认为已正立（0）⇒ 保持原样。侧向不一致（1/3）只记日志不自动改——
+    /// 轴向本有基线背书，单凭 OCR 一票推翻它超出本通道的职责。
+    ///
+    /// 真机对照（2026-11-07）：谭海纯 (2).pdf 正立首页被 conf 0.857 烤成 180°，复核通道把它
+    /// 转回；同场借据页 conf 0.883 的 180° 是真阳性，复核后保持不动——两票置信度都在
+    /// 0.85~0.90 区间，单纯抬高门槛救不了这一个错。
+    /// </summary>
+    /// <returns>被转回归位的页数。</returns>
+    public async Task<int> VerifyHalfTurnsAsync(
+        int pageCount, IReadOnlyList<int> pageIndices, int probeDpi)
+    {
+        if (_ocr is null || pageIndices.Count == 0) return 0;
+        var detector = new PdfOrientationDetector(_ocr);
+        var corrections = new List<(int Index, int Steps)>();
+        var probed = new List<int>();
+
+        foreach (int index in pageIndices.Distinct())
+        {
+            if (index < 0 || index >= pageCount) continue;
+            if (_cancellationToken.IsCancellationRequested) return 0;
+
+            byte[] pagePng;
+            try
+            {
+                pagePng = await _cache.GetPageBytesAsync(index, probeDpi, priority: true).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _debug?.Invoke($"180°复核：第 {index + 1} 页渲染失败（{ex.Message}），保持原样");
+                continue;
+            }
+            if (_cancellationToken.IsCancellationRequested) return 0;
+            probed.Add(index);
+            if (await Task.Run(() => BlankPageDetector.IsBlank(pagePng)).ConfigureAwait(false)) continue;
+
+            int? steps = await Task.Run(
+                () => detector.DetectClockwiseStepsAsync(pagePng, _cancellationToken)).ConfigureAwait(false);
+            if (_cancellationToken.IsCancellationRequested) return 0;
+            switch (steps)
+            {
+                case 2:
+                    corrections.Add((index, 2)); // 烤反了：再转 180° 归位（/Rotate 180 → 0）
+                    break;
+                case not null and not 0:
+                    _debug?.Invoke($"180°复核：第 {index + 1} 页 OCR 判侧向 {steps * 90}°，与分类器轴向矛盾，保持原样");
+                    break;
+            }
+        }
+
+        foreach (int index in probed.Where(i => corrections.All(c => c.Index != i)))
+            _cache.InvalidateKey(index, probeDpi);
+
+        if (corrections.Count == 0) return 0;
+
+        await _edits.RotatePagesAsync(corrections).ConfigureAwait(false);
+        _info?.Invoke($"180°复核转回：{Path.GetFileName(_file.Path)}，" +
+                      $"{corrections.Count} 页（{string.Join("、", corrections.Select(c => $"第{c.Index + 1}页"))}），单次写盘");
+        return corrections.Count;
+    }
+
+    /// <summary>
     /// 把同一文字轴（0/180 或 90/270）的页判成同一朝向：同轴页的票相差 180° 只可能是 OCR 的
     /// 半圈误差，而不是页面真的各自朝向不同。占比达到 2/3 的朝向作为该轴的整份结论，离群页
     /// 按结论转；票数不足或平票时保留每页自己的判定。不同文字轴互不影响（真实横版表格页

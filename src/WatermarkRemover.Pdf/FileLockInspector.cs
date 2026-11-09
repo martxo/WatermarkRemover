@@ -22,7 +22,7 @@ public static class FileLockInspector
     {
         try
         {
-            List<string> holders = Query(path);
+            List<string> holders = Query(path).Select(h => h.Label).ToList();
             if (holders.Count == 0) return "未知程序";
 
             string head = string.Join("、", holders.Take(3));
@@ -35,9 +35,47 @@ public static class FileLockInspector
         }
     }
 
-    private static List<string> Query(string path)
+    /// <summary>
+    /// Process ids Windows says hold this file open, without labels. The updater uses it to tell
+    /// "the app itself is holding its own files" (harmless — they close on exit) apart from an
+    /// external holder such as a scanner bridge or an antivirus, which is what blocks an
+    /// in-place update. Empty when the API cannot tell.
+    /// </summary>
+    public static IReadOnlyList<int> HolderProcessIds(string path)
     {
-        var holders = new List<string>();
+        try
+        {
+            return Query(path).Select(h => h.ProcessId).Distinct().ToArray();
+        }
+        catch
+        {
+            return Array.Empty<int>();
+        }
+    }
+
+    /// <summary>
+    /// True when another handle blocks an in-place write (a viewer holding the file, a read-only
+    /// attribute). Costs one open/close; edits probe it right before the swap, and the preview
+    /// polls it while it waits for the user to close the holder.
+    /// </summary>
+    public static bool IsLockedForWrite(string path)
+    {
+        try
+        {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+            return false;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return true;
+        }
+    }
+
+    private readonly record struct Holder(int ProcessId, string Label);
+
+    private static List<Holder> Query(string path)
+    {
+        var holders = new List<Holder>();
         if (!File.Exists(path)) return holders;
 
         var key = new StringBuilder(64);
@@ -71,7 +109,7 @@ public static class FileLockInspector
                     // The holder exited between the two calls — keep the pid as the only fact.
                 }
 
-                holders.Add(string.IsNullOrWhiteSpace(app) ? exe : $"{app}（{exe}）");
+                holders.Add(new Holder(pid, string.IsNullOrWhiteSpace(app) ? exe : $"{app}（{exe}）"));
             }
 
             return holders;

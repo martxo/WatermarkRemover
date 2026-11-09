@@ -210,18 +210,26 @@ public sealed partial class MainViewModel
         // are skipped entirely — the manual buttons stay.
         // 只有“每一页都有有效裁决”才跳过预览后处理；只要还有未定页就不跳过，走定向 OCR
         // 兜底并在预览条给出「批量摆正」入口（逐页模式此前一律跳过，用户只看到已裁决但页面仍歪）。
-        var livePages = job.LiveThumbnails.ToArray();
+        // 采集顺序 ≠ PDF 页序：空白页在落盘时被丢掉，双面扫描的背面还会重排。按对照表取图，
+        // 否则条带会把上一页的画面贴到这一页上。
+        IReadOnlyList<System.Windows.Media.ImageSource> livePages =
+            PreviewStripCoordinator.AlignSeedsToPdf(
+                job.LiveThumbnails, outcome.SourcePageNumbers, outcome.PageCount);
         int? settledTurns = earlyNaming is null ? null : await orientationVote.Task.ConfigureAwait(true);
+        // 有 180° 烤入页时不算 settled：分类器的半圈票需要预览侧 OCR 复核（谭海纯 (2) 教训）。
+        bool hasHalfTurns = outcome.HalfTurnedPageIndices is { Count: > 0 };
         bool orientationSettled = outcome.OrientationPerPage
-            ? outcome.UndecidedPages == 0
+            ? outcome.UndecidedPages == 0 && !hasHalfTurns
             : settledTurns is not null;
         _preview.Open(job, livePages,
             skipScanPostProcess: orientationSettled,
             undecidedPageIndices: outcome.UndecidedPageIndices,
             decidedPages: outcome.PageCount - outcome.UndecidedPages,
-            datasetDirectory: outcome.DatasetDirectory);
+            halfTurnedPageIndices: outcome.HalfTurnedPageIndices,
+            datasetDirectory: outcome.DatasetDirectory,
+            pageTurns: outcome.PageTurns);
         job.ClearLiveThumbnails();
-        op.Step("记录已展开", $"{Path.GetFileName(path)}，{livePages.Length} 页缩略图，" +
+        op.Step("记录已展开", $"{Path.GetFileName(path)}，{livePages.Count} 页缩略图，" +
                              (orientationSettled ? "方向已裁决，跳过自动后处理" : "存在未裁决页，保留兜底与批量摆正"));
 
         // Naming may already have finished from page 1 while the scan continued; the rename

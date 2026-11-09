@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.IO;
+using System.Text;
 using System.Windows;
 using WatermarkRemover.App.Logging;
 using WatermarkRemover.App.Ocr;
@@ -31,6 +32,7 @@ public sealed class SettingsViewModel : ObservableObject
     private readonly IShellOpenService _shell;
     private readonly AppSettings _target;
     private readonly IRecognitionReportStore _reportStore;
+    private readonly Func<(string DriveName, string RemotePath)?>? _browseUploadFolder;
     private int _selectedSuffixIndex = -1;
     private string _newSuffixText = string.Empty;
     private int _logRangeIndex;
@@ -47,7 +49,8 @@ public sealed class SettingsViewModel : ObservableObject
     }
 
     internal SettingsViewModel(AppSettings settings, IDialogService dialogs, IShellOpenService shell,
-        IRecognitionReportStore? reportStore = null, NetdiskAccountSettingViewModel? netdisk = null)
+        IRecognitionReportStore? reportStore = null, NetdiskAccountSettingViewModel? netdisk = null,
+        Func<(string DriveName, string RemotePath)?>? browseUploadFolder = null)
     {
         ArgumentNullException.ThrowIfNull(settings);
         _target = settings;
@@ -55,6 +58,7 @@ public sealed class SettingsViewModel : ObservableObject
         _shell = shell ?? throw new ArgumentNullException(nameof(shell));
         _reportStore = reportStore ?? new RecognitionReportStore();
         Netdisk = netdisk;
+        _browseUploadFolder = browseUploadFolder;
 
         // Edits land on a working copy so "取消" discards them; Commit copies them back.
         Settings = settings.Clone();
@@ -87,6 +91,7 @@ public sealed class SettingsViewModel : ObservableObject
         RefreshLogCommand = new RelayCommand(_ => RefreshLog());
         CopyLogCommand = new RelayCommand(_ => CopyLog());
         ExportLogCommand = new RelayCommand(_ => ExportLog());
+        UploadLogCommand = new RelayCommand(_ => _ = UploadLogAsync());
         OpenLogFolderCommand = new RelayCommand(_ => OpenLogFolder());
         OpenUpdateFolderCommand = new RelayCommand(_ => OpenUpdateFolder());
         CleanUpdateResidueCommand = new RelayCommand(_ => CleanUpdateResidue());
@@ -101,6 +106,11 @@ public sealed class SettingsViewModel : ObservableObject
         ExportLoginPackCommand = new RelayCommand(() => _ = ExportLoginPackAsync());
         ImportLoginPackCommand = new RelayCommand(() => ImportLoginPackRequested?.Invoke(this, EventArgs.Empty));
         LoginPackStatusText = DescribeLoginPack();
+
+        // 快速上传位置的「浏览…」：弹云盘目录选择器回填。委托未注入（测试/旧宿主）时按钮置灰。
+        BrowseUploadFolderCommand = new RelayCommand(
+            _ => BrowseUploadFolder(),
+            _ => _browseUploadFolder is not null);
     }
 
     /// <summary>The working copy the window binds to; untouched on cancel.</summary>
@@ -154,6 +164,19 @@ public sealed class SettingsViewModel : ObservableObject
 
     /// <summary>Raised when the user asks to import a login pack; the view picks the file.</summary>
     public event EventHandler? ImportLoginPackRequested;
+
+    /// <summary>「浏览…」：打开云盘目录选择器，把选中的存储盘/目录回填进表单（走「保存」生效）。</summary>
+    public RelayCommand BrowseUploadFolderCommand { get; }
+
+    private void BrowseUploadFolder()
+    {
+        if (_browseUploadFolder?.Invoke() is { } picked)
+        {
+            // 根目录回填空串，与"留空 = 该盘根目录"的输入框约定一致。
+            Settings.NetdiskUploadDrive = picked.DriveName;
+            Settings.NetdiskUploadDirectory = picked.RemotePath;
+        }
+    }
 
     private async Task ExportLoginPackAsync()
     {
@@ -635,6 +658,9 @@ public sealed class SettingsViewModel : ObservableObject
 
     public RelayCommand ExportLogCommand { get; }
 
+    /// <summary>Uploads the selected range's report to the cloud private folder; opt-in.</summary>
+    public RelayCommand UploadLogCommand { get; }
+
     public RelayCommand OpenLogFolderCommand { get; }
 
     public RelayCommand RefreshReportsCommand { get; }
@@ -857,6 +883,48 @@ public sealed class SettingsViewModel : ObservableObject
         catch (Exception ex)
         {
             _dialogs.Warn($"导出失败：{ex.Message}", "提示");
+        }
+    }
+
+    /// <summary>
+    /// Sends the same report 「导出日志文件」 would write to /WatermarkRemover/private/logs, so a
+    /// problem on another PC can be diagnosed from this one without copying files off the machine.
+    /// Never automatic: the button is the only trigger.
+    /// </summary>
+    private async Task UploadLogAsync()
+    {
+        TimeSpan range = SelectedLogRange();
+        IReadOnlyList<LogEntry> entries = LogExportService.Collect(range);
+        if (entries.Count == 0)
+        {
+            _dialogs.Info("该时间段没有执行记录，无需上传。", "上传日志");
+            return;
+        }
+
+        var service = new CloudUpdateService(_target, new DpapiSecretProtector());
+        if (!service.IsConfigured)
+        {
+            _dialogs.Warn("请先在「网盘设置」完成阿里云盘登录，再上传日志。", "上传日志");
+            return;
+        }
+
+        string name = LogExportService.UploadFileName(Environment.MachineName, DateTime.Now);
+        LogStatusText = "正在上传日志…";
+        try
+        {
+            byte[] bytes = Encoding.UTF8.GetBytes(LogExportService.BuildReport(entries, range));
+            string cloudPath = await service.UploadLogAsync(name, bytes).ConfigureAwait(true);
+            LogStatusText = $"已上传：{name}";
+            _dialogs.Info(
+                $"日志已上传到 阿里云盘 {cloudPath}。\n\n" +
+                "在任意一台已登录的电脑上都能看到，不必再到这台机器上拷贝。",
+                "上传日志");
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("上传日志失败", ex);
+            LogStatusText = $"上传失败：{ex.Message}";
+            _dialogs.Warn($"上传日志失败：{ex.Message}", "上传日志");
         }
     }
 

@@ -76,7 +76,8 @@ public sealed partial class MainViewModel
     /// <summary>Enters the settings second-level page (fresh working copy each time).</summary>
     public void OpenSettings()
     {
-        var page = new SettingsViewModel(Settings, _dialogs, _shell, netdisk: Netdisk.Settings);
+        var page = new SettingsViewModel(Settings, _dialogs, _shell, netdisk: Netdisk.Settings,
+            browseUploadFolder: Netdisk.BrowseForUploadFolder);
         page.RefreshLog();
         SettingsPage = page;
         IsSettingsOpen = true;

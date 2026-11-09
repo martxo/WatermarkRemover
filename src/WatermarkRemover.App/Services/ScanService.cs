@@ -38,7 +38,14 @@ public sealed record ScanOutcome(
     bool OrientationPerPage = false,
     int UndecidedPages = 0,
     IReadOnlyList<int>? UndecidedPageIndices = null,
-    string? DatasetDirectory = null);
+    IReadOnlyList<int>? HalfTurnedPageIndices = null,
+    string? DatasetDirectory = null,
+    // 每页烤进 PDF 的顺时针 90° 次数（0–3），与 PDF 页码一一对应：预览条用它把扫描期的原始
+    // 缩略图旋到和文件一致——否则 /Rotate 是横的、缩略图还是竖的（v1.16.128）。
+    IReadOnlyList<int>? PageTurns = null,
+    // PDF 第 i 页来自第几个采集页（1 基，采集顺序）。空白页被丢弃、双面还按页序重排过，实时
+    // 缩略图只有靠这张对照表才能贴回正确的页。
+    IReadOnlyList<int>? SourcePageNumbers = null);
 
 /// <summary>One page just pulled from the device, delivered while the scan is still running.
 /// The final PDF does not exist yet; the small PNG lets the row show the page immediately.</summary>
@@ -528,7 +535,26 @@ public sealed class ScanService
                     .Where(pair => pair.source == PerPageOrientationDecider.Provenance.Undecided)
                     .Select(pair => pair.index)
                     .ToArray(),
-            DatasetDirectory: exporter?.SessionDirectory);
+            // 分类器裁成 180° 的页：0°/180° 是分类器的已知混淆点且基线无法交叉验证（两种朝向
+            // 都是竖排），预览侧要用 OCR 复核后再信任（2026-11-07 谭海纯 (2).pdf 正立首页被
+            // conf 0.857 烤成 /Rotate 180）。
+            HalfTurnedPageIndices: pageDecision is null
+                ? null
+                : pageDecision.Sources
+                    .Select((source, index) => (source, pageDecision.Turns[index], index))
+                    .Where(pair => pair.source == PerPageOrientationDecider.Provenance.Classifier
+                                   && ((pair.Item2 % 4) + 4) % 4 == 2)
+                    .Select(pair => pair.index)
+                    .ToList() is { Count: > 0 } halfTurns
+                    ? halfTurns
+                    : null,
+            DatasetDirectory: exporter?.SessionDirectory,
+            // 烤进 PDF 的方向：逐页模式用它自己那份；整份模式每页同一个值。缩略图必须跟着转，
+            // 否则条带显示的仍是扫描仪喂进来的原始朝向（与文件不一致的根源）。
+            PageTurns: perPageTurns ?? (orientationTurns is { } uniform && pages.Count > 0
+                ? Enumerable.Repeat(((uniform % 4) + 4) % 4, pages.Count).ToArray()
+                : null),
+            SourcePageNumbers: keptEncodes.Select(t => t.PageNumber).ToArray());
     }
 
     /// <summary>逐页裁决摘要：转数列表 + 按来源分层计数（上线后日志采样监控按此分层看误翻率）。</summary>

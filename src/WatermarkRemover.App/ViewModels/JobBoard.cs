@@ -76,7 +76,9 @@ public sealed class JobBoard : ObservableObject
                     ? "点「开始截图」或按全局快捷键，截图会自动复制并保存成 PNG"
                     : _sectionId == "search.page"
                         ? "输入文件名搜索全盘文件，选中后可直接打开或定位"
-                        : $"拖入 PDF 文件即可开始「{_sectionName}」"
+                        : _sectionId == "scan.page"
+                            ? "扫描的页面会出现在这里；已有的 PDF 也可以直接拖进来编辑"
+                            : $"拖入 PDF 文件即可开始「{_sectionName}」"
             : $"已完成 {CompletedCount} 个文件";
 
     /// <summary>The host's busy state changed — recompose the status line and command gates.</summary>

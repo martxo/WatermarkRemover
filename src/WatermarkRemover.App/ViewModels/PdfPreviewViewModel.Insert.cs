@@ -7,6 +7,12 @@ namespace WatermarkRemover.App.ViewModels;
 
 public sealed partial class PdfPreviewViewModel
 {
+    /// <summary>How long an insert waits for the user to close the program holding the PDF.</summary>
+    private const int LockWaitTimeoutMs = 120_000;
+
+    /// <summary>Write-lock probe interval while waiting for the holder to let go.</summary>
+    private const int LockPollIntervalMs = 300;
+
     /// <summary>
     /// Gap button between two pages: one scan pass (the host supplies the scanner and reports
     /// progress through <see cref="StatusText"/>), then the scanned pages are spliced into the
@@ -52,19 +58,18 @@ public sealed partial class PdfPreviewViewModel
                 return;
             }
 
-            PdfInsertResult insert = await _edits
-                .InsertAsync(insertAfterIndex, scannedPath!)
+            PdfInsertResult? insert = await InsertWhenUnlockedAsync(insertAfterIndex, scannedPath!, op)
                 .ConfigureAwait(true);
-            int added = insert.AddedPages;
-            if (insert.SavedAsCopy)
+            if (insert is null)
             {
-                StatusText = $"原文件正被其他程序占用，已插入并另存为 {Path.GetFileName(insert.PdfPath)}";
+                op.Complete("已取消：文件被占用，未插入");
+                return; // the scanned intermediate stays on disk — its pages are not lost
             }
 
+            int added = insert.AddedPages;
+
             inserted = added > 0;
-            op.Step("插入写盘",
-                $"{slot}新增 {added} 页" +
-                (insert.SavedAsCopy ? $"（另存为 {Path.GetFileName(insert.PdfPath)}）" : string.Empty));
+            op.Step("插入写盘", $"{slot}新增 {added} 页");
 
             if (IsCancelled)
             {
@@ -144,9 +149,14 @@ public sealed partial class PdfPreviewViewModel
         StatusText = $"正在插入 {Path.GetFileName(sourcePdfPath)}…";
         try
         {
-            PdfInsertResult insert = await _edits
-                .InsertAsync(insertAfterIndex, sourcePdfPath)
+            PdfInsertResult? insert = await InsertWhenUnlockedAsync(insertAfterIndex, sourcePdfPath, op)
                 .ConfigureAwait(true);
+            if (insert is null)
+            {
+                op.Complete("已取消：文件被占用，未插入");
+                return;
+            }
+
             int added = insert.AddedPages;
             if (added == 0)
             {
@@ -155,8 +165,7 @@ public sealed partial class PdfPreviewViewModel
                 return;
             }
 
-            op.Step("插入写盘", $"{slot}新增 {added} 页" +
-                (insert.SavedAsCopy ? $"（另存为 {Path.GetFileName(insert.PdfPath)}）" : string.Empty));
+            op.Step("插入写盘", $"{slot}新增 {added} 页");
             if (IsCancelled)
             {
                 op.Complete("已取消（文件已保存）");
@@ -176,10 +185,7 @@ public sealed partial class PdfPreviewViewModel
 
             if (StatusText.Length == 0)
             {
-                StatusText = $"已从 {Path.GetFileName(sourcePdfPath)} 插入 {added} 页" +
-                    (insert.SavedAsCopy
-                        ? $"，原文件被其他程序占用，已另存为 {Path.GetFileName(insert.PdfPath)}"
-                        : "。");
+                StatusText = $"已从 {Path.GetFileName(sourcePdfPath)} 插入 {added} 页。";
             }
             op.Complete($"{slot}新增 {added} 页，共 {PageCount} 页");
         }
@@ -202,6 +208,79 @@ public sealed partial class PdfPreviewViewModel
     /// <summary>页面按钮的入口：插到当前显示页之后。</summary>
     internal void InsertFileAfterCurrent(string sourcePdfPath) =>
         _ = InsertFileAfterAsync(PageIndex, sourcePdfPath);
+
+    /// <summary>
+    /// 插入写盘遇到文件被占用（扫描完用 WPS 打开着这份 PDF，是用户的常见场景）：不再在旁边另存
+    /// 一份「原名 (已插入).pdf」制造第二份文件，而是提示用户关掉占用程序；用户确认后每秒探测一次
+    /// 写锁，释放后自动完成保存。取消则放弃本次插入——调用方保留下来的扫描中间文件不丢。
+    /// </summary>
+    private async Task<PdfInsertResult?> InsertWhenUnlockedAsync(
+        int insertAfterIndex, string sourcePdfPath, OperationScope op)
+    {
+        while (true)
+        {
+            try
+            {
+                return await _edits.InsertAsync(insertAfterIndex, sourcePdfPath).ConfigureAwait(true);
+            }
+            catch (PdfFileLockedException ex)
+            {
+                op.Note($"插入被占用阻断：{ex.Holders}", LogLevel.Warn);
+                bool retry = _dialogs.Confirm(
+                    $"「{Path.GetFileName(_file.Path)}」正被 {ex.Holders} 占用，新页面无法写入。\n\n" +
+                    $"请在 {ex.Holders} 中关闭该文件，然后点击「确定」，插入会自动完成。\n\n" +
+                    "取消则放弃本次插入，已扫描的页面不会丢失。",
+                    "文件被占用");
+                if (!retry || IsCancelled)
+                {
+                    op.Note("用户取消：等待文件释放前放弃插入", LogLevel.Warn);
+                    StatusText = "已取消插入：请关闭占用该文件的程序后再试。";
+                    return null;
+                }
+
+                if (!await WaitForWriteAccessAsync(op).ConfigureAwait(true))
+                {
+                    StatusText = "已取消插入。";
+                    return null;
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Polls the write lock until the holder lets go (up to <see cref="LockWaitTimeoutMs"/>), so the
+    /// user only has to close WPS — no second dialog, no re-scan. Returns false if the user
+    /// cancelled meanwhile. Waiting time is excluded from the operation's slow verdict: it is the
+    /// user's WPS, not our write, that took the seconds.
+    /// </summary>
+    private async Task<bool> WaitForWriteAccessAsync(OperationScope op)
+    {
+        StatusText = "正在等待文件释放，关闭后会自动保存…";
+        long waitedMs = 0;
+        while (waitedMs < LockWaitTimeoutMs)
+        {
+            if (!FileLockInspector.IsLockedForWrite(_file.Path))
+            {
+                op.Exclude(waitedMs);
+                op.Note($"文件已释放，等待 {waitedMs} ms");
+                return true;
+            }
+
+            if (IsCancelled)
+            {
+                op.Exclude(waitedMs);
+                return false;
+            }
+
+            await Task.Delay(LockPollIntervalMs).ConfigureAwait(true);
+            waitedMs += LockPollIntervalMs;
+        }
+
+        op.Exclude(waitedMs);
+        throw new PdfFileLockedException(
+            $"等待 {FileLockInspector.Describe(_file.Path)} 释放文件超时，插入未保存，原文件未改动。",
+            _file.Path, FileLockInspector.Describe(_file.Path));
+    }
 
     /// <summary>
     /// 插入写盘后的公共收尾：渲染缓存按插入点位移、页数上调、新页做一次方向校正，再在条带里
