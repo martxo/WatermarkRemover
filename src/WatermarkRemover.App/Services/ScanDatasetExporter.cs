@@ -11,7 +11,7 @@ namespace WatermarkRemover.App.Services;
 
 /// <summary>
 /// One page's training record, in final PDF reading order. <see cref="ProbePng"/> is the exact
-/// byte array the production pipeline fed to doc_ori — never a re-render.
+/// 256px probe rendered from the captured frame — the same domain the scan pipeline sees.
 /// </summary>
 internal sealed record ScanDatasetPage(
     int PageIndex,

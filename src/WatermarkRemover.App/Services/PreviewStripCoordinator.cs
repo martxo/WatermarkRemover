@@ -108,9 +108,6 @@ public sealed class PreviewStripCoordinator
         FileJobViewModel job,
         IReadOnlyList<ImageSource>? seedThumbnails = null,
         bool skipScanPostProcess = false,
-        IReadOnlyList<int>? undecidedPageIndices = null,
-        int decidedPages = 0,
-        IReadOnlyList<int>? halfTurnedPageIndices = null,
         string? datasetDirectory = null,
         IReadOnlyList<int>? pageTurns = null)
     {
@@ -140,9 +137,6 @@ public sealed class PreviewStripCoordinator
             autoCleanBlank: autoPostProcess, // duplex scans drop their blank back sides by themselves
             scanProvider: scanRow ? _scanIntoStrip : null, // scan rows can insert scans into gaps
             seedThumbnails: seedThumbnails,
-            undecidedPageIndices: undecidedPageIndices,
-            decidedPages: decidedPages,
-            halfTurnedPageIndices: halfTurnedPageIndices,
             pageTurns: pageTurns,
             chooseBatchUpright: count => BatchUprightDialog.Show(Application.Current?.MainWindow, count),
             datasetDirectory: datasetDirectory,

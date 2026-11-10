@@ -98,15 +98,12 @@ public static class PdfDocumentBuilder
     /// <paramref name="clockwiseQuarterTurns"/> bakes the scan's early orientation verdict into
     /// the file as /Rotate metadata (v1.16.83) — the preview's auto-orient pass then finds the
     /// pages already upright instead of voting and rewriting after the fact.
-    /// <paramref name="perPageQuarterTurns"/> (盲扫逐页裁决，v1.16.83) overrides the uniform
-    /// turn with one turn per page, in reading order — same length as the pages.
     /// </summary>
     public static byte[] Build(
         ScanDocument document,
         PdfBuildOptions options,
         IReadOnlyList<EncodedScanPage> encodedPages,
-        int clockwiseQuarterTurns = 0,
-        IReadOnlyList<int>? perPageQuarterTurns = null)
+        int clockwiseQuarterTurns = 0)
     {
         ArgumentNullException.ThrowIfNull(document);
         ArgumentNullException.ThrowIfNull(options);
@@ -114,8 +111,6 @@ public static class PdfDocumentBuilder
 
         if (encodedPages.Count != document.Pages.Count)
             throw new ArgumentException("编码页数与文档页数不一致。", nameof(encodedPages));
-        if (perPageQuarterTurns is { } perPage && perPage.Count != encodedPages.Count)
-            throw new ArgumentException("逐页转数与页数不一致。", nameof(perPageQuarterTurns));
 
         PdfSharpRuntime.EnsureInitialized();
         byte[] bytes = Assemble(
@@ -123,8 +118,7 @@ public static class PdfDocumentBuilder
             options,
             ResolveDpi(document.Settings),
             MapPages(document, encodedPages),
-            clockwiseQuarterTurns,
-            perPageQuarterTurns);
+            clockwiseQuarterTurns);
         if (options.Encrypted && !CanOpenWithPassword(bytes, options.UserPassword))
         {
             throw new InvalidOperationException("加密 PDF 生成后无法用密码回读，已中止输出以免写出无法打开的文件。");
@@ -224,8 +218,7 @@ public static class PdfDocumentBuilder
         PdfBuildOptions options,
         double dpi,
         IReadOnlyList<PdfPageContent> pages,
-        int clockwiseQuarterTurns = 0,
-        IReadOnlyList<int>? perPageQuarterTurns = null)
+        int clockwiseQuarterTurns = 0)
     {
         // --- Assemble the document single-threaded ---
         // PdfSharp's object graph is not thread-safe, so the assembly just consumes the finished
@@ -248,12 +241,8 @@ public static class PdfDocumentBuilder
             page.Height = XUnit.FromPoint(encoded.HeightPt);
             // Same turn convention as PdfPageRotator.RotateAll: N clockwise quarter turns land
             // as /Rotate 90·N. 0 stays unwritten so the default scan PDF keeps its exact shape.
-            // 盲扫逐页模式按页覆盖整份同转。
-            int turns = perPageQuarterTurns is { } perPage
-                ? perPage[index]
-                : clockwiseQuarterTurns;
-            if (turns % 4 != 0)
-                page.Rotate = 90 * (((turns % 4) + 4) % 4);
+            if (clockwiseQuarterTurns % 4 != 0)
+                page.Rotate = 90 * (((clockwiseQuarterTurns % 4) + 4) % 4);
 
             // Bilevel frames (engine 黑白 mode) take the official-software route: a raw CCITT G4
             // image XObject, never decoded back to a bitmap in between.

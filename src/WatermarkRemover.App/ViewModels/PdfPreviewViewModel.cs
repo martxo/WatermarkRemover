@@ -1,4 +1,4 @@
-﻿﻿using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
 using System.Windows.Input;
@@ -84,20 +84,6 @@ public sealed partial class PdfPreviewViewModel : ObservableObject
     /// <summary>Whether blank pages are dropped by themselves after load (scan rows do).</summary>
     private readonly bool _autoCleanBlank;
 
-    /// <summary>Final-page indices left Undecided by the per-page verdict (0-based). Used to
-    /// scope the OCR fallback and the one-click batch upright to the pages that need it.</summary>
-    private readonly IReadOnlyList<int> _undecidedPageIndices;
-
-    /// <summary>How many pages already carry a valid verdict. Zero means the whole document is
-    /// unjudged, so a whole-document OCR pass is the only safe fallback.</summary>
-    private readonly int _decidedPages;
-
-    /// <summary>Pages the scan baked as /Rotate 180 on the classifier's vote (0-based). The
-    /// half turn is the classifier's known confusion and the baseline cannot cross-check it
-    /// (both faces of the axis are portrait text), so the post-process re-verifies each of
-    /// them with the OCR detector and turns back the ones it got wrong.</summary>
-    private readonly IReadOnlyList<int> _halfTurnedPageIndices;
-
     /// <summary>每页烤进 PDF 的顺时针 90° 次数（0–3，按页序）。条带的种子图是扫描时未裁决的
     /// 原始画面，只有照样转过去才能和写进文件的方向一致；缺省 = 不转。</summary>
     private readonly IReadOnlyList<int> _pageTurns;
@@ -112,8 +98,6 @@ public sealed partial class PdfPreviewViewModel : ObservableObject
 
     /// <summary>User prompts; insert asks it to close whoever holds the PDF before saving.</summary>
     private readonly IDialogService _dialogs;
-
-    private string _uprightNoticeText = string.Empty;
 
     /// <summary>Host-supplied scanner for the gap button: one scan pass, handed back as the
     /// written PDF's path (null = nothing scanned; throw = failure with a readable message).
@@ -161,9 +145,6 @@ public sealed partial class PdfPreviewViewModel : ObservableObject
         Action<string>? onRelocated = null, bool autoCleanBlank = false,
         Func<IProgress<string>, Task<string?>>? scanProvider = null,
         IReadOnlyList<ImageSource>? seedThumbnails = null,
-        IReadOnlyList<int>? undecidedPageIndices = null,
-        int decidedPages = 0,
-        IReadOnlyList<int>? halfTurnedPageIndices = null,
         Func<int, BatchUprightChoice?>? chooseBatchUpright = null,
         string? datasetDirectory = null,
         IDialogService? dialogs = null,
@@ -178,9 +159,6 @@ public sealed partial class PdfPreviewViewModel : ObservableObject
         _autoCleanBlank = autoCleanBlank;
         _scanProvider = scanProvider;
         _seedThumbnails = seedThumbnails;
-        _undecidedPageIndices = undecidedPageIndices ?? Array.Empty<int>();
-        _decidedPages = decidedPages;
-        _halfTurnedPageIndices = halfTurnedPageIndices ?? Array.Empty<int>();
         _pageTurns = pageTurns ?? Array.Empty<int>();
         _chooseBatchUpright = chooseBatchUpright;
         _datasetDirectory = datasetDirectory;
@@ -210,8 +188,6 @@ public sealed partial class PdfPreviewViewModel : ObservableObject
         _transientStatus = new TransientStatus(
             read: () => StatusText,
             write: text => StatusText = text ?? string.Empty);
-        if (_undecidedPageIndices.Count > 0)
-            UprightNoticeText = $"{_undecidedPageIndices.Count} 页未能自动摆正，可点此批量摆正";
         Thumbnails.CollectionChanged += (_, _) =>
         {
             OnPropertyChanged(nameof(HasThumbnails));
@@ -494,20 +470,6 @@ public sealed partial class PdfPreviewViewModel : ObservableObject
     }
 
     public bool HasStatusText => !string.IsNullOrEmpty(_statusText);
-
-    /// <summary>Direct warning shown in the strip when the per-page verdict left pages undecided:
-    /// 「N 页未能自动摆正，可点此批量摆正」. Empty = no notice.</summary>
-    public string UprightNoticeText
-    {
-        get => _uprightNoticeText;
-        private set
-        {
-            if (SetProperty(ref _uprightNoticeText, value ?? string.Empty))
-                OnPropertyChanged(nameof(HasUprightNotice));
-        }
-    }
-
-    public bool HasUprightNotice => !string.IsNullOrEmpty(_uprightNoticeText);
 
     /// <summary>Transient confirmations (rotate/delete/straighten) share the app's one expiry rule.</summary>
     private readonly TransientStatus _transientStatus;

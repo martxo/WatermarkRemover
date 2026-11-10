@@ -163,16 +163,11 @@ public sealed partial class MainViewModel
         string blankNote = outcome.SkippedBlankPages > 0
             ? $"，已跳过 {outcome.SkippedBlankPages} 页空白页"
             : string.Empty;
-        // 逐页模式跳过预览摆正是预期行为；有页面未定（未被纠正）时必须说出口，否则用户只看到
-        // 改名、不知道页面还歪着（黄小婷件反馈）。
-        string orientNote = outcome.UndecidedPages > 0
-            ? $"，{outcome.UndecidedPages} 页未能自动摆正，可点「批量摆正」一次改好"
-            : string.Empty;
         string summary = outcome.Cancelled
             ? $"已取消，保留 {outcome.PageCount} 页{blankNote}"
             : outcome.Interruption is { Length: > 0 }
                 ? $"扫描中断，已保存 {outcome.PageCount} 页{blankNote}"
-                : $"扫描 {outcome.PageCount} 页{blankNote}{orientNote}";
+                : $"扫描 {outcome.PageCount} 页{blankNote}";
         job.Apply(FeatureResult.Success(path, path, summary, outcome.PageCount));
         // A device failure mid-document (paper jam, cable) used to lose every page already
         // pulled off the hardware. The partial PDF is saved now, and the row offers
@@ -216,21 +211,13 @@ public sealed partial class MainViewModel
             PreviewStripCoordinator.AlignSeedsToPdf(
                 job.LiveThumbnails, outcome.SourcePageNumbers, outcome.PageCount);
         int? settledTurns = earlyNaming is null ? null : await orientationVote.Task.ConfigureAwait(true);
-        // 有 180° 烤入页时不算 settled：分类器的半圈票需要预览侧 OCR 复核（谭海纯 (2) 教训）。
-        bool hasHalfTurns = outcome.HalfTurnedPageIndices is { Count: > 0 };
-        bool orientationSettled = outcome.OrientationPerPage
-            ? outcome.UndecidedPages == 0 && !hasHalfTurns
-            : settledTurns is not null;
         _preview.Open(job, livePages,
-            skipScanPostProcess: orientationSettled,
-            undecidedPageIndices: outcome.UndecidedPageIndices,
-            decidedPages: outcome.PageCount - outcome.UndecidedPages,
-            halfTurnedPageIndices: outcome.HalfTurnedPageIndices,
+            skipScanPostProcess: settledTurns is not null,
             datasetDirectory: outcome.DatasetDirectory,
             pageTurns: outcome.PageTurns);
         job.ClearLiveThumbnails();
         op.Step("记录已展开", $"{Path.GetFileName(path)}，{livePages.Count} 页缩略图，" +
-                             (orientationSettled ? "方向已裁决，跳过自动后处理" : "存在未裁决页，保留兜底与批量摆正"));
+                             (settledTurns is not null ? "方向已裁决，跳过自动后处理" : "无裁决，保留预览自动摆正"));
 
         // Naming may already have finished from page 1 while the scan continued; the rename
         // still waits for the PDF (and the strip's writes) before moving the file.

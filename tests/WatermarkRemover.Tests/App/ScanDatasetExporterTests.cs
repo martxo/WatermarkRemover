@@ -320,12 +320,20 @@ public sealed class ScanDatasetExporterTests
         var encoded = document.Pages
             .Select(page => PdfDocumentBuilder.EncodePage(page, options, encoder, dpi))
             .ToList();
-        byte[] pdf = PdfDocumentBuilder.Build(
-            document, options, encoded, clockwiseQuarterTurns: 0,
-            perPageQuarterTurns: perPageTurns ?? new[] { 0, 0, 0 });
+        byte[] pdf = PdfDocumentBuilder.Build(document, options, encoded, clockwiseQuarterTurns: 0);
 
         string path = Path.Combine(directory, "scan.pdf");
         File.WriteAllBytes(path, pdf);
+        // Build 只支持整份同转；测试需要的逐页 /Rotate 用生产同款的单页旋转工具补上。
+        if (perPageTurns is not null)
+        {
+            for (var index = 0; index < perPageTurns.Length; index++)
+            {
+                if (perPageTurns[index] != 0)
+                    PdfPageRotator.RotateBy(path, index, perPageTurns[index]);
+            }
+        }
+
         return path;
     }
 

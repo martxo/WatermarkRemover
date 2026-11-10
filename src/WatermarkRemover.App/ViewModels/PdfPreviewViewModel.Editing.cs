@@ -1,4 +1,4 @@
-﻿using System.IO;
+using System.IO;
 using WatermarkRemover.App.Logging;
 using WatermarkRemover.App.Services;
 using WatermarkRemover.Core.Logging;
@@ -30,57 +30,17 @@ public sealed partial class PdfPreviewViewModel
                 return;
             }
 
-            // 逐页裁决只要还有未定页就不算“已完成”：部分页已决时只兜底那些未定页，避免整份
-            // 旋转把已经摆正的页又转歪；全未决时整份 OCR 兜底仍是唯一可用的保守做法。
-            // 有 180° 烤入页时也进后处理：半圈是分类器的已知混淆点，落盘后用 OCR 复核。
-            bool hasHalfTurns = _halfTurnedPageIndices.Count > 0;
-            bool scopedFallback =
-                _undecidedPageIndices.Count > 0 && _decidedPages > 0 && PageCount > 0;
             bool blankFirstPage = _autoCleanBlank && await IsPageBlankAsync(0);
             op.Step("检测首页空白", blankFirstPage ? "空白" : "有内容");
 
-            if (scopedFallback)
+            if (blankFirstPage)
             {
-                await FallbackUndecidedPagesAsync();
-                op.Step("未裁决页兜底");
-            }
-            else if (!hasHalfTurns)
-            {
-                if (blankFirstPage)
-                {
-                    await CleanBlankPagesAsync();
-                    op.Step("清理空白页", "首页空白，先清理");
-                }
-
-                await AutoOrientAsync();
-                op.Step("方向检测");
+                await CleanBlankPagesAsync();
+                op.Step("清理空白页", "首页空白，先清理");
             }
 
-            // 180° 复核：渲染含 /Rotate 的当前视图，OCR 认为还要再转半圈的页转回归位。
-            // 与兜底共用“旋转不改页序”的性质，页索引与扫描期一致；必须先于空白页清理
-            // （删除会重排页码）。
-            if (hasHalfTurns)
-            {
-                IsOrienting = true; // 复核期间挡住插页/批量摆正等并发改写，与兜底同一把闸
-                try
-                {
-                    int reverted = await _postProcessor
-                        .VerifyHalfTurnsAsync(PageCount, _halfTurnedPageIndices, OrientationDpi)
-                        .ConfigureAwait(true);
-                    op.Step("180°复核", reverted == 0 ? "烤入方向全部正确" : $"转回 {reverted} 页");
-                    if (reverted > 0 && !IsCancelled)
-                    {
-                        BuildThumbnails();
-                        StartThumbnailLoad();
-                        await RenderAsync(PageIndex, force: true).ConfigureAwait(true);
-                        ShowTransientStatus($"已转回 {reverted} 页被误转的页面");
-                    }
-                }
-                finally
-                {
-                    IsOrienting = false;
-                }
-            }
+            await AutoOrientAsync();
+            op.Step("方向检测");
 
             if (_autoCleanBlank && !blankFirstPage)
             {
@@ -95,60 +55,6 @@ public sealed partial class PdfPreviewViewModel
         catch (Exception ex)
         {
             op.Fail("扫描后处理失败", ex);
-        }
-    }
-
-    /// <summary>
-    /// 只对未裁决页做 OCR 方向兜底，一次写盘，已裁决页保持不动。全未决的文档不走这里
-    /// （整份旋转更稳）；OCR 读不出方向的页保持原样，留给「批量摆正」人工一次改完。
-    /// </summary>
-    private async Task FallbackUndecidedPagesAsync()
-    {
-        if (IsCancelled || _ocrEngine is null || IsOrienting) return;
-        if (PageCount <= 0 || _isLoading) return;
-
-        using var op = AppLog.BeginOperation(
-            LogCategory.Preview, "未裁决页兜底", Path.GetFileName(_file.Path), slowMs: 0);
-
-        IsOrienting = true;
-        StatusText = $"正在兜底摆正 {_undecidedPageIndices.Count} 页未裁决页…";
-        try
-        {
-            int turned = await _postProcessor
-                .OrientPagesAsync(PageCount, _undecidedPageIndices, OrientationDpi)
-                .ConfigureAwait(true);
-            if (IsCancelled)
-            {
-                op.Complete("已取消");
-                return;
-            }
-            if (turned == 0)
-            {
-                op.Complete("OCR 无法判定，未改动");
-                return;
-            }
-
-            op.Step("旋转写盘", $"定向摆正 {turned} 页");
-            BuildThumbnails();
-            StartThumbnailLoad();
-            await RenderAsync(PageIndex, force: true);
-
-            if (StatusText.Length == 0)
-                ShowTransientStatus($"已兜底摆正 {turned} 页，其余可点「批量摆正」");
-            op.Complete($"定向摆正 {turned} 页");
-        }
-        catch (OperationCanceledException)
-        {
-            op.Complete("已取消");
-        }
-        catch (Exception ex)
-        {
-            op.Fail("未裁决页兜底失败", ex);
-            if (!IsCancelled) StatusText = $"兜底摆正失败：{ex.Message}（文件未改动）";
-        }
-        finally
-        {
-            IsOrienting = false;
         }
     }
 
@@ -170,14 +76,14 @@ public sealed partial class PdfPreviewViewModel
     private async Task PromptBatchUprightAsync()
     {
         if (_chooseBatchUpright is null || IsOrienting || IsRotating || PageCount <= 0) return;
-        BatchUprightChoice? choice = _chooseBatchUpright(_undecidedPageIndices.Count);
+        BatchUprightChoice? choice = _chooseBatchUpright(0);
         if (choice is null) return;
         await ApplyBatchUprightAsync(choice.QuarterTurns, choice.OnlyUndecided);
     }
 
     /// <summary>
-    /// 一键批量摆正：整份或仅未裁决页，按用户选择的方向一次写盘，然后重建所有表面。
-    /// 与逐页裁决保持一致的单写者锁，失败时文件不动并给出原因。
+    /// 一键批量摆正：整份按用户选择的方向一次写盘，然后重建所有表面。
+    /// 失败时文件不动并给出原因。
     /// </summary>
     internal async Task ApplyBatchUprightAsync(int quarterTurns, bool onlyUndecided)
     {
@@ -191,26 +97,14 @@ public sealed partial class PdfPreviewViewModel
         StatusText = "正在批量摆正…";
         try
         {
-            int[] undecided = _undecidedPageIndices
-                .Where(index => index >= 0 && index < PageCount)
-                .Distinct()
-                .ToArray();
-            bool scoped = onlyUndecided && undecided.Length > 0;
-            int affected = scoped ? undecided.Length : PageCount;
+            // 整份同转时代没有“未裁决页”概念：批量摆正始终整份旋转。
+            int affected = PageCount;
 
-            if (scoped)
-            {
-                await _edits.RotatePagesAsync(
-                    undecided.Select(index => (Index: index, Steps: turns)).ToArray());
-            }
-            else
-            {
-                await _edits.RotateAllAsync(turns);
-            }
-            op.Step("旋转写盘", $"顺时针 {turns * 90}°，{(scoped ? "仅未裁决页" : "整份")}共 {affected} 页");
+            await _edits.RotateAllAsync(turns);
+            op.Step("旋转写盘", $"顺时针 {turns * 90}°，整份共 {affected} 页");
 
             // Batch upright is a manual correction too: one line per affected page, then refresh.
-            int[] affectedPages = scoped ? undecided : Enumerable.Range(0, PageCount).ToArray();
+            int[] affectedPages = Enumerable.Range(0, PageCount).ToArray();
             foreach (int index in affectedPages)
                 ScanDatasetExporter.AppendManualRotation(
                     _datasetDirectory, index + 1, turns * 90, "Batch");
@@ -228,7 +122,6 @@ public sealed partial class PdfPreviewViewModel
 
             if (StatusText.Length == 0)
                 ShowTransientStatus($"已批量摆正（顺时针 {turns * 90}°），已保存");
-            UprightNoticeText = string.Empty;
             op.Complete($"顺时针 {turns * 90}°，{affected} 页");
         }
         catch (OperationCanceledException)

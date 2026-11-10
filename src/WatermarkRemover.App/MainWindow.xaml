@@ -2069,22 +2069,6 @@
                                            Foreground="{StaticResource TextSecondaryBrush}"
                                            TextTrimming="CharacterEllipsis"
                                            Visibility="{Binding Strip.HasStatusText, Converter={StaticResource BoolToVis}}"/>
-                                <!-- Direct, clickable notice for pages the automatic verdict left
-                                     skewed: the whole line opens the batch-upright dialog. -->
-                                <Button Command="{Binding Strip.BatchUprightCommand}"
-                                        HorizontalAlignment="Left"
-                                        Margin="0,6,0,0"
-                                        Padding="0"
-                                        Background="Transparent"
-                                        BorderThickness="0"
-                                        Cursor="Hand"
-                                        ToolTip="批量摆正：按选择的方向整份或逐页旋转"
-                                        Visibility="{Binding Strip.HasUprightNotice, Converter={StaticResource BoolToVis}}">
-                                    <TextBlock Text="{Binding Strip.UprightNoticeText}"
-                                               FontSize="12"
-                                               Foreground="{StaticResource AccentBrush}"
-                                               TextWrapping="Wrap"/>
-                                </Button>
                                 </StackPanel>
                             </Border>
                         </DataTemplate>

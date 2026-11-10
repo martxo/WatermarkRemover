@@ -78,14 +78,6 @@
            sha256 33688DBEE1C23E34B81777E97CB428EB40F24B242C02B5F623484959E830AEC8 -->
     <SidecarAsset Include="Models\doclayout_yolo_docstructbench_imgsz1024.onnx" />
     <SidecarAsset Include="Models\pp_doclayout_s.onnx" />
-    <!-- PP-LCNet_x1_0_doc_ori (盲扫逐页方向裁决, v1.16.83):
-         PaddleX 官方推理模型 paddle3.0b2 导出 tar（bcebos paddlex/official_inference_model/paddle3.0b2/，
-         Apache-2.0, 6,880,256 字节），paddle2onnx 1.3.1 转换（inference.pdmodel + inference.pdiparams，
-         opset 13 自动升 14 因 hard_swish）。6,781,504 bytes，
-         sha256 10453F80F6F50E8149161AEF61B265119471E4010263A82682E5695914236F27。
-         输入 1x3x224x224（resize_short 256 加中心裁 224, ImageNet mean/std, RGB, CHW），
-         输出 4 类 0/90/180/270 logits。 -->
-    <SidecarAsset Include="Models\PP-LCNet_x1_0_doc_ori.onnx" />
     <!-- Scan feature (扫描): x86 bridge into Brother's official engine. ScanCoreApi.dll ships as
          32-bit only, so the bridge is a separate self-contained x86 exe in its own folder beside
          the x64 app; published by PublishBrotherBridge below. -->

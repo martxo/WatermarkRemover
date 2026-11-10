@@ -96,11 +96,6 @@ public sealed class AppSettings
     /// <summary>Scan page layout (扫描页): 0 = 单面, 1 = 双面长边, 2 = 双面短边.</summary>
     public int ScanDuplex { get; set; }
 
-    /// <summary>盲扫逐页方向裁决 (v1.16.83): 每页独立判定 0/90/180/270 并写各自的 /Rotate，
-    /// 任意朝向放纸都能出正向 PDF。模型缺失或引擎不可用时自动回退整份同转（第 1 页裁决），
-    /// 再回退预览侧摆正——永不因方向裁决让扫描失败。关闭则固定走整份同转。</summary>
-    public bool PerPageOrientationEnabled { get; set; } = true;
-
     /// <summary>连续扫描: re-arm the scanner as soon as one document lands. Batch work is dozens
     /// of documents a day, so the mode is remembered rather than re-checked every launch.</summary>
     public bool ContinuousScan { get; set; }
@@ -209,7 +204,6 @@ public sealed class AppSettings
         DefaultsNoticeVersion = DefaultsNoticeVersion,
         PreferredLayoutStage = PreferredLayoutStage,
         ScanDuplex = ScanDuplex,
-        PerPageOrientationEnabled = PerPageOrientationEnabled,
         ContinuousScan = ContinuousScan,
         ScanDatasetExportEnabled = ScanDatasetExportEnabled,
         ScanColor = ScanColor,

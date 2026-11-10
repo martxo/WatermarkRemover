@@ -11,7 +11,6 @@ using WatermarkRemover.Scan.Engine;
 using WatermarkRemover.Scan.Engine.BrotherEngine;
 using WatermarkRemover.Imaging;
 using WatermarkRemover.Ocr;
-using WatermarkRemover.Ocr.Orientation;
 using WatermarkRemover.Pdf;
 
 namespace WatermarkRemover.App.Services;
@@ -35,10 +34,6 @@ public sealed record ScanOutcome(
     string? Interruption = null,
     int SkippedBlankPages = 0,
     int? OrientationTurns = null,
-    bool OrientationPerPage = false,
-    int UndecidedPages = 0,
-    IReadOnlyList<int>? UndecidedPageIndices = null,
-    IReadOnlyList<int>? HalfTurnedPageIndices = null,
     string? DatasetDirectory = null,
     // 每页烤进 PDF 的顺时针 90° 次数（0–3），与 PDF 页码一一对应：预览条用它把扫描期的原始
     // 缩略图旋到和文件一致——否则 /Rotate 是横的、缩略图还是竖的（v1.16.128）。
@@ -89,25 +84,9 @@ public sealed class ScanService
 
     private readonly AppSettings _settings;
 
-    /// <summary>盲扫逐页方向分类器（PP-LCNet doc_ori）。模型缺失/加载失败时为 null——
-    /// 整个逐页通道静默让位给整份同转（第 1 页裁决），扫描行为与 v1.16.83 P1 完全一致。</summary>
-    private readonly DocOrientationClassifier? _orientationClassifier;
-
     public ScanService(AppSettings settings)
     {
         _settings = settings;
-        string reason = "未启用";
-        if (settings.PerPageOrientationEnabled &&
-            DocOrientationClassifier.TryCreate(out _orientationClassifier, out reason))
-        {
-            AppLog.Info("盲扫：逐页方向分类器已加载（每页独立裁决 0/90/180/270）");
-        }
-        else
-        {
-            _orientationClassifier = null;
-            if (settings.PerPageOrientationEnabled)
-                AppLog.Info($"盲扫：逐页方向分类器不可用（{reason}），方向走整份同转");
-        }
     }
 
     /// <param name="duplex">Page layout chosen on the scan page (single / duplex long / short edge).</param>
@@ -267,7 +246,7 @@ public sealed class ScanService
                 pendingEncodes.Enqueue(Task.Run(() =>
                 {
                     var encode = Stopwatch.StartNew();
-                    // 一次 256px 探针编码，两处复用：空白像素判定 + 盲扫方向票（分类器/投影基线）。
+                    // 一次 256px 探针编码：空白像素判定与训练数据探针共用这一份。
                     byte[] probe = Probe256(page);
                     bool isBlank = BlankPageDetector.IsBlank(probe);
                     // 训练数据：原始帧按采集序先落盘（最终页序在装配后才确定）；空白页除首页外
@@ -281,31 +260,8 @@ public sealed class ScanService
                         : PdfDocumentBuilder.EncodePage(
                             new ScannedPage { Image = page }, ScanPdfOptions, ThumbnailEncoder, dpi);
 
-                    // 盲扫逐页票：与读取重叠、≈毫秒级；任何失败都按弃权处理，绝不波及扫描。
-                    (int? classifierTurns, float confidence, bool? baseline) = (null, 0f, (bool?)null);
-                    if (!isBlank && _orientationClassifier is { } classifier)
-                    {
-                        try
-                        {
-                            DocOrientationClassifier.Vote vote = classifier.Classify(probe);
-                            classifierTurns = vote.QuarterTurns;
-                            confidence = vote.Confidence;
-                            baseline = ProjectionAxisBaseline.Judge(probe)?.IsHorizontalText;
-                            // 原始票留痕（Debug 级）：决策层的门槛/分组全靠这些数字，现场排查
-                            // 必须能看到每页真实票面——渲染复算与 1bpp 原始帧的票会漂移。
-                            AppLog.Debug(
-                                $"盲扫：第 {pageNumber} 页原始票 turns={vote.QuarterTurns} conf={confidence:0.000} " +
-                                $"baseline={(baseline is null ? "弃权" : baseline.Value ? "横排" : "竖排")} 横版={width > height}");
-                        }
-                        catch (Exception ex)
-                        {
-                            AppLog.Debug($"盲扫：第 {pageNumber} 页方向票弃权（{ex.Message}）");
-                        }
-                    }
-
                     return new TimedEncode(payload, encode.ElapsedMilliseconds, pageNumber, width, height,
-                        readMs, isBlank, classifierTurns, confidence, baseline,
-                        exporter is not null ? probe : null);
+                        readMs, isBlank, exporter is not null ? probe : null);
                 }));
 
                 if (pendingEncodes.Count >= 2)
@@ -360,13 +316,11 @@ public sealed class ScanService
             }
         }
 
-        // P1: the page-1 orientation vote ran while the scanner fed the remaining pages. In
-        // 盲扫逐页 mode it is left unconsumed — every page already voted inside its encode task,
-        // and the whole-doc verdict would only double-judge page 1. Null (unusable engine / host
-        // without the hook) keeps the old preview-side auto-orient as the safety net.
-        bool perPageOrientation = _orientationClassifier is not null && _settings.PerPageOrientationEnabled;
+        // P1: the page-1 orientation vote ran while the scanner fed the remaining pages, so it
+        // is normally already done. Null (unusable engine / host without the hook) keeps the
+        // preview-side auto-orient as the safety net.
         int? orientationTurns = null;
-        if (!perPageOrientation && orientationVote is not null)
+        if (orientationVote is not null)
         {
             try
             {
@@ -377,7 +331,7 @@ public sealed class ScanService
                 orientationTurns = null; // a failed vote must never fail the scan
             }
             op.Step("方向裁决", orientationTurns is { } turns
-                ? $"第 1 页顺时针 {turns * 90}°（扫描中完成，写入 /Rotate）"
+                ? $"第 1 页顺时针 {turns * 90}°（扫描中完成，整份写入 /Rotate）"
                 : "无裁决，交由预览自动摆正");
         }
 
@@ -411,27 +365,6 @@ public sealed class ScanService
         if (skippedBlanks > 0)
             op.Step("空白页过滤", $"采集期判定，跳过 {skippedBlanks} 页空白页");
 
-        // 盲扫逐页裁决（保守决策层）：每页独立票 + 投影基线交叉 + 整份多数 + 短边奇偶约束。
-        IReadOnlyList<int>? perPageTurns = null;
-        PerPageOrientationDecider.Decision? pageDecision = null;
-        if (perPageOrientation && keptEncodes.Count > 0)
-        {
-            var votes = new List<PerPageOrientationDecider.PageVote>(keptEncodes.Count);
-            foreach (TimedEncode t in keptEncodes)
-            {
-                votes.Add(new PerPageOrientationDecider.PageVote(
-                    ClassifierTurns: t.ClassifierTurns,
-                    ClassifierConfidence: t.ClassifierConfidence,
-                    BaselineIsHorizontal: t.BaselineHorizontal,
-                    IsLandscape: t.Width > t.Height));
-            }
-
-            PerPageOrientationDecider.Decision decision = PerPageOrientationDecider.Decide(votes);
-            pageDecision = decision;
-            perPageTurns = decision.Turns;
-            op.Step("逐页方向裁决", DescribeDecision(decision));
-        }
-
         if (kept.Count == 0)
         {
             if (readError is not null)
@@ -459,10 +392,9 @@ public sealed class ScanService
         };
         // Cancellation stops page capture, not the save: the pages already read must still land
         // as a partial PDF, so the assembly and write deliberately ignore the token. The early
-        // orientation verdict rides along as /Rotate metadata (v1.16.83 P1); 盲扫逐页 mode
-        // overrides it with one turn per page.
+        // orientation verdict rides along as /Rotate metadata (v1.16.83 P1).
         byte[] pdf = await Task.Run(() =>
-            PdfDocumentBuilder.Build(document, ScanPdfOptions, kept, orientationTurns ?? 0, perPageTurns));
+            PdfDocumentBuilder.Build(document, ScanPdfOptions, kept, orientationTurns ?? 0));
         op.Step("生成 PDF", $"{pages.Count} 页，{pdf.Length / 1024.0:0} KB");
 
         // A failed write used to discard the whole document — the pages were already pulled off
@@ -497,15 +429,12 @@ public sealed class ScanService
             for (var index = 0; index < keptEncodes.Count; index++)
             {
                 TimedEncode page = keptEncodes[index];
-                int turns = perPageTurns is { } perPage ? perPage[index] : orientationTurns ?? 0;
+                int turns = orientationTurns ?? 0;
                 int rotate = 90 * (((turns % 4) + 4) % 4);
-                string source = pageDecision is { } decision
-                    ? decision.Sources[index].ToString()
-                    : orientationTurns is null ? "None" : "Classifier";
                 records.Add(new ScanDatasetPage(
                     index + 1, page.PageNumber, page.ProbePng ?? Array.Empty<byte>(),
-                    page.ClassifierTurns, page.ClassifierConfidence, page.BaselineHorizontal,
-                    page.Width > page.Height, rotate, source));
+                    null, 0f, null,
+                    page.Width > page.Height, rotate, orientationTurns is null ? "None" : "WholeDoc"));
             }
 
             long scanMs = (long)Stopwatch.GetElapsedTime(scanStartTicks).TotalMilliseconds;
@@ -523,63 +452,27 @@ public sealed class ScanService
             AppLog.Warn($"扫描中断但已保存 {pages.Count} 页：{path}，原因：{readError}");
         return new ScanOutcome(true, path, pages.Count, device.Name, null, null, cancelled, warning, readError,
             SkippedBlankPages: skippedBlanks,
-            OrientationTurns: perPageTurns is null ? orientationTurns : null,
-            OrientationPerPage: perPageTurns is not null,
-            UndecidedPages: pageDecision is null
-                ? 0
-                : pageDecision.Sources.Count(s => s == PerPageOrientationDecider.Provenance.Undecided),
-            UndecidedPageIndices: pageDecision is null
-                ? null
-                : pageDecision.Sources
-                    .Select((source, index) => (source, index))
-                    .Where(pair => pair.source == PerPageOrientationDecider.Provenance.Undecided)
-                    .Select(pair => pair.index)
-                    .ToArray(),
-            // 分类器裁成 180° 的页：0°/180° 是分类器的已知混淆点且基线无法交叉验证（两种朝向
-            // 都是竖排），预览侧要用 OCR 复核后再信任（2026-11-07 谭海纯 (2).pdf 正立首页被
-            // conf 0.857 烤成 /Rotate 180）。
-            HalfTurnedPageIndices: pageDecision is null
-                ? null
-                : pageDecision.Sources
-                    .Select((source, index) => (source, pageDecision.Turns[index], index))
-                    .Where(pair => pair.source == PerPageOrientationDecider.Provenance.Classifier
-                                   && ((pair.Item2 % 4) + 4) % 4 == 2)
-                    .Select(pair => pair.index)
-                    .ToList() is { Count: > 0 } halfTurns
-                    ? halfTurns
-                    : null,
+            OrientationTurns: orientationTurns,
             DatasetDirectory: exporter?.SessionDirectory,
-            // 烤进 PDF 的方向：逐页模式用它自己那份；整份模式每页同一个值。缩略图必须跟着转，
+            // 烤进 PDF 的方向：整份同转，每页同一个值。缩略图必须跟着转，
             // 否则条带显示的仍是扫描仪喂进来的原始朝向（与文件不一致的根源）。
-            PageTurns: perPageTurns ?? (orientationTurns is { } uniform && pages.Count > 0
+            PageTurns: orientationTurns is { } uniform && pages.Count > 0
                 ? Enumerable.Repeat(((uniform % 4) + 4) % 4, pages.Count).ToArray()
-                : null),
+                : null,
             SourcePageNumbers: keptEncodes.Select(t => t.PageNumber).ToArray());
     }
 
-    /// <summary>逐页裁决摘要：转数列表 + 按来源分层计数（上线后日志采样监控按此分层看误翻率）。</summary>
-    private static string DescribeDecision(PerPageOrientationDecider.Decision decision)
-    {
-        var bySource = decision.Sources
-            .GroupBy(s => s)
-            .OrderBy(g => g.Key)
-            .Select(g => $"{g.Key} {g.Count()}");
-        return $"[{string.Join(",", decision.Turns)}]（{string.Join("、", bySource)}）";
-    }
-
     /// <summary>One page's finished capture: the payload (null when the page was blank and not
-    /// the first, or when encoding failed), the blank verdict, and the 盲扫 orientation votes.</summary>
+    /// the first, or when encoding failed) and the blank verdict.</summary>
     internal sealed record TimedEncode(
         EncodedScanPage? Payload, long EncodeMs, int PageNumber, int Width, int Height, long ReadMs, bool IsBlank,
-        int? ClassifierTurns = null, float ClassifierConfidence = 0f, bool? BaselineHorizontal = null,
         byte[]? ProbePng = null);
 
     /// <summary>
     /// P2's pure core: pages in reading order → what enters the PDF. Blank pages (judged at
     /// capture time from the raw frame) and unencodable pages are skipped; an all-blank capture
     /// keeps its first page rather than turning into nothing. The order of survivors is the
-    /// reading order — nothing here can shuffle pages. Returns the surviving captures (payload
-    /// plus the 盲扫 votes) so the per-page orientation decision sees exactly the kept pages.
+    /// reading order — nothing here can shuffle pages.
     /// </summary>
     internal static (List<TimedEncode> Kept, int SkippedBlanks) SelectPagesForPdf(
         IReadOnlyList<TimedEncode?> readingOrder)
