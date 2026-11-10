@@ -17,7 +17,8 @@ public sealed class TransferChatItemViewModel : ObservableObject
         string? localPath = null,
         Action<TransferChatItemViewModel>? open = null,
         Action<TransferChatItemViewModel>? reveal = null,
-        Action<TransferChatItemViewModel>? openPdf = null)
+        Action<TransferChatItemViewModel>? openPdf = null,
+        Action<TransferChatItemViewModel>? copy = null)
     {
         IsMine = message.Direction == TransferChatDirection.Computer;
         IsText = message.Kind == TransferChatKind.Text;
@@ -36,6 +37,8 @@ public sealed class TransferChatItemViewModel : ObservableObject
         OpenCommand = new RelayCommand(() => open?.Invoke(this), () => HasPath && IsFile);
         OpenFolderCommand = new RelayCommand(() => reveal?.Invoke(this), () => HasPath);
         OpenPdfCommand = new RelayCommand(() => openPdf?.Invoke(this), () => IsLink && LinkReady);
+        CopyCommand = new RelayCommand(() => copy?.Invoke(this), () => copy is not null && (IsText || IsLink));
+        HasCopy = copy is not null && (IsText || IsLink);
 
         if (IsLink)
         {
@@ -86,6 +89,12 @@ public sealed class TransferChatItemViewModel : ObservableObject
 
     /// <summary>Jumps to the PDF processing page with the link's document loaded.</summary>
     public RelayCommand OpenPdfCommand { get; }
+
+    /// <summary>Puts the bubble's text (chat text or share link) back on the clipboard.</summary>
+    public RelayCommand CopyCommand { get; }
+
+    /// <summary>True on text and link bubbles that carry a copy affordance.</summary>
+    public bool HasCopy { get; }
 
     /// <summary>Document title reported by the share provider, once known.</summary>
     public string LinkTitle { get; private set; } = string.Empty;

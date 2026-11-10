@@ -55,6 +55,32 @@ public class TransferChatItemViewModelTests
     }
 
     [Fact]
+    public void Text_and_link_rows_copy_through_the_owner_callback_file_rows_do_not()
+    {
+        // 复制入口曾随旧文字列表一起消失；钉死：文字与链接气泡有复制，文件气泡没有。
+        var copied = new List<TransferChatItemViewModel>();
+        var textRow = new TransferChatItemViewModel(
+            Text(1, "hello", TransferChatDirection.Phone), copy: row => copied.Add(row));
+        var linkRow = new TransferChatItemViewModel(
+            new TransferChatMessage(
+                2, TransferChatDirection.Computer, TransferChatKind.Link,
+                "https://s.camscanner.com/x", "分享链接", 0, DateTime.Now),
+            copy: row => copied.Add(row));
+        var fileRow = new TransferChatItemViewModel(Text(3, "x", TransferChatDirection.Phone));
+
+        Assert.True(textRow.HasCopy);
+        Assert.True(textRow.CopyCommand.CanExecute(null));
+        textRow.CopyCommand.Execute(null);
+        Assert.Same(textRow, copied.Single());
+
+        Assert.True(linkRow.HasCopy);
+        Assert.True(linkRow.CopyCommand.CanExecute(null));
+
+        Assert.False(fileRow.HasCopy);
+        Assert.False(fileRow.CopyCommand.CanExecute(null));
+    }
+
+    [Fact]
     public void A_link_row_starts_busy_and_marches_until_the_page_count_is_known()
     {
         var row = new TransferChatItemViewModel(

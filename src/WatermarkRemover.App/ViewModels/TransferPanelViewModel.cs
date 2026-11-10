@@ -379,7 +379,7 @@ public sealed class TransferPanelViewModel : ObservableObject, IDisposable
         var message = new TransferChatMessage(
             --_localRowId, TransferChatDirection.Computer, TransferChatKind.Link,
             link, "分享链接", 0, DateTime.Now);
-        var row = new TransferChatItemViewModel(message, null, null, null, OpenPdfFromLink);
+        var row = new TransferChatItemViewModel(message, null, null, null, OpenPdfFromLink, CopyChatText);
         Chat.Add(row);
         return row;
     }
@@ -461,20 +461,33 @@ public sealed class TransferPanelViewModel : ObservableObject, IDisposable
     /// <summary>
     /// The link row's 去处理 PDF button: takes the link's document to the PDF page. A document
     /// already composed from this link goes as-is; otherwise the pending gallery is packed
-    /// one-page-per-image (the generic default) and that file is what gets loaded.
+    /// one-page-per-image (the generic default) and that file is what gets loaded. Re-entrancy
+    /// guard: a second click while compose/naming is running must not fire a second hand-off
+    /// (it used to re-navigate the user away from 手机传文件 mid-visit).
     /// </summary>
+    private bool _openingPdf;
+
     private async void OpenPdfFromLink(TransferChatItemViewModel row)
     {
-        string? pdf = _lastLinkPdf is { } existing && File.Exists(existing) ? existing : null;
-        if (pdf is null && PendingPages.Count > 0)
+        if (_openingPdf) return;
+        _openingPdf = true;
+        try
         {
-            row.ReportLinkStage("正在合并图片…", -1);
-            await ComposePendingAsync(ComposeLayoutCatalog.Single, CropModeCatalog.All[2])
-                .ConfigureAwait(true);
-            pdf = _lastLinkPdf;
-        }
+            string? pdf = _lastLinkPdf is { } existing && File.Exists(existing) ? existing : null;
+            if (pdf is null && PendingPages.Count > 0)
+            {
+                row.ReportLinkStage("正在合并图片…", -1);
+                await ComposePendingAsync(ComposeLayoutCatalog.Single, CropModeCatalog.All[2])
+                    .ConfigureAwait(true);
+                pdf = _lastLinkPdf;
+            }
 
-        PdfPageRequested?.Invoke(pdf);
+            PdfPageRequested?.Invoke(pdf);
+        }
+        finally
+        {
+            _openingPdf = false;
+        }
     }
 
     /// <summary>Shows a freshly downloaded link in the gallery: all pages selected, a sensible
@@ -751,8 +764,21 @@ public sealed class TransferPanelViewModel : ObservableObject, IDisposable
         RunOnUi(() =>
         {
             string? path = _server?.LocalPathFor(message.Id);
-            Chat.Add(new TransferChatItemViewModel(message, path, OpenChatFile, RevealChatFile));
+            Chat.Add(new TransferChatItemViewModel(message, path, OpenChatFile, RevealChatFile, CopyChatText));
         });
+
+    /// <summary>Copies a chat bubble's text (text and share-link bubbles) back to the clipboard,
+    /// reusing the same retry as the receive path: a browser or IM can briefly hold the clipboard.</summary>
+    private void CopyChatText(TransferChatItemViewModel row)
+    {
+        if (TryCopyToClipboard(row.Text, out Exception? error))
+            StatusText = "已复制到剪贴板";
+        else
+        {
+            AppLog.Error("手机传文件：复制聊天文字失败", error);
+            StatusText = "复制失败，请稍后再试";
+        }
+    }
 
     private static void RunOnUi(Action action)
     {

@@ -670,6 +670,23 @@
                                                             </TextBlock.Style>
                                                         </TextBlock>
 
+                                                        <!-- 文字 / 链接气泡的复制入口（旧文字列表改聊天 UI 时丢失） -->
+                                                        <Button Content="复制" FontSize="11" Padding="8,3"
+                                                                HorizontalAlignment="Left" Margin="0,5,0,0"
+                                                                Command="{Binding CopyCommand}"
+                                                                Cursor="Hand">
+                                                            <Button.Style>
+                                                                <Style TargetType="Button" BasedOn="{StaticResource SmallButton}">
+                                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                                    <Style.Triggers>
+                                                                        <DataTrigger Binding="{Binding HasCopy}" Value="True">
+                                                                            <Setter Property="Visibility" Value="Visible"/>
+                                                                        </DataTrigger>
+                                                                    </Style.Triggers>
+                                                                </Style>
+                                                            </Button.Style>
+                                                        </Button>
+
                                                         <!-- 文件卡片：类型徽标 + 文件名 / 大小 / 路径 -->
                                                         <StackPanel>
                                                             <StackPanel.Style>

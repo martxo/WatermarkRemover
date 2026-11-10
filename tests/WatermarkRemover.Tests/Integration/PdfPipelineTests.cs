@@ -98,32 +98,19 @@ public class PdfPipelineTests : IDisposable
     }
 
     [Fact]
-    public void Process_names_and_copies_a_clean_document_when_the_namer_recognises_it()
+    public void Process_writes_nothing_for_a_clean_document_even_when_the_namer_recognises_it()
     {
         byte[] bytes = PdfFixture.CamScannerLike().WithContent("q Q\n").Build();
         string input = WriteInput(bytes, "clean.pdf");
 
         var result = CreateProcessor(autoNamer: _ => AutoNameResult.Create("林孝明", "执照")).Process(input);
 
-        // A clean document still lands as a content-named copy the row can preview and rename.
-        Assert.Equal(ProcessingStatus.NoWatermarkFound, result.Status);
-        Assert.NotNull(result.OutputPath);
-        Assert.True(File.Exists(result.OutputPath!), "the named copy must exist on disk");
-        Assert.Equal("林孝明执照.pdf", Path.GetFileName(result.OutputPath));
-        Assert.Equal(bytes, File.ReadAllBytes(result.OutputPath!));
-    }
-
-    [Fact]
-    public void Process_skips_the_copy_when_a_clean_document_is_already_named_ideally()
-    {
-        byte[] bytes = PdfFixture.CamScannerLike().WithContent("q Q\n").Build();
-        string input = WriteInput(bytes, "林孝明执照.pdf");
-
-        var result = CreateProcessor(autoNamer: _ => AutoNameResult.Create("林孝明", "执照")).Process(input);
-
-        // The file already carries its ideal name: a "(2)" duplicate serves nobody.
+        // 检测到水印才产出：无水印时不写任何文件。旧的"命名副本"规则曾与移交链的内容命名
+        // 同时触发，把同一份文档写成两个一模一样的 PDF（1.16.132 用户实测重复文件根因）。
         Assert.Equal(ProcessingStatus.NoWatermarkFound, result.Status);
         Assert.Null(result.OutputPath);
+        Assert.Equal(bytes, File.ReadAllBytes(input));
+        Assert.Equal(1, Directory.EnumerateFiles(_dir, "*.pdf").Count());
     }
 
     [Fact]

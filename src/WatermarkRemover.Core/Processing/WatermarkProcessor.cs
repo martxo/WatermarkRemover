@@ -49,27 +49,11 @@ public sealed class WatermarkProcessor
 
             if (marks.Count == 0)
             {
-                // 无水印 ≠ 整体跳过：只跳过去水印这一步。内容命名认出文档时，仍产出一份按
-                // 内容命名的副本，记录行的预览、重命名、删除才照常可用；没认出（或未启用
-                // 命名）则无物可命名，保持跳过——也避免对已净文件重复处理时复制出
-                // "-no-watermark-no-watermark" 的链。文件本就叫目标名时同样无需动作。
-                AutoNameResult? autoName = TryInvokeAutoNamer(inputPath);
-                if (autoName is null)
-                    return ProcessingResult.NoWatermarkFound(inputPath);
-
-                string directory = ResolveOutputDirectory(inputPath);
-                string ideal = Path.Combine(directory, autoName.SuggestedStem + Path.GetExtension(inputPath));
-                if (SamePath(ideal, inputPath))
-                    return ProcessingResult.NoWatermarkFound(inputPath);
-
-                string namedCopy = OutputNameGenerator.FindAvailablePath(directory, Path.GetFileName(ideal));
-                if (SamePath(namedCopy, inputPath))
-                    return ProcessingResult.NoWatermarkFound(inputPath);
-
-                using var copy = OutputTransaction.Begin(namedCopy);
-                File.Copy(inputPath, copy.TempPath, overwrite: false);
-                copy.Commit();
-                return ProcessingResult.NoWatermarkFound(inputPath, namedCopy);
+                // 检测到水印才产出：无水印时不写任何文件（不产出命名副本）。副本曾与移交链的
+                // 内容命名同时触发，把同一份文档写成两个一模一样的 PDF（1.16.132 用户实测）。
+                // 干净文件的记录行本身仍可预览、重命名、删除；已净文件重复处理也不会复制出
+                // "-no-watermark-no-watermark" 的链。
+                return ProcessingResult.NoWatermarkFound(inputPath);
             }
 
             var edits = BuildEdits(raw, analysis, marks);
@@ -126,12 +110,6 @@ public sealed class WatermarkProcessor
             return null;
         }
     }
-
-    private static bool SamePath(string left, string right) =>
-        string.Equals(
-            Path.GetFullPath(left),
-            Path.GetFullPath(right),
-            StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Parses raw pages into an analysis document. Kept separate for testability.</summary>
     public static DocumentAnalysis Analyze(RawDocument raw)

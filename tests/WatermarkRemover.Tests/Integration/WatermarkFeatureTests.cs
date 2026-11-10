@@ -130,7 +130,7 @@ public class WatermarkFeatureTests : IDisposable
     {
         // 4 junk lines: text is plentiful, so a failed classification is a classifier gap —
         // straightening cannot help and must not be paid for (this was the v1.15.32 slowdown).
-        string input = WriteInput(PdfFixture.CamScannerLike().WithContent("q Q\n").Build(), "rich.pdf");
+        string input = WriteInput(PdfFixture.CamScannerLike().Build(), "rich.pdf");
         var (feature, engine, renderer) = CreateNamingFeature();
         engine.Lines = new[] { "行一", "行二", "行三", "行四" };
 
@@ -144,8 +144,8 @@ public class WatermarkFeatureTests : IDisposable
     public void Naming_pays_the_orientation_pass_only_for_text_starved_pages()
     {
         // Empty OCR: the lying-down signature — the detector must run exactly once, then the
-        // retry OCR still names nothing and the pipeline keeps its original skip behaviour.
-        string input = WriteInput(PdfFixture.CamScannerLike().WithContent("q Q\n").Build(), "starved.pdf");
+        // retry OCR still names nothing and the pipeline falls back to default naming.
+        string input = WriteInput(PdfFixture.CamScannerLike().Build(), "starved.pdf");
         var (feature, engine, renderer) = CreateNamingFeature();
         engine.Lines = Array.Empty<string>();
 
@@ -153,8 +153,8 @@ public class WatermarkFeatureTests : IDisposable
         var result = feature.Run(input, FeatureContext.Capture(settings));
 
         Assert.Equal(1, renderer.OrientCalls);
-        Assert.Equal(FeatureStatus.NoChange, result.Status);
-        Assert.Null(result.OutputPath);
+        Assert.Equal(FeatureStatus.Succeeded, result.Status);
+        Assert.NotNull(result.OutputPath);
     }
 
     [Fact]
@@ -162,7 +162,7 @@ public class WatermarkFeatureTests : IDisposable
     {
         // A blank or already-upright starved page comes back unchanged from the detector; OCRing
         // the identical pixels again only burned time (the scanner's "空白页也在识别" report).
-        string input = WriteInput(PdfFixture.CamScannerLike().WithContent("q Q\n").Build(), "starved-upright.pdf");
+        string input = WriteInput(PdfFixture.CamScannerLike().Build(), "starved-upright.pdf");
         var engine = new StubOcrEngine { Lines = Array.Empty<string>() };
         int orientCalls = 0;
         var feature = new WatermarkFeature(
@@ -182,13 +182,13 @@ public class WatermarkFeatureTests : IDisposable
         Assert.Equal(1, orientCalls);
         Assert.Contains("正在检查页面朝向…", stages);
         Assert.DoesNotContain("正在重新识别文字…", stages);
-        Assert.Equal(FeatureStatus.NoChange, result.Status);
+        Assert.Equal(FeatureStatus.Succeeded, result.Status);
     }
 
     [Fact]
     public void Naming_reports_each_stage_through_the_context_progress()
     {
-        string input = WriteInput(PdfFixture.CamScannerLike().WithContent("q Q\n").Build(), "stages.pdf");
+        string input = WriteInput(PdfFixture.CamScannerLike().Build(), "stages.pdf");
         var (feature, engine, _) = CreateNamingFeature();
         engine.Lines = Array.Empty<string>(); // force the full stage ladder
 
@@ -200,6 +200,23 @@ public class WatermarkFeatureTests : IDisposable
         Assert.Contains("正在识别文字以命名…", stages);
         Assert.Contains("正在检查页面朝向…", stages);
         Assert.Contains("正在重新识别文字…", stages);
+    }
+
+    [Fact]
+    public void Naming_never_runs_for_a_clean_document()
+    {
+        // 检测到水印才产出、才命名：无水印文档不写文件，也就无需任何 OCR 命名开销
+        // （1.16.132：无水印副本分支曾对干净文档白跑整条命名阶梯）。
+        string input = WriteInput(PdfFixture.CamScannerLike().WithContent("q Q\n").Build(), "clean.pdf");
+        var (feature, engine, renderer) = CreateNamingFeature();
+        engine.Lines = new[] { "行一", "行二", "行三", "行四" };
+
+        var settings = new AppSettings { AutoNameByContent = true };
+        var result = feature.Run(input, FeatureContext.Capture(settings));
+
+        Assert.Equal(0, renderer.OrientCalls);
+        Assert.Equal(FeatureStatus.NoChange, result.Status);
+        Assert.Null(result.OutputPath);
     }
 
     [Fact]
