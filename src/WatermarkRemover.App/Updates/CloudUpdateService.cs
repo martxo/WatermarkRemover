@@ -527,16 +527,20 @@ public sealed class CloudUpdateService
         }
 
         long totalBytes = plan.DownloadBytes;
-        long downloaded = 0;
-        foreach (CloudChunkRef chunk in plan.RequiredChunks)
+        // Chunks are independent (own cache path, own verification): the strict serial loop was
+        // what made cloud downloads crawl — one stalled chunk held every other back. 3-way
+        // parallelism is the conservative, CDN-friendly degree.
+        long[] downloaded = new long[1];
+        await Parallel.ForEachAsync(
+            plan.RequiredChunks,
+            new ParallelOptions { MaxDegreeOfParallelism = 3, CancellationToken = cancellationToken },
+            async (chunk, token) =>
         {
-            cancellationToken.ThrowIfCancellationRequested();
             string cachePath = Path.Combine(ChunkCacheDirectory, chunk.Sha256);
             if (File.Exists(cachePath) && new FileInfo(cachePath).Length == chunk.Size)
             {
-                downloaded += chunk.Size;
-                ReportProgress(progress, downloaded, totalBytes, null);
-                continue;
+                ReportProgress(progress, Interlocked.Add(ref downloaded[0], chunk.Size), totalBytes, null);
+                return;
             }
 
             string temp = cachePath + ".part";
@@ -549,10 +553,10 @@ public sealed class CloudUpdateService
                     // No extra total deadline here: DownloadAsync already bounds the link lookup
                     // (90 s) and treats 30 s without bytes as stalled. A 45 s cap on the whole
                     // chunk killed slow-but-alive links and pushed every chunk through the CLI.
-                    await bundle.Session.DownloadAsync(fileId, temp, null, cancellationToken).ConfigureAwait(false);
+                    await bundle.Session.DownloadAsync(fileId, temp, null, token).ConfigureAwait(false);
                     fetched = true;
                 }
-                catch (Exception ex) when (!IsCallerCancellation(ex, cancellationToken))
+                catch (Exception ex) when (!IsCallerCancellation(ex, token))
                 {
                     // The elapsed time is what separates "CDN stalled" from "endpoint rejected".
                     AppLog.Warn($"云更新：接口下载分块 {chunk.Sha256[..12]}… 失败" +
@@ -568,9 +572,9 @@ public sealed class CloudUpdateService
                 {
                     await CloudDownloader.DownloadChunkViaCliAsync(
                         $"/{CloudUpdateFormat.RootFolder}/{CloudUpdateFormat.ChunksFolder}/{chunk.Sha256}",
-                        temp, StateDirectory, cancellationToken).ConfigureAwait(false);
+                        temp, StateDirectory, token).ConfigureAwait(false);
                 }
-                catch (Exception ex) when (!IsCallerCancellation(ex, cancellationToken))
+                catch (Exception ex) when (!IsCallerCancellation(ex, token))
                 {
                     try { File.Delete(temp); } catch { /* best effort */ }
                     throw new InvalidDataException(
@@ -587,11 +591,10 @@ public sealed class CloudUpdateService
             }
 
             File.Move(temp, cachePath, overwrite: true);
-            downloaded += chunk.Size;
-            ReportProgress(progress, downloaded, totalBytes, null);
-        }
+            ReportProgress(progress, Interlocked.Add(ref downloaded[0], chunk.Size), totalBytes, null);
+        }).ConfigureAwait(false);
 
-        progress?.Report(new CloudUpdateProgress(CloudUpdateStage.Assembling, 100, downloaded, totalBytes,
+        progress?.Report(new CloudUpdateProgress(CloudUpdateStage.Assembling, 100, downloaded[0], totalBytes,
             $"正在组装 {plan.ChangedFiles.Count} 个文件…"));
         string appDir = CloudApplyService.AppDirectory();
         foreach (CloudManifestFile file in plan.ChangedFiles)
@@ -604,14 +607,14 @@ public sealed class CloudUpdateService
                 file, appDir, check.LocalIndex, ChunkCacheDirectory, target);
         }
 
-        progress?.Report(new CloudUpdateProgress(CloudUpdateStage.Ready, 100, downloaded, totalBytes, null));
-        AppLog.Info($"云更新暂存完成：v{check.Manifest.Version}，下载 {FormatBytes(downloaded)}，" +
+        progress?.Report(new CloudUpdateProgress(CloudUpdateStage.Ready, 100, downloaded[0], totalBytes, null));
+        AppLog.Info($"云更新暂存完成：v{check.Manifest.Version}，下载 {FormatBytes(downloaded[0])}，" +
                     $"变更 {plan.ChangedFiles.Count} 个文件、删除 {plan.DeletedFiles.Count} 个。");
 
         return new CloudStageResult(check, staging,
             plan.ChangedFiles.Select(f => LocalFileIndex.Normalize(f.Path)).ToList(),
             plan.DeletedFiles.ToList(),
-            downloaded,
+            downloaded[0],
             plan.ChangedBytes);
     }
 

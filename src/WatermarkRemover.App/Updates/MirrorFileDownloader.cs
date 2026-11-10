@@ -8,8 +8,8 @@ namespace WatermarkRemover.App.Updates;
 /// <summary>
 /// Candidate URLs for one Velopack download, in try order. Extracted as a pure function so the
 /// mirror policy is unit-testable without any HTTP traffic: GitHub release downloads try the
-/// direct link first and fall back to the accelerator prefixes (the same list as the legacy
-/// channel), while API calls are never mirrored — the accelerators only proxy file downloads.
+/// accelerator prefixes FIRST and fall back to the direct link, while API calls are never
+/// mirrored — the accelerators only proxy file downloads.
 /// </summary>
 public static class MirrorCandidates
 {
@@ -21,7 +21,13 @@ public static class MirrorCandidates
 
     private const string ReleasesDownloadSegment = "/releases/download/";
 
-    /// <summary>Direct link first, then each configured mirror prefix, in order.</summary>
+    /// <summary>
+    /// Mirror first, direct last. The machine's own logs show github.com direct links crawling or
+    /// timing out (repeated TaskCanceledException on check/download), while the accelerators
+    /// answer in seconds; a mirror missing a fresh asset fails with a 404 almost instantly and
+    /// falls through to direct. Package integrity is guarded by SHA256 downstream, so a mirror
+    /// can withhold a file but never alter it.
+    /// </summary>
     public static IReadOnlyList<string> For(string url)
     {
         bool isFileDownload = url.StartsWith(GitHubDownloadPrefix, StringComparison.OrdinalIgnoreCase)
@@ -29,18 +35,19 @@ public static class MirrorCandidates
         if (!isFileDownload)
             return new[] { url };
 
-        var candidates = new List<string>(1 + UpdateConfig.DownloadMirrors.Length) { url };
+        var candidates = new List<string>(UpdateConfig.DownloadMirrors.Length + 1);
         candidates.AddRange(UpdateConfig.DownloadMirrors.Select(mirror => mirror + url));
+        candidates.Add(url);
         return candidates;
     }
 }
 
 /// <summary>
 /// Velopack's HTTP seam (<see cref="Velopack.Sources.IFileDownloader"/>) wired to the same
-/// mirror-retry policy as the legacy channel: GitHub release downloads fall back to accelerator
-/// prefixes when the direct link fails; everything else goes direct. Package integrity is
-/// guaranteed by Velopack's built-in SHA256 verification, so a misbehaving mirror can withhold a
-/// file but never alter it.
+/// mirror-retry policy as the legacy channel: GitHub release downloads try the accelerator
+/// prefixes first and fall back to the direct link; everything else goes direct. Package
+/// integrity is guaranteed by Velopack's built-in SHA256 verification, so a misbehaving mirror
+/// can withhold a file but never alter it.
 /// </summary>
 public sealed class MirrorFileDownloader : Velopack.Sources.IFileDownloader
 {

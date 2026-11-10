@@ -22,6 +22,13 @@ public partial class UpdateProgressWindow : Window
     public void ShowStage(UpdateStage stage, string? titleOverride = null) =>
         Dispatcher.Invoke(() => ApplyStage(titleOverride ?? TitleFor(stage), stage, null));
 
+    /// <summary>
+    /// Viewer mode (opened from the title-bar icon): the watched download belongs to a background
+    /// flow whose cancellation token this window does not own, so the 「取消更新」 button — which
+    /// would otherwise silently do nothing — is hidden.
+    /// </summary>
+    public void ShowAsViewer() => Dispatcher.Invoke(() => CancelButton.Visibility = Visibility.Collapsed);
+
     /// <summary>Thread-safe progress update; download runs on a worker context.</summary>
     public void Report(UpdateProgress progress) => Dispatcher.Invoke(() =>
     {

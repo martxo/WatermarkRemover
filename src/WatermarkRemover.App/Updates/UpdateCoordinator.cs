@@ -10,6 +10,16 @@ using WatermarkRemover.Core.Updates;
 
 namespace WatermarkRemover.App.Updates;
 
+/// <summary>What one click on the title-bar update icon means, per visual state. A pure policy so
+/// the icon contract is testable without a window: downloading → show live progress (never a
+/// static note, never a restart), failed → retry, ready → restart-into-update confirmation.</summary>
+public enum UpdateIconAction
+{
+    ShowProgress,
+    Retry,
+    ApplyReady,
+}
+
 /// <summary>
 /// End-to-end update flow shared by the startup check and the manual "check for updates"
 /// button: query the channel, prompt, download with visible progress, verify, swap and restart.
@@ -18,6 +28,14 @@ namespace WatermarkRemover.App.Updates;
 /// </summary>
 public static class UpdateCoordinator
 {
+    /// <summary>The icon's click semantics; see <see cref="UpdateIconAction"/>.</summary>
+    internal static UpdateIconAction DecideIconAction(UpdateVisualState state) => state switch
+    {
+        UpdateVisualState.Failed => UpdateIconAction.Retry,
+        UpdateVisualState.Downloading => UpdateIconAction.ShowProgress,
+        _ => UpdateIconAction.ApplyReady,
+    };
+
     private static readonly UpdateService Service = new();
 
     /// <summary>Velopack channel (增量推送); only used when the app is Velopack-installed.</summary>
@@ -470,6 +488,69 @@ public static class UpdateCoordinator
 
     private static int? ToPercent(UpdateProgress progress) =>
         progress.Percent is { } percent ? (int)Math.Round(percent) : null;
+
+    // ── Live progress viewer (opened from the title-bar update icon) ──────────
+
+    private static UpdateProgressWindow? _liveWindow;
+
+    /// <summary>
+    /// Opens (or refocuses) the progress window for a download already running in the background.
+    /// The icon knew the state, so a click must show the state — stage, version and percent bar —
+    /// not a "please wait" note. The viewer polls the notifier, the one surface every channel
+    /// (cloud / Velopack / legacy) publishes through, so no download path needs extra wiring.
+    /// </summary>
+    public static void ShowLiveProgress(Window? owner)
+    {
+        if (_liveWindow is { IsLoaded: true } existing)
+        {
+            existing.Activate();
+            return;
+        }
+
+        var notifier = UpdateReadyNotifier.Current;
+        var window = new UpdateProgressWindow();
+        if (owner is not null) window.Owner = owner;
+        window.ShowAsViewer();
+        window.Show();
+        _liveWindow = window;
+        AppLog.Info("用户点击更新图标：打开实时进度窗");
+
+        var timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromMilliseconds(200) };
+        timer.Tick += (_, _) =>
+        {
+            if (!_liveWindow?.IsLoaded ?? true)
+            {
+                timer.Stop();
+                return;
+            }
+
+            switch (notifier.State)
+            {
+                case UpdateVisualState.Downloading:
+                    window.Report(new UpdateProgress(
+                        UpdateStage.Downloading, notifier.Percent, 0, null, null,
+                        notifier.Version is { } version ? $"v{version}" : null));
+                    break;
+
+                case UpdateVisualState.Ready:
+                    timer.Stop();
+                    window.Report(new UpdateProgress(UpdateStage.ReadyToRestart, 100, 0, null, null, null));
+                    ApplyReady(new DialogService(window));
+                    window.Close();
+                    break;
+
+                case UpdateVisualState.Failed:
+                case UpdateVisualState.Idle:
+                    // Failure/recovery is already on the icon (with its tooltip); a stuck
+                    // viewer window would be the same "useless thing" this viewer replaces.
+                    timer.Stop();
+                    window.Close();
+                    break;
+            }
+        };
+        timer.Start();
+        window.Closed += (_, _) => timer.Stop();
+    }
 
     /// <summary>
     /// Records the Velopack package cache around a download. The machine that reported "delta

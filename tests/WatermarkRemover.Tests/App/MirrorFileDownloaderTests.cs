@@ -9,14 +9,16 @@ public class MirrorCandidatesTests
         "https://github.com/martxo/WatermarkRemover/releases/download/v1.15.0/WatermarkRemover-1.15.0-delta.nupkg";
 
     [Fact]
-    public void Github_release_download_tries_direct_then_mirrors_in_order()
+    public void Github_release_download_tries_mirrors_first_then_direct()
     {
+        // 本机网络直连 github.com 慢或被墙（多次 TaskCanceledException 实证），
+        // 加速镜像反而先成；镜像缺新资产时 404 秒级失败再落回直连。
         IReadOnlyList<string> candidates = MirrorCandidates.For(ReleaseFileUrl);
 
         Assert.Equal(3, candidates.Count);
-        Assert.Equal(ReleaseFileUrl, candidates[0]);
-        Assert.Equal("https://ghfast.top/" + ReleaseFileUrl, candidates[1]);
-        Assert.Equal("https://ghproxy.net/" + ReleaseFileUrl, candidates[2]);
+        Assert.Equal("https://ghfast.top/" + ReleaseFileUrl, candidates[0]);
+        Assert.Equal("https://ghproxy.net/" + ReleaseFileUrl, candidates[1]);
+        Assert.Equal(ReleaseFileUrl, candidates[2]);
     }
 
     [Fact]

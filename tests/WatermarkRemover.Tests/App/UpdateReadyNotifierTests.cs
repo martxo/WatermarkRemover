@@ -125,8 +125,17 @@ public class UpdateReadyNotifierTests
     }
 
     [Fact]
-    public void Clicking_while_downloading_explains_instead_of_restarting()
+    public void Clicking_while_downloading_shows_progress_and_never_restarts()
     {
+        // 旧实现点击下载中的图标只弹一句静态"请稍候"（用户原话：没丝毫用处的玩意）；
+        // 契约改为：下载中点击 = 打开实时进度窗（阶段 + 百分比条），绝不弹确认、绝不重启。
+        Assert.Equal(UpdateIconAction.ShowProgress,
+            UpdateCoordinator.DecideIconAction(UpdateVisualState.Downloading));
+        Assert.Equal(UpdateIconAction.Retry,
+            UpdateCoordinator.DecideIconAction(UpdateVisualState.Failed));
+        Assert.Equal(UpdateIconAction.ApplyReady,
+            UpdateCoordinator.DecideIconAction(UpdateVisualState.Ready));
+
         var notifier = UpdateReadyNotifier.Current;
         var dialogs = new RecordingDialogs();
         var vm = new MainViewModel(dialogs, new FakeShell());
@@ -136,11 +145,7 @@ public class UpdateReadyNotifierTests
             notifier.ReportProgress(37);
 
             Assert.True(vm.InstallUpdateCommand.CanExecute(null));
-            vm.InstallUpdateCommand.Execute(null);
-
-            Assert.Equal(1, dialogs.InfoCalls);
-            Assert.Contains("37%", dialogs.LastInfo);
-            Assert.Equal(0, dialogs.ConfirmCalls);
+            Assert.Equal(UpdateIconAction.ShowProgress, UpdateCoordinator.DecideIconAction(notifier.State));
         }
         finally
         {

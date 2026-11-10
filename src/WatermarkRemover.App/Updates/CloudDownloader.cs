@@ -14,8 +14,13 @@ namespace WatermarkRemover.App.Updates;
 /// </summary>
 internal static class CloudDownloader
 {
-    /// <summary>A manifest that has not arrived in this long is considered a broken CDN hop.</summary>
-    private const int ManifestTimeoutSeconds = 25;
+    /// <summary>
+    /// A manifest that has not arrived in this long is considered a broken CDN hop. Evidence
+    /// (app-20261103~08 logs): every hung API hop burned the FULL timeout while the CLI fetched
+    /// the same file in ~4 s, so each check paid timeout + CLI every time; 8 s still leaves 2×
+    /// headroom over the worst observed CLI fetch for these few-KB files.
+    /// </summary>
+    private const int ManifestTimeoutSeconds = 8;
 
     /// <summary>The CLI is slower but deterministic; give one file two minutes at most.</summary>
     private const int CliTimeoutSeconds = 180;

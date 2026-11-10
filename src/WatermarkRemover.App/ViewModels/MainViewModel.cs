@@ -278,22 +278,20 @@ public sealed partial class MainViewModel : ObservableObject
     /// </summary>
     private void OnUpdateIcon()
     {
-        switch (UpdateReady.State)
+        switch (UpdateCoordinator.DecideIconAction(UpdateReady.State))
         {
-            case UpdateVisualState.Failed:
+            case UpdateIconAction.Retry:
                 AppLog.Info($"用户点击更新图标重试 v{UpdateReady.Version}");
                 _ = UpdateCoordinator.RetryAsync(Settings);
                 break;
 
-            case UpdateVisualState.Downloading:
-                _dialogs.Info(
-                    UpdateReady.Percent is { } percent
-                        ? $"更新正在后台下载（{percent}%），完成后图标会提示重启。\n关闭窗口不会中断下载。"
-                        : "更新正在后台下载，完成后图标会提示重启。\n关闭窗口不会中断下载。",
-                    "软件更新");
+            case UpdateIconAction.ShowProgress:
+                // 点击要看的是"更新到哪一步了"：打开实时进度窗（阶段 + 百分比条），
+                // 而不是弹一句"请稍候"让用户对着一个没有任何信息的框。
+                UpdateCoordinator.ShowLiveProgress(Application.Current?.MainWindow);
                 break;
 
-            case UpdateVisualState.Ready:
+            case UpdateIconAction.ApplyReady:
                 UpdateCoordinator.ApplyReady(_dialogs);
                 break;
         }
