@@ -52,18 +52,19 @@ public class JobsViewTests
         var vm = NewVm();
         vm.Board.Jobs.Add(Job(@"C:\t\scan1.pdf", "scan.page"));
         vm.Board.Jobs.Add(Job(@"C:\t\wm1.pdf", "watermark.badge"));
-        vm.Board.Jobs.Add(Job(@"C:\t\ocr1.pdf", "ocr.text"));
+        // 去水印与 OCR 合并为「PDF 工具」：历史 ocr.text 记录恢复时迁入 watermark.badge section。
+        vm.Board.Jobs.Add(Job(@"C:\t\ocr1.pdf", "watermark.badge"));
 
         // The app opens on the scan page: exactly one record there, none of the others leak in.
         Assert.Equal(new[] { "scan1.pdf" }, vm.Board.JobsView.Cast<FileJobViewModel>().Select(j => j.FileName));
         Assert.Equal(1, vm.Board.VisibleJobCount);
 
         vm.SelectedNavItem = vm.NavItems.First(n => n.Feature.Id == "watermark.badge");
-        Assert.Equal(new[] { "wm1.pdf" }, vm.Board.JobsView.Cast<FileJobViewModel>().Select(j => j.FileName));
-        Assert.Equal(1, vm.Board.VisibleJobCount);
+        Assert.Equal(new[] { "wm1.pdf", "ocr1.pdf" }, vm.Board.JobsView.Cast<FileJobViewModel>().Select(j => j.FileName));
+        Assert.Equal(2, vm.Board.VisibleJobCount);
 
-        vm.SelectedNavItem = vm.NavItems.First(n => n.Feature.Id == "ocr.text");
-        Assert.Equal(new[] { "ocr1.pdf" }, vm.Board.JobsView.Cast<FileJobViewModel>().Select(j => j.FileName));
+        // OCR 不再是独立菜单：导航里只有「PDF 工具」承接两类能力。
+        Assert.DoesNotContain(vm.NavItems, n => n.Feature.Id == "ocr.text");
     }
 
     [Fact]

@@ -1823,6 +1823,15 @@
                                                 Command="{Binding RecognizeTextCommand}"
                                                 ToolTip="用 OCR 提取截图中的文字"/>
 
+                                        <!-- PDF 工具行：OCR 是记录上的能力（PDF/图片就地识别） -->
+                                        <Button Style="{StaticResource SmallButton}"
+                                                Content="识别文字"
+                                                Padding="10,3"
+                                                Margin="0,0,8,0"
+                                                Visibility="{Binding ShowRecognizeText, Converter={StaticResource BoolToVis}}"
+                                                Command="{Binding RecognizeTextCommand}"
+                                                ToolTip="用 OCR 提取整份文档的文字，结果保存为同名 txt"/>
+
                                         <!-- finished rows: expand the inline thumbnail strip (again = fold).
                                              The row that just finished unfolds on its own, so its button
                                              already reads 收起; older rows stay folded. -->

@@ -100,7 +100,7 @@ public sealed class FileJobViewModel : ObservableObject
         PinImageCommand = new RelayCommand(
             _ => PinRequested?.Invoke(this, EventArgs.Empty), _ => ShowScreenshotActions);
         RecognizeTextCommand = new RelayCommand(
-            _ => OcrRequested?.Invoke(this, EventArgs.Empty), _ => ShowScreenshotActions);
+            _ => OcrRequested?.Invoke(this, EventArgs.Empty), _ => ShowScreenshotActions || ShowRecognizeText);
     }
 
     /// <summary>Raised when the user wants this screenshot pinned on top of the screen.</summary>
@@ -165,7 +165,9 @@ public sealed class FileJobViewModel : ObservableObject
                 OnPropertyChanged(nameof(ShowUploadChip));
                 OnPropertyChanged(nameof(ShowUploadButton));
                 OnPropertyChanged(nameof(ShowScreenshotActions));
+                OnPropertyChanged(nameof(ShowRecognizeText));
                 OnPropertyChanged(nameof(StatusLine));
+                RecognizeTextCommand.RaiseCanExecuteChanged();
             }
         }
     }
@@ -207,6 +209,19 @@ public sealed class FileJobViewModel : ObservableObject
         OwnerFeatureId == "screenshot.page" &&
         State == JobState.Succeeded &&
         IsImagePath(OutputPath);
+
+    /// <summary>
+    /// 把 OCR 作为记录行上的能力（「PDF 工具」页）：PDF/图片记录完成后可就地发起「识别文字」，
+    /// 不再需要独立的功能页。
+    /// </summary>
+    public bool ShowRecognizeText =>
+        OwnerFeatureId == "watermark.badge" &&
+        State == JobState.Succeeded &&
+        OutputPath is { } path &&
+        (IsImagePath(path) || IsPdfPath(path));
+
+    private static bool IsPdfPath(string path) =>
+        string.Equals(Path.GetExtension(path), ".pdf", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Can this row's file be dragged out of the app (screenshot image only)?</summary>
     public bool CanDragScreenshot => ShowScreenshotActions && OutputPath is not null;
@@ -572,6 +587,7 @@ public sealed class FileJobViewModel : ObservableObject
                 OnPropertyChanged(nameof(ShowContinueScan));
                 OnPropertyChanged(nameof(PreviewButtonVisibility));
                 OnPropertyChanged(nameof(ShowScreenshotActions));
+                OnPropertyChanged(nameof(ShowRecognizeText));
                 OnPropertyChanged(nameof(HasThumbnail));
                 CopyImageCommand.RaiseCanExecuteChanged();
                 OpenImageCommand.RaiseCanExecuteChanged();

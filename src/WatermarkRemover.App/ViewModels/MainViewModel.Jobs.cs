@@ -58,7 +58,7 @@ public sealed partial class MainViewModel
         job.RetryRequested += OnJobRetryRequested;
         job.ContinueScanRequested += OnJobContinueScanRequested;
         job.PinRequested += (_, _) => OnScreenshotPinRequested(job);
-        job.OcrRequested += (_, _) => OnScreenshotOcrRequested(job);
+        job.OcrRequested += (_, _) => OnJobOcrRequested(job);
         job.ViewRequested += (_, _) => OnScreenshotViewRequested(job);
         // 行里的文件被改名/改名后移动时，未完成记录也要跟着换路径；否则重启后它会指向一个
         // 已经不存在的路径，扫描就白登记了。这里按行跟踪前后路径，覆盖命名、手动改名和
@@ -121,13 +121,16 @@ public sealed partial class MainViewModel
         {
             foreach (var entry in _journal.Load().OrderBy(e => e.ProcessedAt))
             {
-                if (!knownSections.Contains(entry.SectionId)) continue;
+                // 「PDF 工具」合并后 ocr.text 不再是独立 section：历史记录迁入工作台，否则会被
+                // 当作未知 section 整批丢弃。
+                string sectionId = entry.SectionId == "ocr.text" ? "watermark.badge" : entry.SectionId;
+                if (!knownSections.Contains(sectionId)) continue;
                 if (string.IsNullOrWhiteSpace(entry.OutputPath) || !File.Exists(entry.OutputPath))
                     continue;
 
                 var job = new FileJobViewModel(entry.InputPath, Settings.QuickSuffixes)
                 {
-                    OwnerFeatureId = entry.SectionId,
+                    OwnerFeatureId = sectionId,
                 };
                 WireJob(job);
 
@@ -188,6 +191,13 @@ public sealed partial class MainViewModel
     private void OnJobRenameRequested(object? sender, string desiredName)
     {
         if (sender is FileJobViewModel job) _renamer.Rename(job, desiredName);
+    }
+
+    /// <summary>行上的「识别文字」：截图行走结果弹窗流程，「PDF 工具」行就地跑 OCR 管线。</summary>
+    private void OnJobOcrRequested(FileJobViewModel job)
+    {
+        if (job.OwnerFeatureId == "screenshot.page") OnScreenshotOcrRequested(job);
+        else _ = RunRowOcrAsync(job);
     }
 
     private void OnJobSuffixToggleRequested(object? sender, string suffix)
@@ -292,8 +302,12 @@ public sealed partial class MainViewModel
         if (_pendingJournal is null) return;
 
         _pending.Clear();
-        foreach (var entry in _pendingJournal.Load())
+        foreach (var loaded in _pendingJournal.Load())
         {
+            // 「PDF 工具」合并：ocr.text 登记迁入工作台 section，未完成记录才不会丢。
+            var entry = loaded.SectionId == "ocr.text"
+                ? loaded with { SectionId = "watermark.badge" }
+                : loaded;
             if (!File.Exists(entry.InputPath)) continue;
             if (!_composition.Registry.Features.Any(f => f.Id == entry.SectionId)) continue;
             _pending.Add(entry);

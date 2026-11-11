@@ -35,6 +35,7 @@ public sealed class AppComposition
         PdfiumPdfPageRenderer.Diagnostics = message => AppLog.Debug(message);
         OcrEngine = ResolveOcrEngine();
         Features = BuildFeatures(PdfRenderer, OcrEngine);
+        PdfToolbox = Features.OfType<PdfToolboxFeature>().Single();
         Registry = new FeatureRegistry(Features);
     }
 
@@ -46,6 +47,9 @@ public sealed class AppComposition
 
     /// <summary>Features in registration (= sidebar) order.</summary>
     public IReadOnlyList<IFeature> Features { get; }
+
+    /// <summary>The unified PDF workbench (去水印 + 文字识别 as capabilities of one page).</summary>
+    public PdfToolboxFeature PdfToolbox { get; private set; } = null!;
 
     public FeatureRegistry Registry { get; }
 
@@ -64,28 +68,36 @@ public sealed class AppComposition
     }
 
     private static IReadOnlyList<IFeature> BuildFeatures(
-        IPdfPageRenderer renderer, IOcrEngine ocrEngine) => new IFeature[]
+        IPdfPageRenderer renderer, IOcrEngine ocrEngine)
     {
-        // Scan first: the app opens straight onto the scan page, so a walk-up user can scan
-        // without touching navigation. Registration order drives both the sidebar and the
-        // default selection.
-        new ScanFeature(),
-        // 快速搜索 sits next to the default page: it is a tool, not a processor (CanHandle=false),
-        // so it never interferes with first-match routing in FindForFile.
-        new QuickSearchFeature(),
-        new WatermarkFeature(
+        // 「PDF 工具」：去水印与文字识别合并为一个工作台页（不再各占一个菜单）。PDF 记录走
+        // 去水印管线（含智能命名与页面管理），图片记录走 OCR，OCR 也可从记录行就地发起。
+        // 两个能力实例仍各自完整，只是不再单独注册为菜单项。
+        var watermark = new WatermarkFeature(
             new PdfDocumentSource(),
             new IWatermarkStrategy[] { new BottomRightBadgeStrategy() },
             renderer,
             ocrEngine,
             orientPage: image => new PdfOrientationDetector(ocrEngine).OrientAsync(image),
-            trace: AppLog.Trace),
-        new OcrFeature(renderer, ocrEngine, trace: AppLog.Trace,
-            imageLoader: ImageOcrInput.LoadAsOcrPng),
-        // 截图 is a tool page like 快速搜索: it produces its own PNG from the desktop, so it
-        // never takes part in drop-file routing.
-        new ScreenshotFeature(),
-        new NetdiskFeature(),
-        new LanTransferFeature(),
-    };
+            trace: AppLog.Trace);
+        var ocr = new OcrFeature(renderer, ocrEngine, trace: AppLog.Trace,
+            imageLoader: ImageOcrInput.LoadAsOcrPng);
+
+        return new IFeature[]
+        {
+            // Scan first: the app opens straight onto the scan page, so a walk-up user can scan
+            // without touching navigation. Registration order drives both the sidebar and the
+            // default selection.
+            new ScanFeature(),
+            // 快速搜索 sits next to the default page: it is a tool, not a processor (CanHandle=false),
+            // so it never interferes with first-match routing in FindForFile.
+            new QuickSearchFeature(),
+            new PdfToolboxFeature(watermark, ocr),
+            // 截图 is a tool page like 快速搜索: it produces its own PNG from the desktop, so it
+            // never takes part in drop-file routing.
+            new ScreenshotFeature(),
+            new NetdiskFeature(),
+            new LanTransferFeature(),
+        };
+    }
 }

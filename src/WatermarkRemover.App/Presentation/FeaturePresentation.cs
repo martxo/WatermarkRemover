@@ -52,10 +52,8 @@ public static class FeaturePresentationCatalog
     {
         ["scan.page"] = new("\uE7F4", "自动命名 · 自动调正 · 自动删白", FeaturePageKind.Scan, "正在扫描…"),
         ["search.page"] = new("\uE721", "NTFS 索引 · 文件名秒搜 · 打开/定位", FeaturePageKind.Search, "正在搜索…"),
-        ["watermark.badge"] = new("\uE75C", "拖入 PDF → 去水印 · 智能命名 · 页面管理", FeaturePageKind.Files,
+        ["watermark.badge"] = new("\uE75C", "拖入 PDF/图片 → 去水印 · 识别文字 · 智能命名 · 页面管理", FeaturePageKind.Files,
             "正在分析并去除水印…"),
-        ["ocr.text"] = new("\uE7C3", "拖入 PDF 或图片 → 识别文字 → 生成同名 txt", FeaturePageKind.Files,
-            "正在渲染页面并识别文字…"),
         ["screenshot.page"] = new("\uE722", "区域截图 · 标注 · 自动复制并保存 PNG", FeaturePageKind.Screenshot,
             "正在截图…"),
         ["netdisk.page"] = new("\uE753", "网盘账号管理 · 上传下载 · 快捷传", FeaturePageKind.Netdisk, "正在传输…"),
