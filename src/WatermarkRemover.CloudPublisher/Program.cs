@@ -349,7 +349,11 @@ finally
 }
 
 Console.WriteLine("[5/6] 写入版本清单…");
-await session.UploadBytesAsync(rootId, CloudUpdateFormat.LatestFile,
+// 清单是唯一会被覆写的云端文件，不能覆盖上传：CDN 按下载 URL 缓存，同 file_id 覆盖后
+// 边缘节点仍在发旧内容，客户端会把新版本误判为"已是最新"（1.16.135 实证：云端清单已是
+// 135，1.16.133 客户端检查更新仍显示最新）。先删除再上传得到新 file_id，签名 URL 不会
+// 命中任何旧缓存。分块文件内容寻址（名字即哈希），不存在此问题。
+await UploadMutableManifestAsync(session, rootId, CloudUpdateFormat.LatestFile,
     Encoding.UTF8.GetBytes(CloudUpdateFormat.Serialize(manifest)), ct);
 await session.UploadBytesAsync(historyId, $"{manifest.Version}.json",
     Encoding.UTF8.GetBytes(CloudUpdateFormat.Serialize(manifest)), ct);
@@ -361,7 +365,7 @@ index.Versions = index.Versions.Take(options.Keep).ToList();
 index.Keep = options.Keep;
 index.UpdatedAt = DateTimeOffset.UtcNow.ToString("O");
 
-await session.UploadBytesAsync(rootId, CloudUpdateFormat.VersionsFile,
+await UploadMutableManifestAsync(session, rootId, CloudUpdateFormat.VersionsFile,
     Encoding.UTF8.GetBytes(CloudUpdateFormat.Serialize(index)), ct);
 
 Console.WriteLine("[6/6] 清理超出保留数量的旧版本…");
@@ -417,6 +421,18 @@ return 0;
 
 static CloudManifest? ManifestFromBytes(byte[]? bytes) =>
     bytes is null ? null : CloudUpdateFormat.TryParse<CloudManifest>(Encoding.UTF8.GetString(bytes));
+
+/// <summary>
+/// 清单类可变文件专用：先删除旧文件再上传。覆盖上传保留 file_id，而阿里云盘 CDN 按下载
+/// URL 缓存内容，覆盖后边缘节点会继续发旧清单，客户端把新版本误判为"已是最新"
+/// （1.16.135 发布实证）。删除使旧 file_id 失效，新上传得到新 file_id 与全新签名 URL。
+/// </summary>
+static async Task UploadMutableManifestAsync(
+    INetdiskSession session, string folderId, string name, byte[] bytes, CancellationToken ct)
+{
+    await session.DeleteByNameAsync(folderId, name, ct).ConfigureAwait(false);
+    await session.UploadBytesAsync(folderId, name, bytes, ct).ConfigureAwait(false);
+}
 
 static CloudManifest? ReadManifestFile(string path) =>
     ManifestFromBytes(File.ReadAllBytes(path));
