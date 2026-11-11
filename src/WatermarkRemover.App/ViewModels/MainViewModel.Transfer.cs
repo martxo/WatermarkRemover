@@ -118,6 +118,7 @@ public sealed partial class MainViewModel
         // Last chance to sync dataset truth with the PDFs the previews may have edited.
         _preview.FlushAllDatasets();
         Transfer.Stop();
+        _outputWatcher?.Dispose();
     }
 
     // --- 聊天 → PDF 处理页 的往返 ------------------------------------------

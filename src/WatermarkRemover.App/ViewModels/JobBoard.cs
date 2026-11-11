@@ -22,6 +22,7 @@ public sealed class JobBoard : ObservableObject
     private ICollectionView? _jobsView;
     private int _completedCount;
     private bool _isBusy;
+    private bool _scanInProgress;
     private string _sectionId = string.Empty;
     private string _sectionName = string.Empty;
 
@@ -67,9 +68,27 @@ public sealed class JobBoard : ObservableObject
         }
     }
 
-    public string StatusText => IsBusy
-        ? $"处理中… 已完成 {CompletedCount}/{VisibleJobCount}"
-        : VisibleJobCount == 0
+    /// <summary>
+    /// True while the scanner is running. The busy counter ("已完成 0/19") counts batch jobs and
+    /// a scan is ONE job that only completes at the end — showing it during a scan read as a
+    /// stuck page counter (1.16.133 user report "0/19 是页数吗？怎么不动"). During a scan the
+    /// footer hands over to a clear pointer; the live page count lives on the record row.
+    /// </summary>
+    public bool ScanInProgress
+    {
+        get => _scanInProgress;
+        set
+        {
+            if (SetProperty(ref _scanInProgress, value))
+                OnPropertyChanged(nameof(StatusText));
+        }
+    }
+
+    public string StatusText => IsBusy && ScanInProgress
+        ? "正在扫描…（进度见记录行）"
+        : IsBusy
+            ? $"处理中… 已完成 {CompletedCount}/{VisibleJobCount}"
+            : VisibleJobCount == 0
             ? _sectionId == "transfer.page"
                 ? "手机扫码上传后，接收的文件会显示在这里"
                 : _sectionId == "screenshot.page"

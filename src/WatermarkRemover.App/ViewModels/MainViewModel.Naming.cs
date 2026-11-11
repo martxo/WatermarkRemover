@@ -46,8 +46,10 @@ public sealed partial class MainViewModel
         // work (and its failure) is completely invisible.
         bool namingOn = Settings.AutoNameByContent;
         // 首屏命名已在扫描途中给出行内结论（已识别：X / 首屏未识别）；这时再写「识别命名中…」
-        // 会把用户刚看到的名字盖掉，所以只在没有首屏结果时才用这条泛泛提示。
-        if (namingOn && earlyNaming is null) job.SetNamingNote("识别命名中…");
+        // 会把用户刚看到的名字盖掉。只要卡片还没挂着识别出的名字（无论首屏有没有跑过），
+        // 这条进行中提示都必须在：否则「首屏未识别 → 后台整份 OCR」的几秒空窗毫无反馈
+        // （1.16.133 用户报告：桌面出了临时名，后台识别期间没有任何提示）。
+        if (namingOn && !job.IsDisplayNameOptimistic) job.SetNamingNote("识别命名中…");
         try
         {
             // The open strip auto-orients / rewrites the file right after landing; a rename

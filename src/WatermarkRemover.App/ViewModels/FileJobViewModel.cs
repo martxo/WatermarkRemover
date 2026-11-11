@@ -873,6 +873,28 @@ public sealed class FileJobViewModel : ObservableObject
         SyncStripTitle();
     }
 
+    /// <summary>
+    /// Watcher sync: the file this record points at was renamed/moved outside the app (Explorer,
+    /// another tool). Disk is the truth — paths, card name, detail line and the open strip title
+    /// all follow; an optimistic naming guess is dropped and the thumbnail is re-read from the
+    /// new path. Runs on the UI thread (the watcher host marshals).
+    /// </summary>
+    public void ApplyExternalRename(string newPath, bool renameInput, bool renameOutput)
+    {
+        if (renameInput) AdoptSource(newPath);
+
+        if (renameOutput)
+        {
+            _displayNameOptimistic = false;
+            OutputPath = newPath;
+            DisplayName = Path.GetFileName(newPath);
+            Detail = $"{_resultSummary} → {newPath}";
+            LoadThumbnail(newPath);
+            RefreshChipStates();
+            SyncStripTitle();
+        }
+    }
+
     /// <summary>Rebuilds the chip row from the (possibly changed) quick-suffix settings.</summary>
     public void RefreshSuffixChips(IReadOnlyList<string> quickSuffixes)
     {

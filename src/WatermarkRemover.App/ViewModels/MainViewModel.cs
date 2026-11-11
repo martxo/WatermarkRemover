@@ -178,6 +178,7 @@ public sealed partial class MainViewModel : ObservableObject
         // Last, once every service the restored rows talk to (netdisk accounts included) exists.
         RestoreJournal();
         RestorePending();
+        InitializeOutputWatcher();
     }
 
     /// <summary>Stops the running batch: files that have not started are marked 已停止.</summary>
@@ -309,7 +310,12 @@ public sealed partial class MainViewModel : ObservableObject
         private set
         {
             if (SetProperty(ref _isScanning, value))
+            {
+                // The footer's batch counter would sit still through the whole scan (one job,
+                // completed at the end) and read as a stuck page counter; hand it to the scan line.
+                Board.ScanInProgress = value;
                 CancelScanCommand.RaiseCanExecuteChanged();
+            }
         }
     }
 
