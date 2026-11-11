@@ -1104,9 +1104,16 @@
             </Grid>
         </DataTemplate>
 
+        <!-- 无动作页（扫描/搜索/网盘/截图）：空模板占位，否则 ContentControl 会把
+             feature 对象的完整类型名直接画在标题行右侧。 -->
+        <DataTemplate x:Key="Header.Empty">
+            <Grid/>
+        </DataTemplate>
+
         <presentation:FeaturePageHeaderSelector x:Key="FeatureHeaderSelector"
             TransferHeaderTemplate="{StaticResource Header.Transfer}"
-            FilesHeaderTemplate="{StaticResource Header.Files}"/>
+            FilesHeaderTemplate="{StaticResource Header.Files}"
+            EmptyHeaderTemplate="{StaticResource Header.Empty}"/>
 
         <!-- Shared chip template: used by the inline row and by the expanded wrap row below the name -->
         <DataTemplate DataType="{x:Type vm:SuffixChipViewModel}">
