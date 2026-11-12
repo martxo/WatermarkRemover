@@ -30,6 +30,9 @@ public sealed partial class MainViewModel
 {
     private OutputFileWatcher? _outputWatcher;
 
+    /// <summary>外部删除时挂在行上的说明文本；对账与清除逻辑按它精确匹配。</summary>
+    internal const string FileMissingNote = "文件已被移走或删除（记录保留）";
+
     /// <summary>
     /// Follows external file operations like a code editor follows renames: the record rows hold
     /// absolute paths, and without this a rename in Explorer turned every open/delete/upload on
@@ -46,6 +49,19 @@ public sealed partial class MainViewModel
         _outputWatcher.FileCreated += OnWatchedFileCreated;
         Board.Jobs.CollectionChanged += (_, _) => RefreshWatchedDirectories();
         RefreshWatchedDirectories();
+
+        // 启动对账：1.16.137 的替换误报可能在上一会话给行留下「已被移走」标记，而文件实际
+        // 都在。恢复完成后按磁盘现状清掉这条残留。
+        foreach (var job in Board.Jobs)
+        {
+            if (job.NamingNote == FileMissingNote &&
+                ((job.OutputPath is { } o && File.Exists(o)) ||
+                 (job.InputPath is { } i && File.Exists(i))))
+            {
+                job.SetNamingNote(null);
+            }
+        }
+
         AppLog.Info("文件监视已开启：资源管理器里的改名/删除会同步到记录行");
     }
 
@@ -80,10 +96,17 @@ public sealed partial class MainViewModel
         {
             bool input = Eq(job.InputPath, oldPath);
             bool output = Eq(job.OutputPath, oldPath);
-            if (!input && !output) continue;
+            if (input || output)
+            {
+                job.ApplyExternalRename(newPath, renameInput: input, renameOutput: output);
+                updated++;
+                continue;
+            }
 
-            job.ApplyExternalRename(newPath, renameInput: input, renameOutput: output);
-            updated++;
+            // 原子替换（预览条保存 = 临时名→记录路径）：新路径命中就说明文件回来了，
+            // 清掉可能挂着的「已被移走或删除」误报标记。
+            if (Eq(job.OutputPath, newPath) || Eq(job.InputPath, newPath))
+                job.SetNamingNote(null);
         }
 
         // 继续扫描等未完成登记里存的是绝对路径：文件改名时登记路径必须同步更新，否则
@@ -113,8 +136,8 @@ public sealed partial class MainViewModel
             if (Eq(job.OutputPath, path) || Eq(job.InputPath, path))
             {
                 // 预览条的编辑会写回记录路径：文件被外部删掉后，一条静默的持久说明
-                // 比按钮点了才报错更早说清现状。文件重新出现时（created）清掉。
-                job.SetNamingNote("文件已被移走或删除（记录保留）");
+                // 比按钮点了才报错更早说清现状。文件重新出现时（created/renamed）清掉。
+                job.SetNamingNote(FileMissingNote);
             }
         }
     });

@@ -104,6 +104,40 @@ public class ScanFeedbackTests
     }
 
     [Fact]
+    public async Task An_atomic_replace_write_does_not_look_like_a_deletion()
+    {
+        // 预览条保存 = File.Move(temp, 目标, overwrite) → FSW 发 Deleted(目标) + Renamed(临时→目标)。
+        // 同窗口内目标"被删又回来"是内容替换，不能给行挂「已被移走或删除」误报（1.16.137：
+        // 每次保存都误标，彭红联/赵丽娜等扫描记录全部中招）。
+        string dir = Path.Combine(Path.GetTempPath(), "wr-replace-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        string target = Path.Combine(dir, "彭红联.pdf");
+        string temp = Path.Combine(dir, "temp.pdf");
+        File.WriteAllText(target, "old");
+
+        using var watcher = new OutputFileWatcher(_ => { });
+        var deletedFired = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var renamedFired = new TaskCompletionSource<(string Old, string New)>(TaskCreationOptions.RunContinuationsAsynchronously);
+        watcher.FileDeleted += p => deletedFired.TrySetResult(p);
+        watcher.FileRenamed += (o, n) => renamedFired.TrySetResult((o, n));
+        watcher.SetDirectories(new[] { dir });
+
+        // 模拟应用的原子替换：删除目标 + 把同目录临时文件改名到目标（同一 400ms 窗口内）。
+        File.Delete(target);
+        File.WriteAllText(temp, "new");
+        File.Move(temp, target);
+
+        var rename = await renamedFired.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(target, rename.New);
+
+        // 给足去抖窗口 + 富余时间：删除事件必须被对消掉。
+        await Task.Delay(1500);
+        Assert.False(deletedFired.Task.IsCompleted, "替换写入被误报为删除");
+
+        Assert.True(File.Exists(target));
+    }
+
+    [Fact]
     public void Watcher_ignores_directories_that_do_not_exist()
     {
         using var watcher = new OutputFileWatcher(_ => { });

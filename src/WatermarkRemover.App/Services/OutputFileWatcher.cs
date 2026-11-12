@@ -133,6 +133,15 @@ public sealed class OutputFileWatcher : IDisposable
             _queue.Clear();
         }
 
+        // 原子替换（File.Move(temp, 目标, overwrite) / File.Replace）会同时发出
+        // Deleted(目标) 和 Renamed(临时→目标) / Created(目标)。同窗口内"目标被删又回来"
+        // 是一次内容替换，不是删除——不能让记录行挂上「已被移走」的误报
+        // （1.16.137：预览条每次保存都会触发，扫描记录全部被误标）。
+        var replaced = events
+            .Where(e => e.Kind != "deleted")
+            .Select(e => e.NewPath)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
         foreach (var item in events)
         {
             switch (item.Kind)
@@ -141,6 +150,7 @@ public sealed class OutputFileWatcher : IDisposable
                     FileRenamed?.Invoke(item.OldPath, item.NewPath);
                     break;
                 case "deleted":
+                    if (replaced.Contains(item.NewPath)) continue; // 替换写入，不是删除
                     FileDeleted?.Invoke(item.NewPath);
                     break;
                 case "created":
