@@ -227,7 +227,7 @@ public sealed class JobBoard : ObservableObject
             Path.GetFullPath(job.OutputPath!), Path.GetFullPath(job.InputPath),
             StringComparison.OrdinalIgnoreCase);
         string message = onlyCopy
-            ? $"确定要删除「{job.DisplayName}」吗？\n\n这是扫描/接收生成的原件，没有其他副本；\n" +
+            ? $"确定要删除「{job.DisplayName}」吗？\n\n这是记录指向的原件，没有其他副本；\n" +
               "删除后只能从回收站找回。"
             : hasOutput
                 ? $"确定要删除「{job.DisplayName}」吗？\n\n已生成的文件将移入回收站，源文件不受影响。"

@@ -26,14 +26,17 @@ public class FeatureResultFromTests
     }
 
     [Fact]
-    public void FromNoWatermarkBecomesNoChange()
+    public void FromNoWatermarkAdoptsTheInputSoTheRowStaysUsable()
     {
+        // 干净文件不产出副本，但记录必须接管原件：OutputPath 为空的 NoChange 会让
+        // 整行变成没有任何操作的死行（1.16.136 用户实测"没有预览那些功能"）。
         var processing = ProcessingResult.NoWatermarkFound("in.pdf");
 
         var result = FeatureResult.From(processing, "去水印", "ignored");
 
-        Assert.Equal(FeatureStatus.NoChange, result.Status);
-        Assert.Equal("未检测到水印", result.Summary);
+        Assert.Equal(FeatureStatus.Succeeded, result.Status);
+        Assert.Equal("in.pdf", result.OutputPath);
+        Assert.Contains("未检测到水印", result.Summary);
     }
 
     [Fact]

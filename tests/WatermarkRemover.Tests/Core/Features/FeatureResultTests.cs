@@ -4,11 +4,10 @@ using WatermarkRemover.Core.Processing;
 namespace WatermarkRemover.Tests.Core.Features;
 
 /// <summary>
-/// The dead-end regression (v1.15.33, 2026-10-21): a PDF without watermarks used to finish as
-/// NoChange with no output — no preview, no rename, no record. The pipeline now skips only the
-/// watermark-removal step and still produces a content-named copy, so the mapping must turn a
-/// zero-mark result carrying an output path into a real finished record; the path-less shape
-/// (no copy possible, e.g. the copy itself failed) stays a skip.
+/// The dead-end regression: a zero-mark run must never finish as a path-less NoChange — that
+/// shape has no preview, no rename, no record (v1.15.33 originally; v1.16.136 again after the
+/// "clean files produce no copy" rule removed the named-copy path). Both shapes now finish as a
+/// real record: with the copy's path when one was produced, otherwise by adopting the input.
 /// </summary>
 public class FeatureResultTests
 {
@@ -24,13 +23,13 @@ public class FeatureResultTests
     }
 
     [Fact]
-    public void Zero_mark_result_without_an_output_stays_a_skip()
+    public void Zero_mark_result_without_an_output_adopts_the_input()
     {
         var result = ProcessingResult.NoWatermarkFound(@"C:\in\源.pdf");
 
         var mapped = FeatureResult.From(result, "去水印", "已去除 0 处水印");
 
-        Assert.Equal(FeatureStatus.NoChange, mapped.Status);
-        Assert.Null(mapped.OutputPath);
+        Assert.Equal(FeatureStatus.Succeeded, mapped.Status);
+        Assert.Equal(@"C:\in\源.pdf", mapped.OutputPath);
     }
 }

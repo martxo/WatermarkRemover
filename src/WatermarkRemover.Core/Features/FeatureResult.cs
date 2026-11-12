@@ -95,11 +95,14 @@ public sealed class FeatureResult
         {
             Processing.ProcessingStatus.Succeeded => Success(
                 result.InputPath, result.OutputPath!, successSummary, result.Marks.Count),
-            // A zero-mark run still names and copies the file out, so the row is a real
-            // finished record (preview, rename, delete all live) — not a skipped dead end.
-            Processing.ProcessingStatus.NoWatermarkFound when result.OutputPath is not null => Success(
+            // 干净文件不产出副本（1.16.133 规则），但记录行必须仍然可用：用户拖进来的是
+            // 自己的文件，记录直接接管原件 —— 预览/识别文字/改名/上传都对这份文件工作。
+            // OutputPath 为空的 NoChange 会让整行变成没有任何操作的死行（1.16.136 实测）。
+            Processing.ProcessingStatus.NoWatermarkFound when result.OutputPath is not null &&
+                !string.Equals(result.OutputPath, result.InputPath, StringComparison.OrdinalIgnoreCase) => Success(
                 result.InputPath, result.OutputPath, "未检测到水印，已按内容命名保存", 0),
-            Processing.ProcessingStatus.NoWatermarkFound => NoChange(result.InputPath, "未检测到水印"),
+            Processing.ProcessingStatus.NoWatermarkFound => Success(
+                result.InputPath, result.InputPath, "未检测到水印，原件已保留", 0),
             _ => FailWithDetails(
                 result.InputPath, result.Error ?? "处理失败", result.ErrorDetails, featureName),
         };

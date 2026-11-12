@@ -106,7 +106,9 @@ public sealed class OcrFeature : IFeature
             if (pageTexts.All(string.IsNullOrWhiteSpace))
             {
                 timer.Emit($"未识别到文字（已耗时 {timer.ElapsedMs} ms）");
-                return FeatureResult.NoChange(inputPath, "未识别到文字");
+                // 行必须仍然可用（预览/再次识别/改名/上传）：记录接管原件而不是留在无产出的
+                // NoChange 上 —— 那会让整行变成没有任何操作的死行。
+                return FeatureResult.Success(inputPath, inputPath, "未识别到文字，原件已保留", 0);
             }
 
             string text = string.Join(Environment.NewLine + Environment.NewLine, pageTexts);

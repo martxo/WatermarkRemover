@@ -114,14 +114,15 @@ public class WatermarkFeatureTests : IDisposable
     }
 
     [Fact]
-    public void Run_reports_nochange_for_clean_documents()
+    public void Run_adopts_the_clean_document_so_the_row_stays_usable()
     {
+        // 无水印不产出副本，但记录接管原件：否则行上没有预览/识别文字/改名（1.16.136 死行）。
         string input = WriteInput(PdfFixture.CamScannerLike().WithContent("q Q\n").Build(), "clean.pdf");
 
         var result = CreateFeature().Run(input, FeatureContext.Capture(new AppSettings()));
 
-        Assert.Equal(FeatureStatus.NoChange, result.Status);
-        Assert.Null(result.OutputPath);
+        Assert.Equal(FeatureStatus.Succeeded, result.Status);
+        Assert.Equal(input, result.OutputPath);
         Assert.Contains("未检测到水印", result.Summary);
     }
 
@@ -215,8 +216,8 @@ public class WatermarkFeatureTests : IDisposable
         var result = feature.Run(input, FeatureContext.Capture(settings));
 
         Assert.Equal(0, renderer.OrientCalls);
-        Assert.Equal(FeatureStatus.NoChange, result.Status);
-        Assert.Null(result.OutputPath);
+        Assert.Equal(FeatureStatus.Succeeded, result.Status);
+        Assert.Equal(input, result.OutputPath);
     }
 
     [Fact]

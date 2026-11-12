@@ -181,15 +181,16 @@ public class OcrFeatureTests : IDisposable
     }
 
     [Fact]
-    public async Task Run_reports_nochange_when_no_text_is_recognised()
+    public async Task Run_adopts_the_input_when_no_text_is_recognised()
     {
+        // 无文字产出时记录接管原件，行上仍可再次识别/改名（OutputPath 为空 = 死行）。
         string input = WriteInput();
         var feature = new OcrFeature(new FakeRenderer(1), new FakeEngine(Array.Empty<string>()));
 
         FeatureResult result = await Task.Run(() => feature.Run(input, FeatureContext.Capture(new AppSettings())));
 
-        Assert.Equal(FeatureStatus.NoChange, result.Status);
-        Assert.Null(result.OutputPath);
+        Assert.Equal(FeatureStatus.Succeeded, result.Status);
+        Assert.Equal(input, result.OutputPath);
         Assert.Contains("未识别到文字", result.Summary);
     }
 
