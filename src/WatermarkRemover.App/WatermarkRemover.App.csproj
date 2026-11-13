@@ -44,7 +44,7 @@
     <AssemblyName>WatermarkRemover</AssemblyName>
     <RootNamespace>WatermarkRemover.App</RootNamespace>
     <ApplicationIcon Condition="Exists('app.ico')">app.ico</ApplicationIcon>
-    <Version>1.16.138</Version>
+    <Version>1.16.152</Version>
     <AssemblyVersion>$(Version)</AssemblyVersion>
     <FileVersion>$(Version)</FileVersion>
     <Product>Watermark Remover</Product>
@@ -198,17 +198,20 @@
     <Message Importance="high" Text="发布布局校验通过：@(SidecarAsset-&gt;Count()) 个旁挂资源就位，无开发文件泄露。" />
   </Target>
 
-  <!-- Single-file, self-contained publish: run on any Windows machine with no install.
-       ReadyToRun is deliberately OFF: PDFsharp 6.5's AGPL licence check inspects the calling
-       assembly, and R2R pre-JITting breaks that probe ("Initialize has to be called from the
-       PDFsharp assembly") only in the shipped build — debug runs and tests pass. -->
+  <!-- Self-contained directory publish. Layout switched from single-file to a plain folder
+       (2026-11-13) to unlock ReadyToRun: with PublishSingleFile the PDFsharp AGPL probe breaks
+       under R2R ("Initialize has to be called from the PDFsharp assembly" — its
+       Assembly.GetCallingAssembly() misfires on bundle-loaded assemblies; verified against
+       6.5.0 with probes). R2R without single-file passes the same probe and removes startup
+       JIT. Velopack packages the whole folder either way; the portable build becomes a zip of
+       the directory instead of one exe. -->
   <PropertyGroup Condition="'$(Configuration)' == 'Release'">
-    <PublishSingleFile>true</PublishSingleFile>
+    <PublishSingleFile>false</PublishSingleFile>
     <SelfContained>true</SelfContained>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
-    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
-    <PublishReadyToRun>false</PublishReadyToRun>
+    <EnableCompressionInSingleFile>false</EnableCompressionInSingleFile>
+    <PublishReadyToRun>true</PublishReadyToRun>
   </PropertyGroup>
 
 </Project>
