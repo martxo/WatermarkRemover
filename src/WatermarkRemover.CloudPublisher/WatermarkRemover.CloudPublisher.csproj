@@ -10,6 +10,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="SSH.NET" Version="2024.2.0" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\WatermarkRemover.Core\WatermarkRemover.Core.csproj" />
     <ProjectReference Include="..\WatermarkRemover.Netdisk\WatermarkRemover.Netdisk.csproj" />
   </ItemGroup>

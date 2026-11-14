@@ -32,7 +32,9 @@ if (options is null)
         "      --probe-move            验证云盘移动接口（创建/上传/移动/删除临时文件）\n" +
         "      --latest-file <文件>    使用本地 latest.json（下载接口不可用时）\n" +
         "      --versions-file <文件>  使用本地 versions.json\n" +
-        "      --no-gc                 跳过历史清单下载与无引用分块清理");
+        "      --no-gc                 跳过历史清单下载与无引用分块清理\n" +
+        "      --seed-mirror <目录>    把云盘更新仓库整体拉到本地目录并同步到腾讯云镜像\n" +
+        "                                （断点续传：本地/镜像上已存在且大小一致的文件都跳过）");
     return 2;
 }
 
@@ -49,6 +51,38 @@ if (options.ImportLogin is { } importFile)
     string json = LoginPack.Unprotect(text, options.LoginPassphrase);
     string stable = AliyunpanCliRuntime.ImportConfig(json);
     Console.WriteLine($"登录状态已导入：{stable}");
+    return 0;
+}
+
+// Seed mode: pull the entire cloud update repository (manifests + every chunk) into a local
+// directory and mirror it to the Tencent Cloud server. Resumable by design — a local file
+// with the right size and a mirrored file with the right size are both skipped, so killing
+// the run halfway and restarting continues instead of starting over. This is what backfills
+// the mirror with the historical chunks a client needs to walk from any older version; the
+// per-release PushMirrorAsync below only ever ships the new chunks of one version.
+if (options.SeedMirror is { } seedDir)
+{
+    Directory.CreateDirectory(seedDir);
+    var seedValues = BuildCliCredentials();
+    await using var seedSession = await new AliyunDriveProvider()
+        .ConnectAsync(new NetdiskCredentials(seedValues));
+    NetdiskDrive seedDrive = seedSession.Drives.FirstOrDefault(d => d.Name == "资源库")
+        ?? throw new InvalidOperationException("账号没有「资源库」，无法拉取云更新仓库。");
+    await seedSession.SwitchDriveAsync(seedDrive.Id, ct);
+
+    await SeedMirrorAsync(seedSession, seedDir, ct);
+
+    // Mirror credentials stay in the environment (WM_MIRROR_PASS); unset = local seed only.
+    if (Environment.GetEnvironmentVariable("WM_MIRROR_PASS") is { Length: > 0 } seedPass)
+    {
+        await MirrorPushTreeAsync(
+            Environment.GetEnvironmentVariable("WM_MIRROR_HOST") ?? "106.52.57.36",
+            Environment.GetEnvironmentVariable("WM_MIRROR_USER") ?? "ubuntu",
+            seedPass,
+            Environment.GetEnvironmentVariable("WM_MIRROR_DIR") ?? "/var/www/wm-updates",
+            seedDir, ct);
+    }
+
     return 0;
 }
 
@@ -417,7 +451,278 @@ if (index.Versions.Count > 1 && !options.NoGc)
 }
 
 PrintSummary(summary);
+
+// ── 更新镜像推送（腾讯云广州服务器，nginx 静态目录）─────────────────────────
+// 发布完云盘后立刻同步镜像，客户端（镜像优先）下一章检查更新即可直连下载。
+// 凭据只从环境变量读，绝不进代码/仓库：
+//   WM_MIRROR_HOST / WM_MIRROR_USER / WM_MIRROR_PASS / WM_MIRROR_DIR
+// 未设 WM_MIRROR_PASS 时静默跳过（没配镜像的机器照常只发云盘）。
+if (Environment.GetEnvironmentVariable("WM_MIRROR_PASS") is { Length: > 0 } mirrorPass)
+{
+    string mirrorHost = Environment.GetEnvironmentVariable("WM_MIRROR_HOST") ?? "106.52.57.36";
+    string mirrorUser = Environment.GetEnvironmentVariable("WM_MIRROR_USER") ?? "ubuntu";
+    string mirrorDir = Environment.GetEnvironmentVariable("WM_MIRROR_DIR") ?? "/var/www/wm-updates";
+    await PushMirrorAsync(mirrorHost, mirrorUser, mirrorPass, mirrorDir, previous, chunkSources,
+        manifest, index, ct);
+}
+
 return 0;
+
+/// <summary>
+/// 把本次发布的清单 +「客户端实际需要的分块」SFTP 推送到腾讯云镜像。与云盘同样的目录布局
+/// （latest.json / versions.json / history/&lt;版本&gt;.json / files/&lt;sha256&gt;），
+/// 客户端零适配。推送失败只告警不中断——云盘发布已经成功，镜像下次发布会补齐。
+///
+/// 推送集 = 新版本清单 − 上一版本清单（M_L − M_prev），不是 newChunks（云端没有的新分块）：
+/// 早在云盘里被旧版本引用过的分块，发布器不会重传（newChunks 跳过它），但新版本重新引用
+/// 它时镜像上没有，客户端只能 404 回退云盘——1.16.154 实证：153 客户端下 154 的 18 个分块，
+/// 17 个走镜像、33108779… 就这样漏掉回退了阿里云盘。逐版本差集在多次发布间自动累加，
+/// 正好覆盖任意旧版本客户端到最新版的全部需求。上一版清单拿不到时（首发、重发同版本、
+/// --no-gc、历史清单缺失）退化为推全量 M_L：多传不少传，客户端要的是「镜像上有」。
+/// </summary>
+static async Task PushMirrorAsync(
+    string host, string user, string pass, string dir,
+    CloudManifest? previousManifest,
+    Dictionary<string, (string path, int offset, int length)> chunkSources,
+    CloudManifest manifest, CloudVersionIndex index, CancellationToken ct)
+{
+    List<string> mirrorChunks = previousManifest is null
+        ? manifest.AllChunkHashes().Distinct(StringComparer.Ordinal).ToList()
+        : manifest.AllChunkHashes()
+            .Except(previousManifest.AllChunkHashes(), StringComparer.Ordinal)
+            .ToList();
+    Console.WriteLine($"      [mirror] 推送 {mirrorChunks.Count} 个分块（新版本 − 上一版本差集）");
+    Console.WriteLine($"[mirror] 推送更新镜像 {user}@{host}:{dir} …");
+    using var sftp = new Renci.SshNet.SftpClient(host, user, pass);
+    sftp.Connect();
+    Console.WriteLine($"      [mirror] 已连接，工作目录 {sftp.WorkingDirectory}");
+    try
+    {
+        MirrorEnsureDir(sftp, dir);
+        // SSH.NET 的 UploadFile 不建父目录：history/ 和 files/ 必须显式确保存在，
+        // 否则 history/<版本>.json 一上传就 SftpPathNotFoundException（前两个文件在
+        // dir 根下所以看起来是"成功的"）。
+        MirrorEnsureDir(sftp, $"{dir}/{CloudUpdateFormat.HistoryFolder}");
+        MirrorEnsureDir(sftp, $"{dir}/{CloudUpdateFormat.ChunksFolder}");
+
+        async Task PutAsync(string remote, byte[] bytes)
+        {
+            Console.WriteLine($"      [mirror] 上传 {remote} ({bytes.Length} B)…");
+            using var ms = new MemoryStream(bytes);
+            sftp.UploadFile(ms, remote, true);
+            await Task.CompletedTask;
+        }
+
+        byte[] latest = Encoding.UTF8.GetBytes(CloudUpdateFormat.Serialize(manifest));
+        byte[] versions = Encoding.UTF8.GetBytes(CloudUpdateFormat.Serialize(index));
+        byte[] history = latest;
+        await PutAsync($"{dir}/latest.json", latest);
+        await PutAsync($"{dir}/versions.json", versions);
+        await PutAsync($"{dir}/history/{manifest.Version}.json", history);
+        Console.WriteLine($"      latest.json / versions.json / history/{manifest.Version}.json 已推送");
+
+        string chunkDir = $"{dir}/{CloudUpdateFormat.ChunksFolder}";
+        int done = 0;
+        await Parallel.ForEachAsync(mirrorChunks,
+            new ParallelOptions { MaxDegreeOfParallelism = 4, CancellationToken = ct },
+            async (sha, token) =>
+            {
+                (string path, int offset, int length) = chunkSources[sha];
+                string temp = Path.Combine(Path.GetTempPath(), "wr-mirror", sha);
+                Directory.CreateDirectory(Path.GetDirectoryName(temp)!);
+                await SliceToFileAsync(path, offset, length, temp, token);
+                try
+                {
+                    using var fs = File.OpenRead(temp);
+                    sftp.UploadFile(fs, $"{chunkDir}/{sha}", true);
+                }
+                finally
+                {
+                    File.Delete(temp);
+                }
+                int finished = Interlocked.Increment(ref done);
+                if (finished % 20 == 0 || finished == mirrorChunks.Count)
+                {
+                    Console.WriteLine($"      分块 {finished}/{mirrorChunks.Count}");
+                }
+            });
+        Console.WriteLine($"[mirror] 完成：{mirrorChunks.Count} 个分块 + 3 个清单");
+    }
+    catch (Exception ex)
+    {
+        // 镜像推送失败不影响云盘发布结果：客户端会回退云盘，下次发布自动补齐。
+        Console.WriteLine($"      [mirror] 推送失败（不影响云盘发布）：{ex.GetType().Name}: {ex.Message}");
+        if (ex.InnerException is not null)
+        {
+            Console.WriteLine($"      [mirror]   内部异常：{ex.InnerException.GetType().Name}: {ex.InnerException.Message}");
+        }
+    }
+    finally
+    {
+        sftp.Disconnect();
+    }
+}
+
+/// <summary>mkdir -p over SFTP（协议没有递归建目录）。</summary>
+static void MirrorEnsureDir(Renci.SshNet.SftpClient sftp, string path)
+{
+    string current = string.Empty;
+    foreach (string part in path.Split('/', StringSplitOptions.RemoveEmptyEntries))
+    {
+        current += "/" + part;
+        try { sftp.CreateDirectory(current); } catch (Exception) { /* 已存在 */ }
+    }
+}
+
+/// <summary>
+/// 种子下载：把云盘更新仓库整体拉到 <paramref name="localDir"/>（布局与云端一致：
+/// latest.json / versions.json / history/&lt;版本&gt;.json / files/&lt;sha256&gt;）。
+/// 已存在且大小与云端一致的文件跳过，中断后重跑自动续传。云端 latest.json 每篇发布都是
+/// 删后重传的新 file_id，这里每次全量重拉，保证本地种子永远跟得上最新发布状态。
+/// </summary>
+static async Task SeedMirrorAsync(INetdiskSession session, string localDir, CancellationToken ct)
+{
+    string filesDir = Path.Combine(localDir, CloudUpdateFormat.ChunksFolder);
+    string historyDir = Path.Combine(localDir, CloudUpdateFormat.HistoryFolder);
+    Directory.CreateDirectory(filesDir);
+    Directory.CreateDirectory(historyDir);
+
+    string rootId = await session.EnsureFolderAsync(CloudUpdateFormat.RootFolder, ct);
+    string filesId = await session.EnsureFolderAsync(
+        $"{CloudUpdateFormat.RootFolder}/{CloudUpdateFormat.ChunksFolder}", ct);
+    string historyId = await session.EnsureFolderAsync(
+        $"{CloudUpdateFormat.RootFolder}/{CloudUpdateFormat.HistoryFolder}", ct);
+
+    var wanted = new List<(string Id, string LocalPath, long Size)>();
+    async Task CollectAsync(string folderId, string directory)
+    {
+        foreach (NetdiskFile item in await session.ListAllAsync(folderId, ct).ConfigureAwait(false))
+        {
+            if (item.IsFolder) continue;
+            if (directory == filesDir && !IsChunkName(item.Name)) continue;
+            wanted.Add((item.Id,
+                Path.Combine(directory, directory == filesDir ? item.Name.ToLowerInvariant() : item.Name),
+                item.Size));
+        }
+    }
+
+    await CollectAsync(rootId, localDir);
+    await CollectAsync(historyId, historyDir);
+    await CollectAsync(filesId, filesDir);
+
+    var missing = wanted
+        .Where(w => !File.Exists(w.LocalPath) || new FileInfo(w.LocalPath).Length != w.Size)
+        .ToList();
+    Console.WriteLine($"[seed] 云端仓库 {wanted.Count} 个文件，本地缺 {missing.Count} 个 / {FormatBytes(missing.Sum(m => m.Size))}");
+
+    if (missing.Count == 0)
+    {
+        Console.WriteLine("[seed] 本地仓库已完整，无需下载。");
+        return;
+    }
+
+    int done = 0;
+    await Parallel.ForEachAsync(missing,
+        new ParallelOptions { MaxDegreeOfParallelism = 3, CancellationToken = ct },
+        async (item, token) =>
+        {
+            string temp = Path.Combine(Path.GetTempPath(), "wr-seed", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(Path.GetDirectoryName(temp)!);
+            try
+            {
+                for (int attempt = 0; ; attempt++)
+                {
+                    try
+                    {
+                        await session.DownloadAsync(item.Id, temp, null, token);
+                        break;
+                    }
+                    catch (Exception ex) when (
+                        (ex is HttpRequestException or IOException or TimeoutException || ex.Message.Contains("RequestDeniedByCallback", StringComparison.OrdinalIgnoreCase))
+                        && attempt < 3)
+                    {
+                        // 共享出口 IP 上 CDN 偶发 403 限流：退避后重试， chunk 下载本身是幂等的。
+                        Console.WriteLine($"      分块下载第 {attempt + 1} 次失败，退避重试：{ex.Message}");
+                        await Task.Delay(TimeSpan.FromSeconds(3 * (attempt + 1)), token);
+                    }
+                }
+
+                Directory.CreateDirectory(Path.GetDirectoryName(item.LocalPath)!);
+                File.Move(temp, item.LocalPath, overwrite: true);
+            }
+            finally
+            {
+                try { File.Delete(temp); } catch { /* best effort */ }
+            }
+
+            int finished = Interlocked.Increment(ref done);
+            if (finished % 50 == 0 || finished == missing.Count)
+            {
+                Console.WriteLine($"      已下载 {finished}/{missing.Count}");
+            }
+        });
+
+    Console.WriteLine($"[seed] 下载完成：{missing.Count} 个文件 → {localDir}");
+}
+
+/// <summary>
+/// 把本地种子目录整树推送到腾讯云镜像。目录布局与云端一一对应，相对路径即远端路径。
+/// 远端已存在且大小一致的文件跳过——中断重跑不重推已传完的分块。
+/// </summary>
+static async Task MirrorPushTreeAsync(
+    string host, string user, string pass, string dir, string localRoot, CancellationToken ct)
+{
+    Console.WriteLine($"[seed][mirror] 整树推送 {localRoot} → {user}@{host}:{dir} …");
+    using var sftp = new Renci.SshNet.SftpClient(host, user, pass);
+    sftp.Connect();
+    try
+    {
+        MirrorEnsureDir(sftp, dir);
+        MirrorEnsureDir(sftp, $"{dir}/{CloudUpdateFormat.HistoryFolder}");
+        MirrorEnsureDir(sftp, $"{dir}/{CloudUpdateFormat.ChunksFolder}");
+
+        var files = Directory.EnumerateFiles(localRoot, "*", SearchOption.AllDirectories).ToList();
+        int pushed = 0, skipped = 0;
+        await Parallel.ForEachAsync(files,
+            new ParallelOptions { MaxDegreeOfParallelism = 4, CancellationToken = ct },
+            (local, token) =>
+            {
+                string remote = $"{dir}/{Path.GetRelativePath(localRoot, local).Replace('\\', '/')}";
+                long length = new FileInfo(local).Length;
+                if (sftp.Exists(remote))
+                {
+                    try
+                    {
+                        if (sftp.GetAttributes(remote).Size == length)
+                        {
+                            Interlocked.Increment(ref skipped);
+                            return ValueTask.CompletedTask;
+                        }
+                    }
+                    catch (Exception)
+                    {
+                        // 属性取不到就重传：UploadFile overwrite=true 是幂等的。
+                    }
+                }
+
+                using var fs = File.OpenRead(local);
+                sftp.UploadFile(fs, remote, true);
+                int finished = Interlocked.Increment(ref pushed);
+                if (finished % 100 == 0 || finished == files.Count)
+                {
+                    Console.WriteLine($"      已推送 {finished}/{files.Count}");
+                }
+
+                return ValueTask.CompletedTask;
+            });
+
+        Console.WriteLine($"[seed][mirror] 完成：推送 {pushed} 个，跳过 {skipped} 个（仓库共 {files.Count} 个文件）");
+    }
+    finally
+    {
+        sftp.Disconnect();
+    }
+}
 
 static CloudManifest? ManifestFromBytes(byte[]? bytes) =>
     bytes is null ? null : CloudUpdateFormat.TryParse<CloudManifest>(Encoding.UTF8.GetString(bytes));
@@ -529,6 +834,7 @@ static PublishOptions? ParseArgs(string[] arguments)
     string? latestFile = null;
     string? versionsFile = null;
     string? loginPassphrase = null;
+    string? seedMirror = null;
     string note = string.Empty;
     int keep = CloudUpdateFormat.DefaultKeep;
     bool dryRun = false;
@@ -582,6 +888,9 @@ static PublishOptions? ParseArgs(string[] arguments)
             case "--login-passphrase":
                 loginPassphrase = ++i < arguments.Length ? arguments[i] : null;
                 break;
+            case "--seed-mirror":
+                seedMirror = ++i < arguments.Length ? arguments[i] : null;
+                break;
         }
     }
 
@@ -589,7 +898,8 @@ static PublishOptions? ParseArgs(string[] arguments)
     loginPassphrase ??= Environment.GetEnvironmentVariable("WM_LOGIN_PACK_KEY");
 
     bool toolMode = exportLogin || probeMove ||
-                    !string.IsNullOrWhiteSpace(probe) || !string.IsNullOrWhiteSpace(importLogin);
+                    !string.IsNullOrWhiteSpace(probe) || !string.IsNullOrWhiteSpace(importLogin) ||
+                    !string.IsNullOrWhiteSpace(seedMirror);
     if (!toolMode &&
         (string.IsNullOrWhiteSpace(version) || string.IsNullOrWhiteSpace(source) || !Directory.Exists(source)))
     {
@@ -608,7 +918,8 @@ static PublishOptions? ParseArgs(string[] arguments)
         latestFile is null ? null : Path.GetFullPath(latestFile),
         versionsFile is null ? null : Path.GetFullPath(versionsFile),
         noGc,
-        loginPassphrase);
+        loginPassphrase,
+        seedMirror is null ? null : Path.GetFullPath(seedMirror));
 }
 
 internal sealed record PublishOptions(
@@ -625,4 +936,5 @@ internal sealed record PublishOptions(
     string? LatestFile,
     string? VersionsFile,
     bool NoGc,
-    string? LoginPassphrase);
+    string? LoginPassphrase,
+    string? SeedMirror);
