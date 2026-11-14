@@ -283,7 +283,7 @@ public sealed class FileJobViewModel : ObservableObject
         {
             // 走带回退的加载器：WebP 截图也能复制（WPF 无 WebP 编解码器，SkiaSharp 兜底）。
             if (SkiaBitmapBridge.LoadBitmapSource(path) is not { } image) return;
-            Clipboard.SetImage(image);
+            AppClipboard.SetImage(image);
             ShowTransientNameNote("图片已复制到剪贴板");
         }
         catch (Exception ex)
@@ -816,7 +816,7 @@ public sealed class FileJobViewModel : ObservableObject
 
         try
         {
-            Clipboard.SetText(report.ToString());
+            AppClipboard.SetText(report.ToString());
             Detail = "报错信息已复制到剪贴板";
         }
         catch (Exception ex)

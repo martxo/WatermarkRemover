@@ -714,25 +714,15 @@ public sealed class ScreenshotOverlaySession
 
     private static bool TryCopyToClipboard(BitmapSource image)
     {
-        for (int attempt = 0; attempt < 3; attempt++)
+        try
         {
-            try
-            {
-                Clipboard.SetImage(image);
-                return true;
-            }
-            catch (Exception ex)
-            {
-                if (attempt == 2)
-                {
-                    AppLog.Warn($"复制截图到剪贴板失败：{ex.Message}");
-                    return false;
-                }
-
-                Thread.Sleep(40);
-            }
+            AppClipboard.SetImage(image);
+            return true;
         }
-
-        return false;
+        catch (Exception ex)
+        {
+            AppLog.Warn($"复制截图到剪贴板失败：{ex.Message}");
+            return false;
+        }
     }
 }

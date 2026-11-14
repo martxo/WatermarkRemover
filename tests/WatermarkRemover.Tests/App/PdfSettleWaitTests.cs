@@ -1,4 +1,4 @@
-﻿using PdfSharp.Pdf;
+﻿﻿using PdfSharp.Pdf;
 using PdfSharp.Pdf.IO;
 using SkiaSharp;
 using WatermarkRemover.App.ViewModels;

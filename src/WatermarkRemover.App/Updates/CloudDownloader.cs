@@ -26,6 +26,15 @@ internal static class CloudDownloader
     private const int CliTimeoutSeconds = 180;
 
     /// <summary>
+    /// aliyunpan keeps its login and refresh token in ONE config directory and rewrites it on
+    /// startup. Parallel fallbacks therefore raced on that file: one process lost its token
+    /// mid-download, exited 0 without writing anything, and the update died with
+    /// "aliyunpan 没有下载出 …" after ~46 s (the "first attempt always fails" reports). One CLI
+    /// hop at a time keeps that config single-writer; API downloads stay parallel.
+    /// </summary>
+    private static readonly SemaphoreSlim s_cliGate = new(1, 1);
+
+    /// <summary>
     /// Downloads one cloud file through the API; when the signed CDN URL is unreachable or
     /// stalls, the bundled CLI (same stable login) fetches it instead.
     /// </summary>
@@ -39,18 +48,28 @@ internal static class CloudDownloader
     {
         if (!string.IsNullOrEmpty(folderId))
         {
-            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            timeout.CancelAfter(TimeSpan.FromSeconds(ManifestTimeoutSeconds));
-            long apiTicks = Stopwatch.GetTimestamp();
-            try
+            // One retry used to be enough to make the CLI the common path: a 403
+            // "ExceedMaxConcurrency" on the first try sent a 5 KB manifest through a process
+            // spawn, measured at 55 s in app-20261112.log. Three tries with a fresh link cost
+            // ~1 s on a throttle and keep the CLI for a genuinely broken API hop.
+            const int apiAttempts = 3;
+            for (int attempt = 1; attempt <= apiAttempts; attempt++)
             {
-                return await session.DownloadBytesAsync(folderId, name, timeout.Token)
-                    .ConfigureAwait(false);
-            }
-            catch (Exception ex) when (!IsCallerCancellation(ex, cancellationToken))
-            {
-                AppLog.Warn($"云更新：接口下载 {name} 失败（耗时 {ElapsedMs(apiTicks)} ms），" +
-                            $"改用 CLI：{ex.Message}");
+                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                timeout.CancelAfter(TimeSpan.FromSeconds(ManifestTimeoutSeconds));
+                long apiTicks = Stopwatch.GetTimestamp();
+                try
+                {
+                    return await session.DownloadBytesAsync(folderId, name, timeout.Token)
+                        .ConfigureAwait(false);
+                }
+                catch (Exception ex) when (!IsCallerCancellation(ex, cancellationToken))
+                {
+                    AppLog.Warn($"云更新：接口下载 {name} 第 {attempt}/{apiAttempts} 次失败" +
+                                $"（耗时 {ElapsedMs(apiTicks)} ms）：{ex.Message}");
+                    if (attempt == apiAttempts) break;
+                    await Task.Delay(TimeSpan.FromSeconds(attempt), cancellationToken).ConfigureAwait(false);
+                }
             }
         }
 
@@ -59,31 +78,6 @@ internal static class CloudDownloader
             .ConfigureAwait(false);
         AppLog.Debug($"云更新：CLI 下载 {Path.GetFileName(remotePath)} 耗时 {ElapsedMs(cliTicks)} ms");
         return bytes;
-    }
-
-    /// <summary>Fetches one chunk by remote path through the CLI, moving it onto the target.</summary>
-    public static async Task DownloadChunkViaCliAsync(
-        string remotePath, string targetPath, string stateDirectory, CancellationToken cancellationToken)
-    {
-        string directory = Path.Combine(stateDirectory, "cli-download", Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(directory);
-        try
-        {
-            await RunCliDownloadAsync(remotePath, directory, cancellationToken).ConfigureAwait(false);
-            string? downloaded = Directory
-                .EnumerateFiles(directory, Path.GetFileName(remotePath), SearchOption.AllDirectories)
-                .FirstOrDefault();
-            if (downloaded is null)
-            {
-                throw new FileNotFoundException($"aliyunpan 没有下载出 {Path.GetFileName(remotePath)}。");
-            }
-
-            File.Move(downloaded, targetPath, overwrite: true);
-        }
-        finally
-        {
-            TryDeleteDirectory(directory);
-        }
     }
 
     private static async Task<byte[]?> DownloadBytesViaCliAsync(
@@ -107,7 +101,8 @@ internal static class CloudDownloader
         }
     }
 
-    private static async Task RunCliDownloadAsync(
+    /// <summary>Runs one CLI download and returns its combined console output for diagnostics.</summary>
+    private static async Task<string> RunCliDownloadAsync(
         string remotePath, string targetDirectory, CancellationToken cancellationToken)
     {
         string executable = AliyunpanCliRuntime.LocateExecutable()
@@ -125,29 +120,39 @@ internal static class CloudDownloader
             Path.GetDirectoryName(AliyunpanCliRuntime.ConfigPathFor(executable))
             ?? AliyunpanCliRuntime.StableConfigDirectory;
 
-        using var process = new Process { StartInfo = startInfo };
-        if (!process.Start())
-        {
-            throw new InvalidOperationException("aliyunpan 启动失败。");
-        }
-
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(TimeSpan.FromSeconds(CliTimeoutSeconds));
-        string output = await process.StandardOutput.ReadToEndAsync(timeout.Token).ConfigureAwait(false);
-        string error = await process.StandardError.ReadToEndAsync(timeout.Token).ConfigureAwait(false);
+        await s_cliGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            await process.WaitForExitAsync(timeout.Token).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-        {
-            try { process.Kill(entireProcessTree: true); } catch { /* already gone */ }
-            throw new TimeoutException($"aliyunpan 下载超时（{CliTimeoutSeconds} 秒）。");
-        }
+            using var process = new Process { StartInfo = startInfo };
+            if (!process.Start())
+            {
+                throw new InvalidOperationException("aliyunpan 启动失败。");
+            }
 
-        if (process.ExitCode != 0)
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(TimeSpan.FromSeconds(CliTimeoutSeconds));
+            string output = await process.StandardOutput.ReadToEndAsync(timeout.Token).ConfigureAwait(false);
+            string error = await process.StandardError.ReadToEndAsync(timeout.Token).ConfigureAwait(false);
+            try
+            {
+                await process.WaitForExitAsync(timeout.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                try { process.Kill(entireProcessTree: true); } catch { /* already gone */ }
+                throw new TimeoutException($"aliyunpan 下载超时（{CliTimeoutSeconds} 秒）。");
+            }
+
+            if (process.ExitCode != 0)
+            {
+                throw new IOException($"aliyunpan 下载失败：{error.Trim()} {output.Trim()}".Trim());
+            }
+
+            return $"{error.Trim()} {output.Trim()}".Trim();
+        }
+        finally
         {
-            throw new IOException($"aliyunpan 下载失败：{error.Trim()} {output.Trim()}".Trim());
+            s_cliGate.Release();
         }
     }
 

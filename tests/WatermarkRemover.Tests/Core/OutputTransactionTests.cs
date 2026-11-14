@@ -1,4 +1,4 @@
-﻿using WatermarkRemover.Core.Processing;
+﻿﻿using WatermarkRemover.Core.Processing;
 
 namespace WatermarkRemover.Tests.Core;
 

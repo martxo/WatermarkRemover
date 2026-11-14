@@ -110,6 +110,18 @@ public static class SettingsService
         }
 
         AppLog.Info($"设置文件 schema 迁移：{fromVersion} → {SettingsSchema.CurrentVersion}（{path}）");
+
+        if (fromVersion < 3)
+        {
+            // v3: 快捷尾缀默认顺序把「征信」移到最后。只重排原样的出厂默认列表 —— 用户自己
+            // 排过的顺序、加过的后缀都是他的选择，迁移绝不能悄悄覆盖。
+            string[] legacyDefault = { "征信", "执照", "身份证", "户口本", "房产证" };
+            if (settings.QuickSuffixes is { } suffixes && suffixes.SequenceEqual(legacyDefault))
+            {
+                settings.QuickSuffixes = AppSettings.DefaultQuickSuffixes.ToList();
+            }
+        }
+
         settings.SchemaVersion = SettingsSchema.CurrentVersion;
     }
 }

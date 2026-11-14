@@ -14,8 +14,14 @@ namespace WatermarkRemover.App.Updates;
 public static class CloudUpdateCoordinator
 {
     /// <summary>Returns true when the cloud channel handled the check (including "up to date").</summary>
+    /// <param name="onDownloadFailed">
+    /// Invoked when the cloud check found an update but the download died under the user (the
+    /// CDN keeps throttling a shared egress IP, 出差外地). The caller passes its GitHub/Velopack
+    /// fallback so one click still ends in an updated app instead of an error dialog.
+    /// </param>
     public static async Task<bool> TryRunAsync(
-        Window? owner, IDialogService dialogs, AppSettings settings, bool silent)
+        Window? owner, IDialogService dialogs, AppSettings settings, bool silent,
+        Func<Task>? onDownloadFailed = null)
     {
         var service = new CloudUpdateService(settings, new DpapiSecretProtector());
         if (!service.IsConfigured)
@@ -59,7 +65,7 @@ public static class CloudUpdateCoordinator
 
             case CloudCheckStatus.UpToDate:
                 AppLog.Info(check.Message);
-                if (!silent) dialogs.Info(check.Message + "\n\n（阿里云盘为默认更新通道，GitHub 安装包保留作兜底。）", "软件更新");
+                if (!silent) dialogs.Info(check.Message + "\n\n（更新镜像优先，镜像不可用时自动回退阿里云盘，GitHub 安装包保留作最终兜底。）", "软件更新");
                 return true;
 
             case CloudCheckStatus.UpdateAvailable:
@@ -80,7 +86,7 @@ public static class CloudUpdateCoordinator
 
         if (silent)
         {
-            await DownloadSilentlyAsync(service, check, version).ConfigureAwait(true);
+            await DownloadSilentlyAsync(service, check, version, onDownloadFailed).ConfigureAwait(true);
             return true;
         }
 
@@ -91,13 +97,14 @@ public static class CloudUpdateCoordinator
             "软件更新");
         if (!accepted) return true;
 
-        await DownloadWithWindowAsync(owner, dialogs, service, check, version).ConfigureAwait(true);
+        await DownloadWithWindowAsync(owner, dialogs, service, check, version, onDownloadFailed).ConfigureAwait(true);
         return true;
     }
 
     /// <summary>Startup path: quiet download, then the title-bar icon offers the restart.</summary>
     private static async Task DownloadSilentlyAsync(
-        CloudUpdateService service, CloudCheckResult check, string version)
+        CloudUpdateService service, CloudCheckResult check, string version,
+        Func<Task>? onDownloadFailed)
     {
         var notifier = UpdateReadyNotifier.Current;
         notifier.BeginDownloading(version);
@@ -121,14 +128,32 @@ public static class CloudUpdateCoordinator
         catch (Exception ex)
         {
             AppLog.Error($"云更新 v{version} 后台下载失败", ex);
-            notifier.PublishFailed(version, ex.Message);
+            if (onDownloadFailed is null)
+            {
+                notifier.PublishFailed(version, ex.Message);
+                return;
+            }
+
+            // The cloud channel died on a network it cannot fix (shared-IP throttle). Switch
+            // to GitHub inside the same session: the notifier is re-armed by that channel's
+            // own BeginDownloading, so the user still ends up with a restart prompt.
+            AppLog.Info("云盘下载失败，自动改走 GitHub 兜底通道");
+            try
+            {
+                await onDownloadFailed().ConfigureAwait(true);
+            }
+            catch (Exception fallbackEx)
+            {
+                AppLog.Error("GitHub 兜底通道下载失败", fallbackEx);
+                notifier.PublishFailed(version, fallbackEx.Message);
+            }
         }
     }
 
     /// <summary>Manual path: visible progress window, then replace files and restart.</summary>
     private static async Task DownloadWithWindowAsync(
         Window? owner, IDialogService dialogs, CloudUpdateService service,
-        CloudCheckResult check, string version)
+        CloudCheckResult check, string version, Func<Task>? onDownloadFailed)
     {
         var progressWindow = new UpdateProgressWindow();
         if (owner is not null) progressWindow.Owner = owner;
@@ -161,6 +186,29 @@ public static class CloudUpdateCoordinator
         {
             AppLog.Error($"云更新 v{version} 失败", ex);
             if (progressWindow.IsLoaded) progressWindow.Close();
+
+            if (onDownloadFailed is not null)
+            {
+                // Same one-click promise: the cloud channel lost the network, GitHub takes
+                // over with its own progress window instead of a dead-end error dialog.
+                AppLog.Info("云盘下载失败，自动改走 GitHub 兜底通道");
+                try
+                {
+                    await onDownloadFailed().ConfigureAwait(true);
+                    return;
+                }
+                catch (Exception fallbackEx)
+                {
+                    AppLog.Error("GitHub 兜底通道下载失败", fallbackEx);
+                    dialogs.Warn(
+                        $"云更新失败，GitHub 兜底通道也未成功，当前版本不受影响。\n\n" +
+                        $"云盘原因：{ex.Message}\n兜底原因：{fallbackEx.Message}\n\n" +
+                        "可稍后重试，或换一个网络环境再试。",
+                        "软件更新");
+                    return;
+                }
+            }
+
             dialogs.Warn(
                 $"云更新失败，当前版本不受影响。\n\n原因：{ex.Message}\n\n" +
                 "可稍后重试，或到「软件更新」使用 GitHub 安装包兜底。",

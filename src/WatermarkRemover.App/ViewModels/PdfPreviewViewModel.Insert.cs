@@ -1,4 +1,4 @@
-﻿using System.IO;
+﻿﻿using System.IO;
 using WatermarkRemover.App.Logging;
 using WatermarkRemover.Core.Logging;
 using WatermarkRemover.Pdf;

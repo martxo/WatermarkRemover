@@ -46,6 +46,13 @@ public sealed record RecognitionReport
     public string? SuggestedStem { get; init; }
 
     public IReadOnlyList<ReviewIssue> Issues { get; init; } = Array.Empty<ReviewIssue>();
+
+    /// <summary>
+    /// 本次识别在日志里的关联号（AppLog 操作号，六位）。用户按某条记录反馈问题时，
+    /// 后端按这个号切出该次操作的全部日志行，精确定位是哪一次操作出的问题。
+    /// 旧版本记录没有此字段，为空表示无法关联到日志。
+    /// </summary>
+    public string OperationId { get; init; } = "";
 }
 
 /// <summary>One recognised page; region/line coordinates are normalized 0..1 (origin top-left).</summary>

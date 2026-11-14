@@ -23,6 +23,9 @@ public static class AppFolders
     /// <summary>Recognition report JSONL files (kept far longer than logs — training corpus).</summary>
     public static string ReportDirectory => Path.Combine(Root, "reports");
 
+    /// <summary>随手反馈的本地暂存目录：上传成功前反馈一直留在本机，断网也不丢。</summary>
+    public static string FeedbackDirectory => Path.Combine(Root, "feedback");
+
     private static string DefaultFallbackDirectory => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "WatermarkRemover");

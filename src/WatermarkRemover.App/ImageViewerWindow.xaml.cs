@@ -1,7 +1,6 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.IO;
-using System.Threading;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media;
@@ -639,24 +638,19 @@ public partial class ImageViewerWindow : Window
         if (TrySetClipboard(_image)) ShowToast("已复制到剪贴板");
     }
 
-    /// <summary>剪贴板偶发被其他进程占用，重试几次；全部失败返回 false。</summary>
+    /// <summary>剪贴板偶发被其他进程占用：AppClipboard 带退避重试，彻底失败返回 false。</summary>
     private static bool TrySetClipboard(BitmapSource image)
     {
-        for (int attempt = 0; attempt < 3; attempt++)
+        try
         {
-            try
-            {
-                Clipboard.SetImage(image);
-                return true;
-            }
-            catch (Exception ex)
-            {
-                if (attempt == 2) AppLog.Warn($"看图复制失败：{ex.Message}");
-                Thread.Sleep(40);
-            }
+            AppClipboard.SetImage(image);
+            return true;
         }
-
-        return false;
+        catch (Exception ex)
+        {
+            AppLog.Warn($"看图复制失败：{ex.Message}");
+            return false;
+        }
     }
 
     /// <summary>Bottom-centre toast. The timer is kept on the window so a second message replaces

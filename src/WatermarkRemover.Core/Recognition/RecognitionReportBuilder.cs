@@ -18,15 +18,16 @@ public static class RecognitionReportBuilder
     /// <summary>Coordinate precision written into reports (JSONL size guard).</summary>
     private const int Precision = 4;
 
-    public static RecognitionReport Build(RecognitionRunScope scope, DateTimeOffset? timestamp = null)
+    public static RecognitionReport Build(RecognitionRunScope scope, DateTimeOffset? timestamp = null,
+        string? operationId = null)
     {
         ArgumentNullException.ThrowIfNull(scope);
-        return Build(scope.InputPath, scope.FeatureName, scope.Pages, timestamp);
+        return Build(scope.InputPath, scope.FeatureName, scope.Pages, timestamp, operationId: operationId);
     }
 
     public static RecognitionReport Build(string inputPath, string featureName,
         IReadOnlyList<RecordedPage> pages, DateTimeOffset? timestamp = null,
-        IRecognitionReportReviewer? reviewer = null)
+        IRecognitionReportReviewer? reviewer = null, string? operationId = null)
     {
         ArgumentNullException.ThrowIfNull(pages);
 
@@ -68,6 +69,8 @@ public static class RecognitionReportBuilder
             SuggestedStem = personName is null
                 ? null
                 : AutoNameResult.BuildStem(personName, profile!.TypeShortName),
+            // 反馈入口按操作号把报告和日志切片绑在一起（见 FeedbackService）。
+            OperationId = operationId ?? "",
         };
 
         return report with { Issues = (reviewer ?? DefaultReviewer).Review(report) };

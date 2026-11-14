@@ -174,6 +174,18 @@ public sealed class WeChatOcrEngine : IOcrEngine, IBoundedOcrEngine
                 bool ok = await Task.Run(() => wechat_ocr(_ocrExePath, _wechatDir, imageFileName, _callback))
                     .ConfigureAwait(false);
 
+                if (!ok)
+                {
+                    // The worker can wedge (failed spawn / crashed mid-call) and then EVERY later
+                    // call returns false until the app restarts — scans silently lost auto-naming
+                    // for whole sessions. stop_ocr tears the shim's worker down so this retry
+                    // spawns a fresh one.
+                    stop_ocr();
+                    Volatile.Write(ref _resultJson, null);
+                    ok = await Task.Run(() => wechat_ocr(_ocrExePath, _wechatDir, imageFileName, _callback))
+                        .ConfigureAwait(false);
+                }
+
                 string? json = Volatile.Read(ref _resultJson);
                 if (!ok)
                     throw new InvalidOperationException("微信 OCR 引擎调用失败（引擎文件可能不完整或版本不匹配）。");

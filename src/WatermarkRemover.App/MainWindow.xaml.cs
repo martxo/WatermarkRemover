@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.IO;
 using System.Windows;
 using System.ComponentModel;
@@ -59,7 +60,9 @@ public partial class MainWindow : Window
 
     public MainWindow()
     {
+        long ctorTicks = Stopwatch.GetTimestamp();
         InitializeComponent();
+        AppLog.Info($"主窗口构造耗时 {Stopwatch.GetElapsedTime(ctorTicks).TotalMilliseconds:0} ms（含 XAML 解析）");
         DataContext = _viewModel;
         // Tile clicks open the screen-level viewer (dark veil over the whole screen, film rail
         // on the left) — a real window, so the host wires it here, outside the view model.
@@ -128,6 +131,9 @@ public partial class MainWindow : Window
         {
             if (e.PropertyName == nameof(JobBoard.VisibleJobCount)) SyncListVisibility();
         };
+        // Startup probe: marks the moment WPF raises SourceInitialized inside base.OnSourceInitialized.
+        SourceInitialized += (_, _) =>
+            AppLog.Info($"SourceInitialized 事件：{App.BootClock.Elapsed.TotalMilliseconds:0} ms");
         Loaded += OnWindowLoaded;
     }
 
@@ -218,21 +224,41 @@ public partial class MainWindow : Window
     /// </summary>
     protected override void OnSourceInitialized(EventArgs e)
     {
+        AppLog.Info($"窗口句柄就绪：{App.BootClock.Elapsed.TotalMilliseconds:0} ms");
+        long t0 = App.BootClock.ElapsedMilliseconds;
+        var gcBefore = (GC.CollectionCount(0), GC.CollectionCount(1), GC.CollectionCount(2), GC.GetTotalPauseDuration());
         base.OnSourceInitialized(e);
+        long t1 = App.BootClock.ElapsedMilliseconds;
+        var gcAfter = (GC.CollectionCount(0), GC.CollectionCount(1), GC.CollectionCount(2), GC.GetTotalPauseDuration());
+        if (t1 - t0 > 50)
+            AppLog.Warn($"base.OnSourceInitialized 耗时 {t1 - t0} ms；GC 暂停 {gcAfter.Item4 - gcBefore.Item4} ms，" +
+                        $"代数增量 {gcAfter.Item1 - gcBefore.Item1}/{gcAfter.Item2 - gcBefore.Item2}/{gcAfter.Item3 - gcBefore.Item3}");
 
         IntPtr hwnd = new System.Windows.Interop.WindowInteropHelper(this).Handle;
         int preference = DwmwcpRound;
         _ = DwmSetWindowAttribute(hwnd, DwmwaWindowCornerPreference, ref preference, sizeof(int));
+        long t2 = App.BootClock.ElapsedMilliseconds;
 
         // The message loop exists now, so WM_HOTKEY has somewhere to land. Three ids: region
         // capture, full-screen capture and the shelf, each independently configurable.
         _hotkeys = new GlobalHotkeyService(hwnd, 0x5348, OnScreenshotHotkey);
         _fullScreenHotkeys = new GlobalHotkeyService(hwnd, 0x534B, OnFullScreenHotkey);
         _shelfHotkeys = new GlobalHotkeyService(hwnd, 0x534A, OnShelfHotkey);
+        long t3 = App.BootClock.ElapsedMilliseconds;
         RegisterScreenshotHotkeys();
+        long t4 = App.BootClock.ElapsedMilliseconds;
 
         _tray = new TrayIconService(hwnd, ShowFromTray, () => _ = _viewModel.CaptureScreenshotAsync(),
             ToggleScreenshotShelf, ExitFromTray);
+        long t5 = App.BootClock.ElapsedMilliseconds;
+        AppLog.Info($"启动分段：base={t1 - t0} dwm={t2 - t1} 热键服务={t3 - t2} 手势注册={t4 - t3} 托盘={t5 - t4}（ms）");
+    }
+
+    /// <summary>First frame on screen — the moment the user actually sees the app.</summary>
+    protected override void OnContentRendered(EventArgs e)
+    {
+        base.OnContentRendered(e);
+        AppLog.Info($"首帧渲染完成：{App.BootClock.Elapsed.TotalMilliseconds:0} ms（用户可见）");
     }
 
     /// <summary>Restores the main window after it was hidden to the tray.</summary>
@@ -634,6 +660,17 @@ public partial class MainWindow : Window
     {
         UserMenuPopup.IsOpen = false;
         Close();
+    }
+
+    /// <summary>标题栏「反馈」：全局入口，不关联具体操作，只附最近日志尾部。
+    /// 从某条识别记录进来的入口在设置页「识别报告」每一行（带操作号，日志按号切片）。</summary>
+    private void OnFeedbackClick(object sender, RoutedEventArgs e)
+    {
+        var window = new FeedbackWindow(_viewModel.Settings, new DpapiSecretProtector(), null, null)
+        {
+            Owner = this,
+        };
+        window.ShowDialog();
     }
 
     // Self-drawn caption buttons — with GlassFrameThickness=0 the system ones no longer exist.

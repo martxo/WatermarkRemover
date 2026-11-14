@@ -46,6 +46,17 @@ public sealed class TransferPanelViewModel : ObservableObject, IDisposable
     private bool _isComposing;
     private int _localRowId;
     private string? _lastLinkPdf;
+    private IReadOnlyList<string> _addressCandidates = Array.Empty<string>();
+    private int _addressIndex;
+
+    /// <summary>True when the machine has more than one usable LAN address: the QR shows the
+    /// first one, and the fallback button cycles the rest (phone can't open the page → the QR
+    /// very likely advertised an address its Wi-Fi can't reach).</summary>
+    public bool HasAlternateAddresses => _addressCandidates.Count > 1;
+
+    /// <summary>Cycles the advertised LAN address and regenerates the QR (same port and token —
+    /// the listener accepts every local address, only the encoded host changes).</summary>
+    public RelayCommand NextQrAddressCommand { get; private set; } = new(() => { });
 
     public TransferPanelViewModel(
         AppSettings settings,
@@ -70,6 +81,7 @@ public sealed class TransferPanelViewModel : ObservableObject, IDisposable
             SendText, () => IsRunning && DraftText.Trim().Length > 0);
         SendFileCommand = new RelayCommand(
             () => SendFileRequested?.Invoke(this, EventArgs.Empty), () => IsRunning);
+        NextQrAddressCommand = new RelayCommand(NextQrAddress, () => IsRunning && HasAlternateAddresses);
         Chat.CollectionChanged += (_, _) => OnPropertyChanged(nameof(HasChat));
 
         ComposeCommand = new RelayCommand(
@@ -290,15 +302,40 @@ public sealed class TransferPanelViewModel : ObservableObject, IDisposable
         }
 
         SaveDirectoryText = directory;
+        // 候选地址排序与 BestIPv4 一致；多网卡（虚拟机/VPN/有线+无线并存）时第一个地址可能
+        // 不是手机可达的那个——把候选全部记住，UI 提供「换个地址」兜底。
+        _addressCandidates = LanAddresses.Candidates();
+        _addressIndex = 0; // server.Url 用的就是 BestIPv4 = 候选第 0 个
+        if (_addressCandidates.Count > 1)
+            _trace("手机传文件：候选地址 " + string.Join("、", _addressCandidates) +
+                   "（手机扫不出来时可换下一个）");
         UrlText = _server.Url;
         QrImage = BuildQr(_server.Url);
+        OnPropertyChanged(nameof(HasAlternateAddresses));
         _receivedCount = 0;
         _receivedBytes = 0;
         Chat.Clear();
         IsConnected = false;
         IsRunning = true;
-        StatusText = "等待手机扫码…（首次使用时若弹出防火墙提示，请选择「允许访问」）";
+        StatusText = _addressCandidates.Count > 1
+            ? $"等待手机扫码…（扫不出来请点「换个地址」，共 {_addressCandidates.Count} 个候选）"
+            : "等待手机扫码…（首次使用时若弹出防火墙提示，请选择「允许访问」）";
         AppLog.Info($"手机传文件：接收服务已启动 {_server.Url}");
+    }
+
+    /// <summary>Swaps the QR to the next candidate LAN address. The token and port stay the same,
+    /// so an already-open phone page keeps working while the user retries the other address.</summary>
+    private void NextQrAddress()
+    {
+        if (_server is not { } server || _addressCandidates.Count < 2) return;
+
+        _addressIndex = (_addressIndex + 1) % _addressCandidates.Count;
+        string url = server.ComposeUrlForHost(_addressCandidates[_addressIndex]);
+        UrlText = url;
+        QrImage = BuildQr(url);
+        StatusText = $"已切换地址 {_addressIndex + 1}/{_addressCandidates.Count}：" +
+                     $"{_addressCandidates[_addressIndex]}，请重新扫码";
+        AppLog.Info($"手机传文件：二维码切换到候选地址 {url}");
     }
 
     public void Stop()
@@ -317,6 +354,9 @@ public sealed class TransferPanelViewModel : ObservableObject, IDisposable
 
         QrImage = null;
         UrlText = string.Empty;
+        _addressCandidates = Array.Empty<string>();
+        _addressIndex = 0;
+        OnPropertyChanged(nameof(HasAlternateAddresses));
         IsConnected = false;
         Chat.Clear();
         IsRunning = false;
@@ -385,29 +425,23 @@ public sealed class TransferPanelViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>
-    /// Copies the received text with a couple of retries: another app can hold the clipboard for
-    /// a few dozen milliseconds (CLIPBRD_E_CANT_OPEN) exactly while a phone message arrives.
-    /// Only a final failure is reported; the waits total ~120 ms and only when copying fails.
+    /// Copies the received text through <see cref="AppClipboard"/> (another app can hold the
+    /// clipboard for a few hundred milliseconds — CLIPBRD_E_CANT_OPEN — exactly while a phone
+    /// message arrives). Only a final failure is reported to the caller.
     /// </summary>
     private static bool TryCopyToClipboard(string text, out Exception? error)
     {
         error = null;
-        for (int attempt = 0; attempt < 3; attempt++)
+        try
         {
-            try
-            {
-                Clipboard.SetText(text);
-                return true;
-            }
-            catch (Exception ex)
-            {
-                error = ex;
-                if (attempt == 2) break;
-                Thread.Sleep(60);
-            }
+            AppClipboard.SetText(text);
+            return true;
         }
-
-        return false;
+        catch (Exception ex)
+        {
+            error = ex;
+            return false;
+        }
     }
 
     /// <summary>Background chain for a recognized CamScanner share link: resolve the short link →
@@ -916,7 +950,7 @@ public sealed class ReceivedMessageViewModel
         Preview = BuildPreview(message.Text);
         CopyCommand = new RelayCommand(() =>
         {
-            try { Clipboard.SetText(FullText); }
+            try { AppClipboard.SetText(FullText); }
             catch (Exception ex) { AppLog.Error("手机传文件：复制文本失败", ex); }
         });
     }

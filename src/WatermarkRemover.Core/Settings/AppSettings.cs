@@ -21,7 +21,8 @@ public enum OutputMode
 public static class SettingsSchema
 {
     /// <summary>1 = the unversioned files shipped before this field existed.</summary>
-    public const int CurrentVersion = 2;
+    /// <remarks>3 = 快捷尾缀默认顺序把「征信」移到最后（只迁移原样的默认列表）。</remarks>
+    public const int CurrentVersion = 3;
 }
 
 /// <summary>User preferences, persisted as JSON alongside the application.</summary>
@@ -48,10 +49,24 @@ public sealed class AppSettings
     public bool CheckUpdatesOnStartup { get; set; } = true;
 
     /// <summary>
-    /// Quick suffix chips shown next to each processed file. Clicking one appends the suffix to
-    /// the file name (clicking again removes it). Managed in the settings window.
+    /// HTTP mirror of the cloud update repository (腾讯云广州服务器), tried BEFORE 阿里云盘 for
+    /// every manifest and chunk: direct domestic connection, no CDN throttle, no signed-URL hop.
+    /// Empty string disables the mirror. A failed fetch (timeout/5xx) falls back to 阿里云盘
+    /// transparently, and two consecutive failures trip a per-process circuit breaker so an
+    /// unreachable mirror never adds its connect timeout to every chunk.
     /// </summary>
-    public List<string> QuickSuffixes { get; set; } = new() { "征信", "执照", "身份证", "户口本", "房产证" };
+    public string UpdateMirrorUrl { get; set; } = "http://106.52.57.36/wm-update-feed/";
+
+    /// <summary>
+    /// Quick suffix chips shown next to each processed file. Clicking one appends the suffix to
+    /// the file name (clicking again removes it). Managed in the settings window. 征信 sits last:
+    /// it is the rarer document type, so it belongs behind the chevron instead of first.
+    /// </summary>
+    public List<string> QuickSuffixes { get; set; } = new(DefaultQuickSuffixes);
+
+    /// <summary>Factory default order of <see cref="QuickSuffixes"/> (see the schema migration).</summary>
+    public static readonly IReadOnlyList<string> DefaultQuickSuffixes =
+        new[] { "执照", "身份证", "户口本", "房产证", "征信" };
 
     /// <summary>
     /// Name watermark-removal outputs after the document's content (e.g. 林孝明执照.pdf) when

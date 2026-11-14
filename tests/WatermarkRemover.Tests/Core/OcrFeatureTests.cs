@@ -1,4 +1,4 @@
-﻿using System.Text;
+﻿﻿using System.Text;
 using WatermarkRemover.App.Presentation;
 using WatermarkRemover.Core.Features;
 using WatermarkRemover.Core.Features.Ocr;

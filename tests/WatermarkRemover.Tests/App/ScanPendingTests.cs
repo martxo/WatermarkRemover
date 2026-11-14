@@ -1,4 +1,4 @@
-﻿using WatermarkRemover.App.Services;
+﻿﻿using WatermarkRemover.App.Services;
 using WatermarkRemover.App.ViewModels;
 
 namespace WatermarkRemover.Tests.App;

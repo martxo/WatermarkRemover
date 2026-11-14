@@ -84,7 +84,7 @@ public class OutputNameEditorTests
     public void Default_quick_suffixes_are_present()
     {
         var settings = new AppSettings();
-        Assert.Equal(new[] { "征信", "执照", "身份证", "户口本", "房产证" }, settings.QuickSuffixes);
+        Assert.Equal(new[] { "执照", "身份证", "户口本", "房产证", "征信" }, settings.QuickSuffixes);
     }
 
     // ---------- FindAvailablePath ----------

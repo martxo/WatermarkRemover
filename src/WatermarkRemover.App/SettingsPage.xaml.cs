@@ -2,10 +2,12 @@ using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Threading;
 using Microsoft.Win32;
 using WatermarkRemover.App.Updates;
 using WatermarkRemover.App.ViewModels;
 using WatermarkRemover.Core.Features.Screenshot;
+using WatermarkRemover.Core.Settings;
 
 namespace WatermarkRemover.App;
 
@@ -31,12 +33,14 @@ public partial class SettingsPage : UserControl
         {
             old.ExportRequested -= OnExportRequested;
             old.ImportLoginPackRequested -= OnImportLoginPackRequested;
+            old.FeedbackRequested -= OnFeedbackRequested;
         }
 
         if (e.NewValue is SettingsViewModel fresh)
         {
             fresh.ExportRequested += OnExportRequested;
             fresh.ImportLoginPackRequested += OnImportLoginPackRequested;
+            fresh.FeedbackRequested += OnFeedbackRequested;
             SyncScanColorRadios(fresh);
         }
     }
@@ -66,6 +70,32 @@ public partial class SettingsPage : UserControl
     }
 
     private void OnBackClick(object sender, RoutedEventArgs e) => Main?.SaveAndExitSettings();
+
+    /// <summary>侧栏「反馈」：页面级入口，不关联具体操作，只附最近日志尾部。</summary>
+    private void OnFeedbackClick(object sender, RoutedEventArgs e)
+    {
+        if (Window.GetWindow(this) is not { } window) return;
+        var dialog = new FeedbackWindow(
+            ViewModel?.Settings ?? Main?.Settings ?? new AppSettings(),
+            new Services.DpapiSecretProtector(), null, null)
+        {
+            Owner = window,
+        };
+        dialog.ShowDialog();
+    }
+
+    /// <summary>按某条识别记录反馈：带上该次操作号，日志切片按号切，精确定位问题。</summary>
+    private void OnFeedbackRequested(object? sender, FeedbackRequestEventArgs e)
+    {
+        if (Window.GetWindow(this) is not { } window) return;
+        var dialog = new FeedbackWindow(
+            ViewModel?.Settings ?? Main?.Settings ?? new AppSettings(),
+            new Services.DpapiSecretProtector(), e.OperationId, e.ContextText)
+        {
+            Owner = window,
+        };
+        dialog.ShowDialog();
+    }
 
     private void OnDiscardClick(object sender, RoutedEventArgs e) => Main?.DiscardAndExitSettings();
 
@@ -303,6 +333,10 @@ public partial class SettingsPage : UserControl
 
         CheckUpdateButton.IsEnabled = false;
         CheckUpdateButton.Content = "检查中…";
+        // Let the dispatcher paint the new label before the check runs. The cloud check does
+        // synchronous work before its first await (account decrypt, folder lookup), and without
+        // this yield the button stayed on 「检查更新」 for those seconds — the "点击了没反应" report.
+        await Dispatcher.Yield(DispatcherPriority.Background);
         try
         {
             await UpdateCoordinator.RunCheckAsync(window, vm.Settings, silent: false);

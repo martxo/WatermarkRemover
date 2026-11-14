@@ -16,6 +16,9 @@ testrun.*.log
 # Local tools (portable git/gh)
 .tools/
 
+# 腾讯云更新镜像的本地种子目录（437MB 分块+清单，只用于 SFTP 推送，不入库）
+/_tencent-mirror/
+
 # User documents and local data — never push these.
 # NOTE: "/*.pdf" only matches PDF files at the repo root; a bare "*.pdf" would
 # also ignore the src/WatermarkRemover.Pdf project folder (case-insensitive on

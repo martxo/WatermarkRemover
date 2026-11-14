@@ -1,4 +1,4 @@
-﻿using System.Text;
+﻿﻿using System.Text;
 using WatermarkRemover.Core.Netdisk;
 
 namespace WatermarkRemover.Netdisk;
@@ -19,7 +19,7 @@ public sealed class AliyunDriveProvider : INetdiskProvider, INetdiskOAuthFlow
     private readonly Func<DateTimeOffset>? _clock;
 
     public AliyunDriveProvider()
-        : this(new HttpClient())
+        : this(WatermarkRemover.Netdisk.Net.AlipanHttpClient.Create())
     {
     }
 

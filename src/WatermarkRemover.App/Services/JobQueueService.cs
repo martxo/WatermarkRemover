@@ -125,7 +125,8 @@ public sealed class JobQueueService
         {
             if (scope.Pages.Count == 0) return;
 
-            RecognitionReport report = RecognitionReportBuilder.Build(scope);
+            // 带上操作号：用户之后按这条记录反馈时，能切出本次操作的全部日志行。
+            RecognitionReport report = RecognitionReportBuilder.Build(scope, operationId: AppLog.CurrentOperationId);
             string path = _store.Append(report);
 
             string classification = report.Classification is { } c

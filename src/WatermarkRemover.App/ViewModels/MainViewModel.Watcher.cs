@@ -99,6 +99,9 @@ public sealed partial class MainViewModel
             if (input || output)
             {
                 job.ApplyExternalRename(newPath, renameInput: input, renameOutput: output);
+                // 打开着的预览会话同样要跟上：磁盘改名了，会话还指着旧路径，下一次渲染就
+                // 全部失败（大图窗口与预览条共用会话，一起卡死）。
+                if (output) job.Strip?.RelocateTo(newPath);
                 updated++;
                 continue;
             }

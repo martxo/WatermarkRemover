@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.IO;
 using System.Security.Cryptography;
 using System.Text;
@@ -99,11 +99,15 @@ public sealed class CloudUpdateService
     private readonly AppSettings _settings;
     private readonly ISecretProtector _protector;
     private readonly NetdiskAccountState? _account;
+    private readonly MirrorUpdateSource? _mirror;
 
     public CloudUpdateService(AppSettings settings, ISecretProtector protector)
     {
         _settings = settings;
         _protector = protector;
+        // The HTTP mirror is tried before every netdisk read; a failed fetch falls back
+        // transparently, and the breaker inside it short-circuits an unreachable mirror.
+        _mirror = MirrorUpdateSource.TryCreate(settings.UpdateMirrorUrl);
         // A login pack dropped beside the app or into the stable data folder is imported before
         // the account is resolved, so a fresh machine starts already logged in.
         AliyunpanCliRuntime.EnsureStableConfig();
@@ -500,40 +504,55 @@ public sealed class CloudUpdateService
         string staging = Path.Combine(CloudUpdatePaths.Staging, $"{check.Manifest.Version}-{Guid.NewGuid():N}");
         Directory.CreateDirectory(staging);
 
-        // Remote chunk ids are only listed when something actually has to be fetched. A listing
-        // failure is not fatal: every chunk can still be fetched by path through the CLI.
+        // The manifest stores chunk hashes, not drive file ids, so the ids come from ONE folder
+        // listing. That request used to be single-shot: when it was throttled or timed out the
+        // map stayed empty and EVERY chunk dropped into the bundled CLI, which is what turned a
+        // 10 MB update into minutes (one process, 40-75 s, per chunk). It is now retried, and a
+        // chunk that is still absent afterwards is a broken cloud copy, not a slow download.
         Dictionary<string, string> remote = new(StringComparer.Ordinal);
         if (plan.RequiredChunks.Count > 0 && !string.IsNullOrEmpty(bundle.ChunksFolderId))
         {
-            progress?.Report(new CloudUpdateProgress(CloudUpdateStage.Downloading, 0, 0, plan.DownloadBytes,
-                $"正在读取云端分块列表（缺少 {plan.RequiredChunks.Count} 个）…"));
-            long listTicks = Stopwatch.GetTimestamp();
-            try
+            remote = await ReadChunkIdsAsync(bundle.Session, bundle.ChunksFolderId,
+                plan.RequiredChunks.Count, plan.DownloadBytes, progress, cancellationToken).ConfigureAwait(false);
+
+            List<CloudChunkRef> missing = plan.RequiredChunks
+                .Where(chunk => !remote.ContainsKey(chunk.Sha256)).ToList();
+            if (missing.Count > 0)
             {
-                foreach (NetdiskFile item in await bundle.Session.ListAllAsync(bundle.ChunksFolderId, cancellationToken)
-                             .ConfigureAwait(false))
+                // A publish that finished while this check was running can leave the listing one
+                // write behind. One fresh read decides; a second miss is a real gap.
+                AppLog.Warn($"云更新：分块列表缺少 {missing.Count} 个分块，重新读取一次列表");
+                remote = await ReadChunkIdsAsync(bundle.Session, bundle.ChunksFolderId,
+                    plan.RequiredChunks.Count, plan.DownloadBytes, progress, cancellationToken).ConfigureAwait(false);
+
+                missing = plan.RequiredChunks
+                    .Where(chunk => !remote.ContainsKey(chunk.Sha256)).ToList();
+                if (missing.Count > 0)
                 {
-                    if (!item.IsFolder && item.Name.Length == 64)
-                    {
-                        remote[item.Name.ToLowerInvariant()] = item.Id;
-                    }
+                    throw new InvalidDataException(
+                        $"云端缺少 {missing.Count} 个更新分块（例如 {missing[0].Sha256[..12]}…），" +
+                        "本次更新已放弃，请稍后重新检查更新。");
                 }
-            }
-            catch (Exception ex) when (!IsCallerCancellation(ex, cancellationToken))
-            {
-                AppLog.Warn($"云更新：读取分块列表失败（耗时 {ElapsedMs(listTicks)} ms），" +
-                            $"改用 CLI 逐个下载：{ex.Message}");
             }
         }
 
         long totalBytes = plan.DownloadBytes;
-        // Chunks are independent (own cache path, own verification): the strict serial loop was
-        // what made cloud downloads crawl — one stalled chunk held every other back. 3-way
-        // parallelism is the conservative, CDN-friendly degree.
+        // Two at a time, not three: the CDN answers extra concurrent transfers on one account
+        // with a 403 "ExceedMaxConcurrency" (app-20261112.log 17:48). Such a refusal is
+        // transient, so it is retried with a freshly signed link — never handed to the CLI,
+        // whose per-process startup (40-75 s) was the real cost of every update.
+        const int ApiDownloadAttempts = 4;
+
+        /// <summary>
+        /// Attempts spent on a CDN concurrency rejection before giving the channel up. The
+        /// quota belongs to the egress IP, not to us, so a third try cannot succeed where two
+        /// just failed — the GitHub fallback is the real answer (CloudUpdateCoordinator).
+        /// </summary>
+        const int ThrottleDownloadAttempts = 2;
         long[] downloaded = new long[1];
         await Parallel.ForEachAsync(
             plan.RequiredChunks,
-            new ParallelOptions { MaxDegreeOfParallelism = 3, CancellationToken = cancellationToken },
+            new ParallelOptions { MaxDegreeOfParallelism = 2, CancellationToken = cancellationToken },
             async (chunk, token) =>
         {
             string cachePath = Path.Combine(ChunkCacheDirectory, chunk.Sha256);
@@ -544,45 +563,53 @@ public sealed class CloudUpdateService
             }
 
             string temp = cachePath + ".part";
-            bool fetched = false;
-            if (remote.TryGetValue(chunk.Sha256, out string? fileId))
+            for (int attempt = 1; ; attempt++)
             {
                 long apiTicks = Stopwatch.GetTimestamp();
                 try
                 {
+                    // 镜像优先（files/<sha256>，与云盘同布局）：直连无 CDN 限流。镜像失败时
+                    // TryDownloadToFileAsync 已把 .part 清掉，这里直接走云盘通道。
+                    if (_mirror is not null &&
+                        await _mirror.TryDownloadToFileAsync($"files/{chunk.Sha256}", temp, token).ConfigureAwait(false))
+                    {
+                        break;
+                    }
+
                     // No extra total deadline here: DownloadAsync already bounds the link lookup
-                    // (90 s) and treats 30 s without bytes as stalled. A 45 s cap on the whole
-                    // chunk killed slow-but-alive links and pushed every chunk through the CLI.
-                    await bundle.Session.DownloadAsync(fileId, temp, null, token).ConfigureAwait(false);
-                    fetched = true;
-                }
-                catch (Exception ex) when (!IsCallerCancellation(ex, token))
-                {
-                    // The elapsed time is what separates "CDN stalled" from "endpoint rejected".
-                    AppLog.Warn($"云更新：接口下载分块 {chunk.Sha256[..12]}… 失败" +
-                                $"（耗时 {ElapsedMs(apiTicks)} ms），改用 CLI：{ex.Message}");
-                    try { File.Delete(temp); } catch { /* best effort */ }
-                }
-            }
-
-            if (!fetched)
-            {
-                long cliTicks = Stopwatch.GetTimestamp();
-                try
-                {
-                    await CloudDownloader.DownloadChunkViaCliAsync(
-                        $"/{CloudUpdateFormat.RootFolder}/{CloudUpdateFormat.ChunksFolder}/{chunk.Sha256}",
-                        temp, StateDirectory, token).ConfigureAwait(false);
+                    // (90 s) and treats 30 s without bytes as stalled.
+                    await bundle.Session.DownloadAsync(remote[chunk.Sha256], temp, null, token).ConfigureAwait(false);
+                    break;
                 }
                 catch (Exception ex) when (!IsCallerCancellation(ex, token))
                 {
                     try { File.Delete(temp); } catch { /* best effort */ }
-                    throw new InvalidDataException(
-                        $"下载分块 {chunk.Sha256[..12]}… 失败（CLI 耗时 {ElapsedMs(cliTicks)} ms）：{ex.Message}", ex);
-                }
 
-                AppLog.Debug($"云更新：CLI 下载分块 {chunk.Sha256[..12]}… 耗时 {ElapsedMs(cliTicks)} ms");
+                    // A CDN concurrency rejection is a quota problem, not a transient fault:
+                    // on a shared egress IP (hotel/office NAT, 出差外地) the quota is consumed by
+                    // other Aliyun users, so EVERY retry bounces back in ~200 ms no matter how
+                    // long we wait. Two quick tries prove it is persistent, then fail so the
+                    // caller can switch to the GitHub channel instead of parking the user here.
+                    bool throttled = IsConcurrencyThrottle(ex);
+                    int maxAttempts = throttled ? ThrottleDownloadAttempts : ApiDownloadAttempts;
+                    if (attempt >= maxAttempts)
+                    {
+                        throw new InvalidDataException(
+                            throttled
+                                ? $"下载分块 {chunk.Sha256[..12]}… 被阿里云盘 CDN 持续限流" +
+                                  $"（HTTP 403 ExceedMaxConcurrency，重试 {maxAttempts} 次均被拒）：" +
+                                  "当前网络出口的并发配额已被占满，换网络或稍后再试。"
+                                : $"下载分块 {chunk.Sha256[..12]}… 失败（已重试 {ApiDownloadAttempts} 次，" +
+                                  $"最后一次耗时 {ElapsedMs(apiTicks)} ms）：{ex.Message}", ex);
+                    }
+
+                    long delayMs = throttled ? 2000L * attempt : 500L << (attempt - 1);
+                    AppLog.Warn($"云更新：下载分块 {chunk.Sha256[..12]}… 第 {attempt} 次失败" +
+                                $"（耗时 {ElapsedMs(apiTicks)} ms），{delayMs} ms 后重试：{ex.Message}");
+                    await Task.Delay(TimeSpan.FromMilliseconds(delayMs), token).ConfigureAwait(false);
+                }
             }
+
             if (new FileInfo(temp).Length != chunk.Size ||
                 !string.Equals(CloudHash.Sha256HexFile(temp), chunk.Sha256, StringComparison.Ordinal))
             {
@@ -637,6 +664,67 @@ public sealed class CloudUpdateService
 
     // ── cloud downloads: API first, bundled aliyunpan CLI as fallback ─────────
 
+    /// <summary>
+    /// Reads the chunks folder once, retrying the whole listing: it is a single request and is
+    /// exactly as throttle-prone as any other (the first 403 "ExceedMaxConcurrency" arrives on
+    /// whichever call is in flight). Handing a failed listing to per-chunk fallbacks is what
+    /// made every chunk pay a CLI process startup.
+    /// </summary>
+    private static async Task<Dictionary<string, string>> ReadChunkIdsAsync(
+        INetdiskSession session,
+        string folderId,
+        int required,
+        long totalBytes,
+        IProgress<CloudUpdateProgress>? progress,
+        CancellationToken cancellationToken)
+    {
+        const int attempts = 4;
+        Exception? last = null;
+        for (int attempt = 1; attempt <= attempts; attempt++)
+        {
+            progress?.Report(new CloudUpdateProgress(CloudUpdateStage.Downloading, 0, 0, totalBytes,
+                $"正在读取云端分块列表（缺少 {required} 个）…"));
+            long ticks = Stopwatch.GetTimestamp();
+            try
+            {
+                var map = new Dictionary<string, string>(StringComparer.Ordinal);
+                foreach (NetdiskFile item in await session.ListAllAsync(folderId, cancellationToken)
+                             .ConfigureAwait(false))
+                {
+                    if (!item.IsFolder && item.Name.Length == 64)
+                    {
+                        map[item.Name.ToLowerInvariant()] = item.Id;
+                    }
+                }
+
+                if (map.Count > 0) return map;
+                last = new InvalidDataException("云端分块目录为空。");
+            }
+            catch (Exception ex) when (!IsCallerCancellation(ex, cancellationToken))
+            {
+                last = ex;
+            }
+
+            AppLog.Warn($"云更新：读取分块列表第 {attempt}/{attempts} 次失败" +
+                        $"（耗时 {ElapsedMs(ticks)} ms）：{last?.Message}");
+            if (attempt < attempts)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(attempt), cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        throw new InvalidDataException($"读取云端分块列表失败：{last?.Message}", last);
+    }
+
+    /// <summary>
+    /// True for the CDN's concurrency rejection (HTTP 403, RequestDeniedByCallback /
+    /// ExceedMaxConcurrency). Distinguished from ordinary network faults because retrying it
+    /// on the same egress IP is pointless — see <see cref="StageAsync"/>.
+    /// </summary>
+    private static bool IsConcurrencyThrottle(Exception ex) =>
+        ex.Message.Contains("RequestDeniedByCallback", StringComparison.OrdinalIgnoreCase) ||
+        ex.Message.Contains("ExceedMaxConcurrency", StringComparison.OrdinalIgnoreCase);
+
     private static bool IsCallerCancellation(Exception ex, CancellationToken cancellationToken) =>
         ex is OperationCanceledException && cancellationToken.IsCancellationRequested;
 
@@ -644,15 +732,25 @@ public sealed class CloudUpdateService
     private static long ElapsedMs(long startTicks) =>
         (long)Stopwatch.GetElapsedTime(startTicks).TotalMilliseconds;
 
-    /// <summary>Manifest/chunk download: signed CDN first, bundled CLI as the fallback hop.</summary>
-    private Task<byte[]?> TryDownloadCloudBytesAsync(
+    /// <summary>Manifest download: HTTP mirror first, signed CDN with CLI fallback after it.</summary>
+    private async Task<byte[]?> TryDownloadCloudBytesAsync(
         AliyunDriveSessionBundle bundle,
         string? folderId,
         string name,
         string remotePath,
-        CancellationToken cancellationToken) =>
-        CloudDownloader.TryDownloadBytesAsync(
-            bundle.Session, folderId, name, remotePath, StateDirectory, cancellationToken);
+        CancellationToken cancellationToken)
+    {
+        // 镜像优先：同一目录布局（latest.json / versions.json / history/…），直连国内服务器，
+        // 没有 CDN 限流和签名直链往返。失败（超时/非 2xx）静默回退云盘。
+        if (_mirror is not null)
+        {
+            byte[]? mirrored = await _mirror.TryGetBytesAsync(name, cancellationToken).ConfigureAwait(false);
+            if (mirrored is not null) return mirrored;
+        }
+
+        return await CloudDownloader.TryDownloadBytesAsync(
+            bundle.Session, folderId, name, remotePath, StateDirectory, cancellationToken).ConfigureAwait(false);
+    }
 
     // ── connection helpers ───────────────────────────────────────────────────
 

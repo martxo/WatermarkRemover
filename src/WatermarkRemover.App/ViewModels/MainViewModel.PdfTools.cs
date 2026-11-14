@@ -27,7 +27,7 @@ public sealed partial class MainViewModel
         }
 
         using var op = AppLog.BeginOperation(LogCategory.Ocr, "行内识别文字", Path.GetFileName(path));
-        IFeature processor = _composition.PdfToolbox.RouteFor(path);
+        IFeature processor = _composition.PdfToolbox.Ocr;
         job.MarkProcessing("正在识别文字…");
         IsBusy = true;
         try

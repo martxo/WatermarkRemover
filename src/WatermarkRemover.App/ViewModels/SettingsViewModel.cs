@@ -38,7 +38,6 @@ public sealed class SettingsViewModel : ObservableObject
     private int _logRangeIndex;
     private string _logPreviewText = string.Empty;
     private string _logStatusText = string.Empty;
-    private string _reportsPreviewText = string.Empty;
     private string _reportsStatusText = string.Empty;
     private string _searchText = string.Empty;
     private SettingsNavItemViewModel _selectedNav;
@@ -97,6 +96,8 @@ public sealed class SettingsViewModel : ObservableObject
         CleanUpdateResidueCommand = new RelayCommand(_ => CleanUpdateResidue());
         RefreshUpdateStorage();
         RefreshReportsCommand = new RelayCommand(_ => RefreshReports());
+        FeedbackFromReportCommand = new RelayCommand(p => OnFeedbackFromReport(p as RecognitionReport));
+        FeedbackCommand = new RelayCommand(_ => OnFeedback(null, null));
         OpenReportsFolderCommand = new RelayCommand(_ => OpenReportsFolder());
         RefreshCrashReportsCommand = new RelayCommand(_ => RefreshCrashReports());
         OpenCrashFolderCommand = new RelayCommand(_ => OpenCrashFolder());
@@ -529,11 +530,20 @@ public sealed class SettingsViewModel : ObservableObject
         private set => SetProperty(ref _logStatusText, value);
     }
 
-    public string ReportsPreviewText
-    {
-        get => _reportsPreviewText;
-        private set => SetProperty(ref _reportsPreviewText, value);
-    }
+    /// <summary>
+    /// 识别报告列表行：每行一条最近记录 + 一个「反馈」按钮。用户按某一条记录反馈时，
+    /// 反馈服务用记录里的操作号切出该次操作的全部日志，精确定位是哪一次操作出的问题。
+    /// </summary>
+    public ObservableCollection<ReportRow> RecentReportRows { get; } = new();
+
+    /// <summary>按某条识别报告反馈（识别报告区每行的「反馈」按钮）。</summary>
+    public RelayCommand FeedbackFromReportCommand { get; }
+
+    /// <summary>不带上下文的随手反馈（各页面标题栏的「反馈」按钮）。</summary>
+    public RelayCommand FeedbackCommand { get; }
+
+    /// <summary>Raised when the user asks to submit feedback; the view opens the feedback window.</summary>
+    public event EventHandler<FeedbackRequestEventArgs>? FeedbackRequested;
 
     public string ReportsStatusText
     {
@@ -863,7 +873,7 @@ public sealed class SettingsViewModel : ObservableObject
     {
         try
         {
-            Clipboard.SetText(LogExportService.BuildReport(LogExportService.Collect(SelectedLogRange()), SelectedLogRange()));
+            AppClipboard.SetText(LogExportService.BuildReport(LogExportService.Collect(SelectedLogRange()), SelectedLogRange()));
             LogStatusText = "完整诊断日志已复制到剪贴板";
         }
         catch (Exception ex)
@@ -944,23 +954,34 @@ public sealed class SettingsViewModel : ObservableObject
             _dialogs.Warn($"打开失败：{error}", "提示");
     }
 
-    /// <summary>Most recent recognition reports as preview text and a status line.</summary>
+    /// <summary>Most recent recognition reports as rows (one 「反馈」 button per row).</summary>
     public void RefreshReports()
     {
         try
         {
             IReadOnlyList<RecognitionReport> reports = _reportStore.ReadRecent(50);
-            ReportsPreviewText = reports.Count == 0
-                ? "（暂无识别报告：运行一次 OCR 识别或去水印后自动生成）"
-                : string.Join(Environment.NewLine, reports.Select(FormatReport));
+            RecentReportRows.Clear();
+            foreach (RecognitionReport report in reports)
+                RecentReportRows.Add(new ReportRow(FormatReport(report), report));
             ReportsStatusText = $"最近 {reports.Count} 条 · 保留 {RecognitionReportStore.RetentionDays} 天";
         }
         catch (Exception ex)
         {
-            ReportsPreviewText = $"读取识别报告失败：{ex.Message}";
-            ReportsStatusText = string.Empty;
+            RecentReportRows.Clear();
+            ReportsStatusText = $"读取识别报告失败：{ex.Message}";
         }
     }
+
+    private void OnFeedbackFromReport(RecognitionReport? report)
+    {
+        if (report is null) return;
+        // 旧版本记录没有操作号：仍然可以反馈，只是日志退化为最近尾部。
+        string? operationId = string.IsNullOrEmpty(report.OperationId) ? null : report.OperationId;
+        OnFeedback(operationId, FormatReport(report));
+    }
+
+    private void OnFeedback(string? operationId, string? contextText) =>
+        FeedbackRequested?.Invoke(this, new FeedbackRequestEventArgs(operationId, contextText));
 
     private void OpenReportsFolder()
     {
@@ -986,4 +1007,22 @@ public sealed class SettingsViewModel : ObservableObject
         2 => TimeSpan.FromDays(7),
         _ => TimeSpan.FromHours(1),
     };
+}
+
+/// <summary>One row in the recognition report list; <see cref="Text"/> is the preview line
+/// and <see cref="Report"/> carries the operation id used to slice logs on feedback.</summary>
+public sealed record ReportRow(string Text, RecognitionReport Report);
+
+/// <summary>Feedback request: the operation to correlate (may be null) plus optional context text.</summary>
+public sealed class FeedbackRequestEventArgs : EventArgs
+{
+    public FeedbackRequestEventArgs(string? operationId, string? contextText)
+    {
+        OperationId = operationId;
+        ContextText = contextText;
+    }
+
+    public string? OperationId { get; }
+
+    public string? ContextText { get; }
 }

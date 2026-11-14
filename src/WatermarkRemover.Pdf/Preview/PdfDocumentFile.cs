@@ -106,7 +106,6 @@ public sealed class PdfDocumentFile
                         return false;
                     }
                 })
-                .Where(HeadBytesMatch) // the stamp narrows the field; content picks the file
                 .ToArray();
         }
         catch (IOException ex)
@@ -115,17 +114,42 @@ public sealed class PdfDocumentFile
             return false;
         }
 
-        if (candidates.Length != 1)
+        // The stamp narrows the field; head content picks the file. A candidate whose head cannot
+        // be read (the big-image viewer may hold the renamed file without read sharing) is not
+        // excluded — with exactly ONE stamp match that is still the file; guessing between several
+        // same-shaped files would risk editing the wrong document, so ambiguity still fails.
+        string? unique = null;
+        int matched = 0, unreadable = 0;
+        foreach (string candidate in candidates)
         {
-            _debug?.Invoke($"预览无法跟踪改名文件：{System.IO.Path.GetFileName(_path)} 候选 {candidates.Length} 个，无法唯一确定");
-            return false;
+            byte[]? head = TryReadHead(candidate);
+            if (head is null)
+            {
+                unreadable++;
+                unique ??= candidate;
+                continue;
+            }
+
+            if (SHA256.HashData(head).AsSpan().SequenceEqual(_fingerprint))
+            {
+                matched++;
+                unique = candidate;
+            }
         }
 
-        string oldName = System.IO.Path.GetFileName(_path);
-        _path = candidates[0];
-        _info?.Invoke($"预览已跟踪改名文件：{oldName} → {System.IO.Path.GetFileName(_path)}，候选 {candidates.Length} 个");
-        NotifyPathChanged();
-        return true;
+        if (matched == 1 || (matched == 0 && unreadable == 1 && candidates.Length == 1))
+        {
+            string oldName = System.IO.Path.GetFileName(_path);
+            _path = unique!;
+            _info?.Invoke($"预览已跟踪改名文件：{oldName} → {System.IO.Path.GetFileName(_path)}，" +
+                          $"候选 {candidates.Length} 个（内容命中 {matched}，不可读 {unreadable}）");
+            NotifyPathChanged();
+            return true;
+        }
+
+        _debug?.Invoke($"预览无法跟踪改名文件：{System.IO.Path.GetFileName(_path)} " +
+                       $"候选 {candidates.Length} 个（内容命中 {matched}，不可读 {unreadable}），无法唯一确定");
+        return false;
     }
 
     /// <summary>Records the stamp a future rename is matched against; called after every
@@ -137,12 +161,11 @@ public sealed class PdfDocumentFile
             if (!File.Exists(_path)) return;
             var info = new FileInfo(_path);
             if (!force && info.Length == _knownLength && _fingerprint is not null) return;
+            byte[]? head = TryReadHead(_path);
+            if (head is null) return;
             _knownLength = info.Length;
             _knownCreationUtc = info.CreationTimeUtc;
-            using var stream = File.OpenRead(_path);
-            Span<byte> head = stackalloc byte[1024];
-            int read = stream.Read(head);
-            _fingerprint = SHA256.HashData(head[..read]);
+            _fingerprint = SHA256.HashData(head);
         }
         catch (IOException)
         {
@@ -150,19 +173,29 @@ public sealed class PdfDocumentFile
         }
     }
 
-    private bool HeadBytesMatch(string path)
+    /// <summary>
+    /// Reads the head KiB for fingerprinting. Opens with full sharing so a writer or reader
+    /// holding the file (the big-image viewer, a still-settling strip pass) does not block the
+    /// read; null when even that fails, which the caller treats as "candidate unreadable".
+    /// </summary>
+    private static byte[]? TryReadHead(string path)
     {
-        if (_fingerprint is null) return false;
         try
         {
-            using var stream = File.OpenRead(path);
+            using var stream = new FileStream(
+                path, FileMode.Open, FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete);
             Span<byte> head = stackalloc byte[1024];
             int read = stream.Read(head);
-            return SHA256.HashData(head[..read]).AsSpan().SequenceEqual(_fingerprint);
+            return head[..read].ToArray();
         }
         catch (IOException)
         {
-            return false;
+            return null;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return null;
         }
     }
 

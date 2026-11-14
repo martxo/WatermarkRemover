@@ -100,6 +100,18 @@ public sealed class LanTransferServer : IDisposable
     /// <summary>The address to encode into the QR code; valid after <see cref="Start"/>.</summary>
     public string Url { get; private set; } = string.Empty;
 
+    /// <summary>
+    /// Re-advertises the page under a different LAN host, keeping the same token and port (the
+    /// listener already accepts every local address through the wildcard prefix). The transfer
+    /// panel uses this to cycle fallback addresses when the phone cannot reach the first IP —
+    /// same Wi-Fi but the QR carried a virtual-adapter address, or the router isolates clients.
+    /// </summary>
+    public string ComposeUrlForHost(string host)
+    {
+        Url = ComposeUrl(host, Port, _token ?? string.Empty);
+        return Url;
+    }
+
     /// <summary>The bound local port (valid even when the advertised host is a LAN address).</summary>
     public int Port { get; private set; }
 
@@ -417,6 +429,9 @@ public sealed class LanTransferServer : IDisposable
                 else
                 {
                     WriteText(response, 200, "text/html; charset=utf-8", MobileUploadPage.Html);
+                    // 来源地址进日志：手机扫不出来时，能不能定位到「手机到底连的哪个 IP」
+                    // 是排查同网段/AP 隔离问题的第一步。
+                    _trace($"手机传文件：手机已打开页面（来源 {request.RemoteEndPoint?.Address}）");
                     PageOpened?.Invoke();
                 }
             }

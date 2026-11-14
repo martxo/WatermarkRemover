@@ -47,4 +47,10 @@ public sealed class PdfToolboxFeature : IFeature
         bool isImage = !string.Equals(extension, ".pdf", StringComparison.OrdinalIgnoreCase);
         return isImage ? _ocr : _watermark;
     }
+
+    /// <summary>
+    /// 记录行上的「识别文字」按钮专用：无论 PDF 还是图片，始终走 OCR 管线。RouteFor 在这里
+    /// 不适用 —— 它按扩展名分流，PDF 会被送去水印检测，识别按钮就会 5ms 空转。
+    /// </summary>
+    public IFeature Ocr => _ocr;
 }

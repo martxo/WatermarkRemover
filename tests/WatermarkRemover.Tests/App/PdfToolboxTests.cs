@@ -63,4 +63,13 @@ public class PdfToolboxTests
         // 大小写不敏感
         Assert.IsType<OcrFeature>(toolbox.RouteFor("C:\\a\\照片.PNG"));
     }
+
+    [Fact]
+    public void The_row_button_always_routes_to_ocr()
+    {
+        // 「识别文字」按钮曾走 RouteFor，PDF 行被送去水印检测（5ms 空转「未检测到水印」）。
+        // 该按钮必须无条件拿到 OCR 处理器。
+        var toolbox = NewToolbox();
+        Assert.IsType<OcrFeature>(toolbox.Ocr);
+    }
 }

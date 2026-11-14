@@ -1,7 +1,7 @@
-using System.Threading;
 using System.Windows;
 using System.Windows.Threading;
 using WatermarkRemover.App.Logging;
+using WatermarkRemover.App.Services;
 
 namespace WatermarkRemover.App;
 
@@ -39,27 +39,17 @@ public partial class ScreenshotOcrWindow : Window
         string text = ResultBox.Text;
         if (string.IsNullOrEmpty(text)) return;
 
-        for (int attempt = 0; attempt < 3; attempt++)
+        try
         {
-            try
-            {
-                Clipboard.SetText(text);
-                SummaryText.Text = "已复制到剪贴板";
-                _statusTimer.Stop();
-                _statusTimer.Start();
-                return;
-            }
-            catch (Exception ex)
-            {
-                if (attempt == 2)
-                {
-                    AppLog.Warn($"复制 OCR 文字失败：{ex.Message}");
-                    SummaryText.Text = "复制失败，请重试";
-                    return;
-                }
-
-                Thread.Sleep(40);
-            }
+            AppClipboard.SetText(text);
+            SummaryText.Text = "已复制到剪贴板";
+            _statusTimer.Stop();
+            _statusTimer.Start();
+        }
+        catch (Exception ex)
+        {
+            AppLog.Warn($"复制 OCR 文字失败：{ex.Message}");
+            SummaryText.Text = "复制失败，请重试";
         }
     }
 

@@ -118,6 +118,10 @@ public sealed partial class MainViewModel
             {
                 job.UpdateRenamed(finalPath);
                 job.SetNamingNote(null);
+                // 改名是应用自己做的，直接把新路径喂给打开着的预览会话，不等下一次渲染失败
+                // 再靠指纹去目录里「找回来」——找回复命中的文件头哈希读不到（看图窗口持锁）
+                // 就会给出「候选 0 个」并把预览条永远钉在死路径上。
+                job.Strip?.RelocateTo(finalPath);
             });
             op.Complete($"→ {Path.GetFileName(finalPath)}");
             LogScanChain(chainTicks, finalPath, "已改名");

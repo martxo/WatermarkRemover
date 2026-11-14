@@ -39,6 +39,12 @@ public static class AppLog
         set => _minimumLevel = value;
     }
 
+    /// <summary>
+    /// 当前异步上下文里的操作号（没有则 null）。随手反馈用它把某次操作的日志切片切出来，
+    /// 反馈记录因此能精确回落到「是哪一次操作出的问题」。
+    /// </summary>
+    public static string? CurrentOperationId => Ambient.Value?.Id;
+
     public static void Initialize()
     {
         try

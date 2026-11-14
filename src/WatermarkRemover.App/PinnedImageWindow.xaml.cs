@@ -1,5 +1,4 @@
 using System.IO;
-using System.Threading;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -118,23 +117,13 @@ public partial class PinnedImageWindow : Window
     private void CopyImage()
     {
         if (Preview.Source is not BitmapSource image) return;
-        for (int attempt = 0; attempt < 3; attempt++)
+        try
         {
-            try
-            {
-                Clipboard.SetImage(image);
-                return;
-            }
-            catch (Exception ex)
-            {
-                if (attempt == 2)
-                {
-                    AppLog.Warn($"复制贴图失败：{ex.Message}");
-                    return;
-                }
-
-                Thread.Sleep(40);
-            }
+            AppClipboard.SetImage(image);
+        }
+        catch (Exception ex)
+        {
+            AppLog.Warn($"复制贴图失败：{ex.Message}");
         }
     }
 

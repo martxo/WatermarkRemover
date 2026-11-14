@@ -1,4 +1,4 @@
-﻿# 任务清单：扫描训练数据导出 + 未裁决页体验修复
+﻿﻿# 任务清单：扫描训练数据导出 + 未裁决页体验修复
 
 - [x] 1. 设置字段与 UI
   - `AppSettings.ScanDatasetExportEnabled`（默认 false）+ `Clone()`

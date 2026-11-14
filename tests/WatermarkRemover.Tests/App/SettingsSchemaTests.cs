@@ -106,6 +106,30 @@ public sealed class SettingsSchemaTests : IDisposable
     }
 
     [Fact]
+    public void The_untouched_default_suffix_list_is_reordered_to_put_credit_last()
+    {
+        // v2 的出厂默认顺序（本机 settings JSON 的实况）：迁移只重排这一份原样列表。
+        File.WriteAllText(FilePath,
+            "{ \"SchemaVersion\": 2, " +
+            "\"QuickSuffixes\": [\"征信\", \"执照\", \"身份证\", \"户口本\", \"房产证\"] }");
+
+        AppSettings settings = SettingsService.Load(FilePath);
+
+        Assert.Equal(new[] { "执照", "身份证", "户口本", "房产证", "征信" }, settings.QuickSuffixes);
+    }
+
+    [Fact]
+    public void A_user_arranged_suffix_list_is_left_alone()
+    {
+        File.WriteAllText(FilePath,
+            "{ \"SchemaVersion\": 2, \"QuickSuffixes\": [\"征信\", \"结清证明\"] }");
+
+        AppSettings settings = SettingsService.Load(FilePath);
+
+        Assert.Equal(new[] { "征信", "结清证明" }, settings.QuickSuffixes);
+    }
+
+    [Fact]
     public void The_wechat_default_matches_the_engine_chain_factory_name()
     {
         // Core 里的默认引擎名必须和 App 引擎链里注册的工厂名一致，否则默认值会落空。

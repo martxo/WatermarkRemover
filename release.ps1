@@ -145,7 +145,10 @@ function Invoke-LocalStage {
 
     $current = Join-Path $InstallRoot 'current'
     # vpk excludes .pdb; every other published file must be present and byte-identical.
-    $expected = @(Get-ChildItem -LiteralPath $Staging -File | Where-Object { $_.Extension -ne '.pdb' })
+    # createdump.exe is ALSO stripped by vpk from its packages on purpose, so it never reaches
+    # the install dir — expected-list it out here instead of failing every R2R/folder build.
+    $expected = @(Get-ChildItem -LiteralPath $Staging -File |
+        Where-Object { $_.Extension -ne '.pdb' -and $_.Name -ne 'createdump.exe' })
     foreach ($file in $expected) {
         $installed = Join-Path $current $file.Name
         if (-not (Test-Path -LiteralPath $installed)) {

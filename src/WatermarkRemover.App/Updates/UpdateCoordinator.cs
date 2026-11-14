@@ -181,6 +181,30 @@ public static class UpdateCoordinator
         }
     }
 
+    /// <summary>
+    /// The GitHub/Velopack fallback as a callback for the cloud channel: invoked when the cloud
+    /// download dies on a network it cannot fix, so the update still completes in one session.
+    /// Portable (green-directory) copies have no Velopack feed — they keep the old guidance.
+    /// </summary>
+    private static async Task RunVelopackFallbackAsync(Window? owner, IDialogService dialogs, bool silent)
+    {
+        if (!VelopackUpdateService.IsChannelUsable)
+        {
+            AppLog.Info("云盘通道失败且 Velopack 通道不可用（解压版无增量源）");
+            if (!silent)
+            {
+                dialogs.Warn(
+                    "云更新失败，当前版本不受影响。\n\n原因：阿里云盘 CDN 对当前网络持续限流，" +
+                    "且解压版没有 GitHub 增量源。\n\n可稍后重试，或换一个网络环境再试。",
+                    "软件更新");
+            }
+            return;
+        }
+
+        AppLog.Info("切换 GitHub/Velopack 兜底通道继续更新");
+        await RunVelopackCheckCoreAsync(owner, dialogs, silent).ConfigureAwait(true);
+    }
+
     private static async Task RunCheckCoreAsync(
         Window? owner, IDialogService dialogs, AppSettings settings, bool silent)
     {
@@ -203,8 +227,12 @@ public static class UpdateCoordinator
 
         // 阿里云盘 is the primary channel: file-level chunks, version records and rollback. It
         // only declines (false) when no account is configured or the cloud repository is
-        // unreachable, so GitHub/Velopack stay as the fallback.
-        if (await CloudUpdateCoordinator.TryRunAsync(owner, dialogs, settings, silent).ConfigureAwait(true))
+        // unreachable, so GitHub/Velopack stay as the fallback. The same fallback also runs
+        // when the cloud download itself dies under the user (shared-IP CDN throttle, seen on
+        // 出差外地 machines): one click must still end in an updated app.
+        if (await CloudUpdateCoordinator.TryRunAsync(
+                owner, dialogs, settings, silent,
+                () => RunVelopackFallbackAsync(owner, dialogs, silent)).ConfigureAwait(true))
         {
             return;
         }

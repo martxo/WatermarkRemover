@@ -1,4 +1,4 @@
-﻿using System.IO;
+﻿﻿using System.IO;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using WatermarkRemover.App.Logging;

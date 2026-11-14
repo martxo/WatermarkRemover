@@ -287,7 +287,9 @@ public sealed class SearchPanelViewModel : ObservableObject
     {
         try
         {
-            Clipboard.SetText(row.FullPath);
+            // AppClipboard survives the transient CLIPBRD_E_CANT_OPEN lock window; a hard failure
+            // here used to be the raw COM error pasted into the status line.
+            AppClipboard.SetText(row.FullPath);
             StatusText = $"路径已复制：{row.Name}";
         }
         catch (Exception ex)

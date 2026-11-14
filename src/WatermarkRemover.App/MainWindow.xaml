@@ -531,6 +531,22 @@
                                    FontSize="11" Foreground="{StaticResource TextSecondaryBrush}"
                                    HorizontalAlignment="Center" Margin="0,4,0,0"
                                    TextTrimming="CharacterEllipsis" MaxWidth="360"/>
+                        <!-- 多网卡机器的兜底：第一个地址扫不出来时轮换候选地址重新生成二维码 -->
+                        <Button Content="手机扫不出来？换个地址"
+                                Command="{Binding Transfer.NextQrAddressCommand}"
+                                ToolTip="本机有多个网络地址（虚拟网卡/多连接）时，逐个换地址重试"
+                                HorizontalAlignment="Center" Margin="0,8,0,0">
+                            <Button.Style>
+                                <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding Transfer.HasAlternateAddresses}" Value="True">
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                        </Button>
                         <Button Content="{Binding Transfer.ToggleText}"
                                 Style="{StaticResource PrimaryButton}"
                                 Command="{Binding Transfer.ToggleCommand}"
@@ -1060,9 +1076,13 @@
                         </Style>
                     </ToggleButton.Style>
                 </ToggleButton>
+                <!-- AllowsTransparency is what keeps the rounded corners clean: without it the
+                     Popup is an opaque Win32 window and the corners outside the Border render
+                     black (the other two popups already carry it). -->
                 <Popup PlacementTarget="{Binding ElementName=TransferHeaderMenu}"
                        IsOpen="{Binding IsChecked, ElementName=TransferHeaderMenu}"
-                       StaysOpen="False" Placement="Bottom" HorizontalOffset="-236">
+                       StaysOpen="False" Placement="Bottom" HorizontalOffset="-236"
+                       AllowsTransparency="True" PopupAnimation="Fade">
                     <Border Width="266" Background="White" CornerRadius="10"
                             BorderBrush="{StaticResource ShellCardStrokeBrush}"
                             BorderThickness="1" Padding="16">
@@ -1216,6 +1236,20 @@
                 <TextBlock Text="办公助理" FontSize="13" FontWeight="SemiBold"
                            Foreground="{StaticResource TextPrimaryBrush}"
                            VerticalAlignment="Center" Margin="9,0,0,0"/>
+                <!-- 随手反馈：主界面常驻入口。从某条识别记录进来时会自动带上该次操作号，
+                     这里是不关联具体操作的全局入口（只附最近日志尾部）。 -->
+                <Button Style="{StaticResource SmallButton}"
+                        Click="OnFeedbackClick"
+                        Margin="14,0,0,0"
+                        Padding="10,5"
+                        ToolTip="有问题？随时反馈，帮我们定位是哪一次操作出的问题">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE8BD;"
+                                   FontFamily="Segoe MDL2 Assets" FontSize="12"
+                                   VerticalAlignment="Center" Margin="0,0,6,0"/>
+                        <TextBlock Text="反馈" FontSize="12" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </Button>
             </StackPanel>
         </Border>
 
@@ -1633,11 +1667,46 @@
                                                 </TextBox>
                                             </Grid>
 
-                                            <!-- Quick suffix chips — a dropdown component: sits right of the name; the
-                                                 toggle opens an overlay with the overflow suffixes that floats above
-                                                 the card, so the card layout never changes. -->
-                                            <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="4,0,0,0"
-                                                        Visibility="{Binding ChipsVisible, Converter={StaticResource BoolToVis}}">
+                                            <!-- Quick suffix chips — a dropdown component, and only on hover:
+                                                 resting rows stay clean, and the chips unfold when the pointer
+                                                 is on the name line (editing or not).
+                                                 The wrapper MUST be a Border carrying a (transparent) Background:
+                                                 a bare StackPanel only hit-tests on its children, so with the
+                                                 chips up, the 4px gap between the name pill and the first chip —
+                                                 plus the slack above/below the vertically centred chips — was
+                                                 dead space. A pointer parked there flipped the row's IsMouseOver
+                                                 false, the chips collapsed, the name pill grew back under the
+                                                 pointer, IsMouseOver true again… an endless toggle loop that
+                                                 re-laid-out the whole card on every cycle (name re-trimmed,
+                                                 the rows below jittering). A transparent Border is hit-testable
+                                                 across its entire bounds, margins included, so the hover state
+                                                 can no longer be lost to a gap. -->
+                                            <Border Grid.Column="1" Background="Transparent">
+                                                <Border.Style>
+                                                    <Style TargetType="Border">
+                                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                                        <Style.Triggers>
+                                                            <MultiDataTrigger>
+                                                                <MultiDataTrigger.Conditions>
+                                                                    <Condition Binding="{Binding ChipsVisible}" Value="True"/>
+                                                                    <Condition Binding="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=Grid}}"
+                                                                               Value="True"/>
+                                                                </MultiDataTrigger.Conditions>
+                                                                <Setter Property="Visibility" Value="Visible"/>
+                                                            </MultiDataTrigger>
+                                                            <!-- The dropdown floats outside the row's hit area: keep
+                                                                 the chips (its placement target) alive while it is up. -->
+                                                            <MultiDataTrigger>
+                                                                <MultiDataTrigger.Conditions>
+                                                                    <Condition Binding="{Binding ChipsVisible}" Value="True"/>
+                                                                    <Condition Binding="{Binding IsSuffixDropdownOpen}" Value="True"/>
+                                                                </MultiDataTrigger.Conditions>
+                                                                <Setter Property="Visibility" Value="Visible"/>
+                                                            </MultiDataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Border.Style>
+                                                <StackPanel Orientation="Horizontal" Margin="4,0,0,0" VerticalAlignment="Center">
                                             <ItemsControl ItemsSource="{Binding InlineChips}"
                                                           VerticalAlignment="Center"
                                                           Focusable="False">
@@ -1710,7 +1779,8 @@
                                                     </ItemsControl>
                                                 </Border>
                                             </Popup>
-                                            </StackPanel>
+                                                </StackPanel>
+                                            </Border>
                                         </Grid>
 
                                         <!-- path row: click the path to open its folder; time at the right -->
@@ -1865,15 +1935,6 @@
                                                 </Style>
                                             </TextBlock.Style>
                                         </TextBlock>
-
-                                        <!-- finished rows: one click sends the file to the configured netdisk -->
-                                        <Button Style="{StaticResource SmallButton}"
-                                                Content="上传"
-                                                Padding="10,3"
-                                                Margin="0,0,8,0"
-                                                Visibility="{Binding ShowUploadButton, Converter={StaticResource BoolToVis}}"
-                                                Command="{Binding UploadCommand}"
-                                                ToolTip="{Binding UploadTip}"/>
 
                                         <Button Style="{StaticResource RowDeleteButton}"
                                                 Command="{Binding DataContext.Board.DeleteCommand, RelativeSource={RelativeSource AncestorType=Window}}"
@@ -2131,14 +2192,6 @@
                 </TextBlock.Style>
             </TextBlock>
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                <!-- batch upload: every finished, not-yet-uploaded record of this page in one go.
-                     Hidden without a configured account — the row button says why when clicked. -->
-                <Button Content="上传到网盘"
-                        Style="{StaticResource GhostButton}"
-                        Margin="0,0,8,0"
-                        Command="{Binding UploadVisibleCommand}"
-                        Visibility="{Binding CanUploadBatch, Converter={StaticResource BoolToVis}}"
-                        ToolTip="{Binding UploadBatchHint}"/>
                 <Button Content="清空列表"
                         Style="{StaticResource GhostButton}"
                         Command="{Binding Board.ClearCommand}"

@@ -350,7 +350,7 @@ public class SettingsViewModelTests
     }
 
     [Fact]
-    public void ReportsSectionRegistersAndPreviewReadsFromStore()
+    public void ReportsSectionRegistersAndRowsReadFromStore()
     {
         var store = new FakeReportStore();
         store.Reports.Add(new RecognitionReport
@@ -370,27 +370,83 @@ public class SettingsViewModelTests
 
         vm.SelectedNav = nav; // entering the section reads the store back
 
-        Assert.Contains("扫描件.pdf", vm.ReportsPreviewText);
-        Assert.Contains("执照（12）", vm.ReportsPreviewText);
-        Assert.Contains("姓名=林孝明", vm.ReportsPreviewText);
-        Assert.Contains("字段 1", vm.ReportsPreviewText);
-        Assert.Contains("问题 1", vm.ReportsPreviewText);
+        // One row per report: the row carries the report itself, so its 反馈 button can
+        // attach the operation id when the user reports from this record.
+        ReportRow row = Assert.Single(vm.RecentReportRows);
+        Assert.Contains("扫描件.pdf", row.Text);
+        Assert.Contains("执照（12）", row.Text);
+        Assert.Contains("姓名=林孝明", row.Text);
+        Assert.Contains("字段 1", row.Text);
+        Assert.Contains("问题 1", row.Text);
         Assert.Contains("最近 1 条", vm.ReportsStatusText);
         Assert.Contains("90 天", vm.ReportsStatusText);
     }
 
     [Fact]
-    public void ReportsPreviewShowsEmptyHintAndRefreshIsRepeatable()
+    public void ReportsSectionStaysEmptyAndRefreshIsRepeatable()
     {
         SettingsViewModel vm = NewVmWithStore(new FakeReportStore());
         SettingsNavItemViewModel nav = vm.NavItems.Single(n => n.Id == "reports");
 
         vm.SelectedNav = nav;
-        Assert.Contains("暂无识别报告", vm.ReportsPreviewText);
+        Assert.Empty(vm.RecentReportRows);
         Assert.Contains("最近 0 条", vm.ReportsStatusText);
 
         vm.RefreshReportsCommand.Execute(null);
-        Assert.Contains("暂无识别报告", vm.ReportsPreviewText);
+        Assert.Empty(vm.RecentReportRows);
         Assert.Contains("最近 0 条", vm.ReportsStatusText);
+    }
+
+    // ── 随手反馈（FeedbackWindow / FeedbackService 的 VM 侧接线）──────────────
+
+    [Fact]
+    public void FeedbackFromReportRaisesRequestWithOperationId()
+    {
+        var store = new FakeReportStore();
+        var report = new RecognitionReport
+        {
+            Timestamp = new DateTimeOffset(2026, 11, 14, 10, 5, 0, TimeSpan.FromHours(8)),
+            InputPath = @"D:\docs\合同.pdf",
+            OperationId = "483917",
+        };
+        store.Reports.Add(report);
+        SettingsViewModel vm = NewVmWithStore(store);
+
+        FeedbackRequestEventArgs? raised = null;
+        vm.FeedbackRequested += (_, e) => raised = e;
+
+        vm.FeedbackFromReportCommand.Execute(report);
+
+        Assert.NotNull(raised);
+        Assert.Equal("483917", raised!.OperationId);
+        Assert.Contains("合同.pdf", raised.ContextText);
+    }
+
+    [Fact]
+    public void FeedbackFromLegacyReportWithoutOperationIdStillReports()
+    {
+        SettingsViewModel vm = NewVmWithStore(new FakeReportStore());
+        FeedbackRequestEventArgs? raised = null;
+        vm.FeedbackRequested += (_, e) => raised = e;
+
+        // 旧版本写入的记录没有操作号：反馈仍可提交，日志退化为最近尾部。
+        vm.FeedbackFromReportCommand.Execute(new RecognitionReport { InputPath = "a.pdf" });
+
+        Assert.NotNull(raised);
+        Assert.Null(raised!.OperationId);
+    }
+
+    [Fact]
+    public void PageLevelFeedbackRaisesRequestWithoutContext()
+    {
+        SettingsViewModel vm = NewVmWithStore(new FakeReportStore());
+        FeedbackRequestEventArgs? raised = null;
+        vm.FeedbackRequested += (_, e) => raised = e;
+
+        vm.FeedbackCommand.Execute(null);
+
+        Assert.NotNull(raised);
+        Assert.Null(raised!.OperationId);
+        Assert.Null(raised.ContextText);
     }
 }

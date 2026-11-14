@@ -1,4 +1,5 @@
-﻿using System.Globalization;
+﻿﻿using System.Diagnostics;
+using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Threading;
@@ -13,6 +14,10 @@ namespace WatermarkRemover.App;
 public partial class App : Application
 {
     private SingleInstanceGuard? _instanceGuard;
+
+    /// <summary>Shared startup stopwatch: every "距启动 X ms" log line reads against this, so
+    /// the startup profile in the log is one comparable column across versions.</summary>
+    public static readonly Stopwatch BootClock = Stopwatch.StartNew();
 
     /// <summary>Why this process is ending; the OnExit line names it so a log never just says
     /// "应用退出" after a crash or an updater hand-off.</summary>
@@ -53,6 +58,7 @@ public partial class App : Application
 
         AppFolders.EnsureRoot();
         AppLog.Initialize();
+        BootClock.Restart();
         AppLog.Info($"应用启动 v{GetVersion()}，数据目录：{AppFolders.Root}");
         // Where this process runs and what Velopack thinks is installed: the two answers differ
         // whenever an old shortcut or a second copy is launched, which otherwise looks exactly

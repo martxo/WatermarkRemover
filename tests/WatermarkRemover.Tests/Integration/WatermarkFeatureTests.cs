@@ -1,4 +1,4 @@
-﻿using WatermarkRemover.App.Presentation;
+﻿﻿using WatermarkRemover.App.Presentation;
 using WatermarkRemover.Core.Features;
 using WatermarkRemover.Core.Features.Naming;
 using WatermarkRemover.Core.Features.Ocr;
