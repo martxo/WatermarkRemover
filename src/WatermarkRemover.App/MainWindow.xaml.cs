@@ -113,6 +113,8 @@ public partial class MainWindow : Window
         InitializeComponent();
         AppLog.Info($"主窗口构造耗时 {Stopwatch.GetElapsedTime(ctorTicks).TotalMilliseconds:0} ms（含 XAML 解析）");
         DataContext = _viewModel;
+        // 记录行「反馈」：宿主打开反馈窗口，按该记录的操作号切片日志。
+        _viewModel.RecordFeedbackRequested += OnRecordFeedbackRequested;
         // Tile clicks open the screen-level viewer (dark veil over the whole screen, film rail
         // on the left) — a real window, so the host wires it here, outside the view model.
         _viewModel.PreviewViewerOpener = strip => FullscreenViewerWindow.ShowFor(strip);
@@ -868,6 +870,17 @@ public partial class MainWindow : Window
     {
         var window = new FeedbackWindow(
             _viewModel.Settings, new DpapiSecretProtector(), null, null, _viewModel.IsNetdiskAdmin)
+        {
+            Owner = this,
+        };
+        window.ShowDialog();
+    }
+
+    /// <summary>任务记录行上的「反馈」：带该记录的操作号，日志按号精确切片。</summary>
+    private void OnRecordFeedbackRequested(object? sender, FeedbackRequestEventArgs e)
+    {
+        var window = new FeedbackWindow(
+            _viewModel.Settings, new DpapiSecretProtector(), e.OperationId, e.ContextText, _viewModel.IsNetdiskAdmin)
         {
             Owner = this,
         };

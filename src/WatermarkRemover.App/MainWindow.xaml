@@ -1903,6 +1903,16 @@
                                                 Command="{Binding RecognizeTextCommand}"
                                                 ToolTip="用 OCR 提取整份文档的文字，结果保存为同名 txt"/>
 
+                                        <!-- row-level feedback: reports THIS record with its operation id,
+                                             so the attached log slice covers exactly this file's run -->
+                                        <Button Style="{StaticResource SmallButton}"
+                                                Content="反馈"
+                                                Padding="10,3"
+                                                Margin="0,0,8,0"
+                                                Command="{Binding DataContext.FeedbackFromRecordCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                CommandParameter="{Binding}"
+                                                ToolTip="这条记录有问题？点这里反馈，自动附带本次操作的完整日志（哪个文件、每一步结果）"/>
+
                                         <!-- finished rows: expand the inline thumbnail strip (again = fold).
                                              The row that just finished unfolds on its own, so its button
                                              already reads 收起; older rows stay folded. -->

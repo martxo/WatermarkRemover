@@ -76,6 +76,7 @@ public sealed partial class MainViewModel
         // Stamped here so the naming pass can report scan→rename as one number when it ends.
         long chainTicks = Stopwatch.GetTimestamp();
         FileJobViewModel job = AddScanningJob();
+        job.SetOperationId(op.Id);
         bool scanFinished = false;
         Task<AutoNameResult?>? earlyNaming = null;
         // P1 (v1.16.83): page 1's orientation vote is made ONCE and shared — the naming chain

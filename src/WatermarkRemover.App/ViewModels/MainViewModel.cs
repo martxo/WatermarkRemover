@@ -143,6 +143,7 @@ public sealed partial class MainViewModel : ObservableObject
             _scan.CancelScan();
         }, () => IsScanning);
         PreviewCommand = new RelayCommand(p => _preview.Toggle(p as FileJobViewModel), p => p is FileJobViewModel);
+        FeedbackFromRecordCommand = new RelayCommand(p => RaiseRecordFeedback(p as FileJobViewModel));
         UploadJobCommand = new RelayCommand(
             p => { if (p is FileJobViewModel job) _ = UploadJobAsync(job); },
             p => IsNetdiskAdmin && p is FileJobViewModel);
@@ -334,6 +335,25 @@ public sealed partial class MainViewModel : ObservableObject
 
     /// <summary>Expands / folds the thumbnail strip under the finished record; the parameter is the row.</summary>
     public RelayCommand PreviewCommand { get; }
+
+    /// <summary>
+    /// Row-level 「反馈」：参数是一条任务记录。窗口在宿主（MainWindow）里打开——事件携带
+    /// 记录的操作号与上下文，反馈服务按号切出该次操作的完整日志（收到的文件、每一步结果），
+    /// 而不是泛泛的最近日志尾部。
+    /// </summary>
+    public RelayCommand FeedbackFromRecordCommand { get; }
+
+    /// <summary>Raised when the user asks to report a specific record; the host opens the window.</summary>
+    public event EventHandler<FeedbackRequestEventArgs>? RecordFeedbackRequested;
+
+    private void RaiseRecordFeedback(FileJobViewModel? row)
+    {
+        if (row is null) return;
+        string context = row.State == JobState.Failed
+            ? $"文件 {row.DisplayName}（失败：{row.StatusLine}）"
+            : $"文件 {row.DisplayName}";
+        RecordFeedbackRequested?.Invoke(this, new FeedbackRequestEventArgs(row.OperationId, context));
+    }
 
     /// <summary>Uploads the row passed as the parameter; the row is the unit of accounting.</summary>
     public RelayCommand UploadJobCommand { get; }

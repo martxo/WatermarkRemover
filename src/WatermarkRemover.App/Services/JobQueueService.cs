@@ -76,6 +76,7 @@ public sealed class JobQueueService
             // Per job on purpose: concurrent jobs must never share one operation id.
             using var op = AppLog.BeginOperation(
                 LogCategory.Job, "任务处理", Path.GetFileName(job.InputPath));
+            job.SetOperationId(op.Id);
 
             job.MarkProcessing(FeaturePresentationCatalog.ProcessingText(feature));
             // Inside the task body on purpose: sibling jobs must not see each other's scope.

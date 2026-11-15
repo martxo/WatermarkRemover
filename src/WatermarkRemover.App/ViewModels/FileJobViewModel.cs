@@ -74,6 +74,17 @@ public sealed class FileJobViewModel : ObservableObject
     /// the list is filtered per section so records never mix across pages.</summary>
     public string? OwnerFeatureId { get; internal set; }
 
+    /// <summary>
+    /// The log operation id of this record's processing run: every log line of the job carries
+    /// it (<c>[op=…]</c>), so a row-level 「反馈」 can attach exactly this file's full trace —
+    /// what arrived, each stage, the outcome. Null until processing starts (queued rows report
+    /// with the recent-log-tail fallback).
+    /// </summary>
+    public string? OperationId { get; private set; }
+
+    /// <summary>Called by the queue/scan host right after the job's operation scope opens.</summary>
+    internal void SetOperationId(string id) => OperationId = id;
+
     /// <summary>True for a PDF dropped onto the scan page: the record is an existing document,
     /// so the scan-only auto passes (orientation vote, blank-page removal) must not touch it.</summary>
     internal bool SuppressAutoPostProcess { get; set; }
