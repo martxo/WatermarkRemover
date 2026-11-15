@@ -116,10 +116,10 @@ public sealed class AutomaticBackupTests : IDisposable
         var store = new AutomaticBackupStateStore(Path.Combine(_dir, "state.json"));
         var uploads = new ConcurrentQueue<UploadCall>();
 
-        using var service = NewService(store, (target, relativeDirectory, localPath, _) =>
+        using var service = NewService(store, (target, relativeDirectory, localPath, overwrite, _) =>
         {
             uploads.Enqueue(new UploadCall(
-                target, relativeDirectory, Path.GetFileName(localPath), File.ReadAllText(localPath)));
+                target, relativeDirectory, Path.GetFileName(localPath), File.ReadAllText(localPath), overwrite));
             return Task.CompletedTask;
         });
 
@@ -142,6 +142,44 @@ public sealed class AutomaticBackupTests : IDisposable
     }
 
     [Fact]
+    public async Task An_in_place_update_overwrites_but_a_new_same_named_path_never_does()
+    {
+        string root = Path.Combine(_dir, "watched");
+        Directory.CreateDirectory(root);
+        string file = Path.Combine(root, "征信.pdf");
+        await File.WriteAllTextAsync(file, "11月报告");
+        AppSettings settings = ValidSettings(root);
+        var store = new AutomaticBackupStateStore(Path.Combine(_dir, "state.json"));
+        var uploads = new ConcurrentQueue<UploadCall>();
+
+        using var service = NewService(store, (target, relativeDirectory, localPath, overwrite, _) =>
+        {
+            uploads.Enqueue(new UploadCall(
+                target, relativeDirectory, Path.GetFileName(localPath), File.ReadAllText(localPath), overwrite));
+            return Task.CompletedTask;
+        });
+
+        await service.ApplyConfigurationAsync(settings);
+        await WaitUntilAsync(() => uploads.Count == 1 && service.PendingCount == 0);
+        // First upload: brand-new path, no record — the drive may hold an unrelated file under
+        // the same name (e.g. an earlier backup whose local copy was deleted), so never overwrite.
+        Assert.False(Assert.Single(uploads).Overwrite);
+
+        // In-place update of the SAME file: the cloud copy is the old version of itself.
+        await File.WriteAllTextAsync(file, "12月报告");
+        await WaitUntilAsync(() => uploads.Count == 2 && service.PendingCount == 0);
+        Assert.True(uploads.Last().Overwrite);
+
+        // Simulate "old local copy deleted, new file with the SAME name appears": clear the
+        // record, drop fresh content. The drive may still hold the older backup — keep it.
+        store.PruneMissing(settings.AutomaticBackupConsentFingerprint,
+            new List<string> { "不存在的路径.pdf" }.ToHashSet(StringComparer.OrdinalIgnoreCase));
+        await File.WriteAllTextAsync(file, "1月报告");
+        await WaitUntilAsync(() => uploads.Count == 3 && service.PendingCount == 0);
+        Assert.False(uploads.Last().Overwrite);
+    }
+
+    [Fact]
     public async Task A_restart_does_not_upload_an_unchanged_file_again()
     {
         string root = Path.Combine(_dir, "watched");
@@ -153,7 +191,7 @@ public sealed class AutomaticBackupTests : IDisposable
 
         using (var first = NewService(
                    new AutomaticBackupStateStore(statePath),
-                   (_, _, _, _) =>
+                   (_, _, _, _, _) =>
                    {
                        Interlocked.Increment(ref uploads);
                        return Task.CompletedTask;
@@ -165,7 +203,7 @@ public sealed class AutomaticBackupTests : IDisposable
 
         using var restarted = NewService(
             new AutomaticBackupStateStore(statePath),
-            (_, _, _, _) =>
+            (_, _, _, _, _) =>
             {
                 Interlocked.Increment(ref uploads);
                 return Task.CompletedTask;
@@ -186,10 +224,10 @@ public sealed class AutomaticBackupTests : IDisposable
         var uploads = new ConcurrentQueue<UploadCall>();
         using var service = NewService(
             new AutomaticBackupStateStore(Path.Combine(_dir, "state.json")),
-            (target, relativeDirectory, localPath, _) =>
+            (target, relativeDirectory, localPath, overwrite, _) =>
             {
                 uploads.Enqueue(new UploadCall(
-                    target, relativeDirectory, Path.GetFileName(localPath), File.ReadAllText(localPath)));
+                    target, relativeDirectory, Path.GetFileName(localPath), File.ReadAllText(localPath), overwrite));
                 return Task.CompletedTask;
             });
         await service.ApplyConfigurationAsync(settings);
@@ -213,7 +251,7 @@ public sealed class AutomaticBackupTests : IDisposable
         int uploads = 0;
         using var service = NewService(
             new AutomaticBackupStateStore(Path.Combine(_dir, "state.json")),
-            (_, _, _, _) =>
+            (_, _, _, _, _) =>
             {
                 Interlocked.Increment(ref uploads);
                 return Task.CompletedTask;
@@ -264,7 +302,7 @@ public sealed class AutomaticBackupTests : IDisposable
         using var service = new AutomaticBackupService(
             new AutomaticBackupStateStore(Path.Combine(_dir, "stable-state.json")),
             Path.Combine(_dir, "snapshots"),
-            (_, _, _, _) =>
+            (_, _, _, _, _) =>
             {
                 Interlocked.Increment(ref uploads);
                 return Task.CompletedTask;
@@ -294,7 +332,7 @@ public sealed class AutomaticBackupTests : IDisposable
 
     private AutomaticBackupService NewService(
         AutomaticBackupStateStore store,
-        Func<NetdiskUploadTarget, string, string, CancellationToken, Task> upload) =>
+        Func<NetdiskUploadTarget, string, string, bool, CancellationToken, Task> upload) =>
         new(store, Path.Combine(_dir, "snapshots"), upload,
             TimeSpan.FromMilliseconds(40), TimeSpan.FromMinutes(1), TimeSpan.FromMilliseconds(20));
 
@@ -312,5 +350,6 @@ public sealed class AutomaticBackupTests : IDisposable
         NetdiskUploadTarget Target,
         string RelativeDirectory,
         string FileName,
-        string Content);
+        string Content,
+        bool Overwrite);
 }

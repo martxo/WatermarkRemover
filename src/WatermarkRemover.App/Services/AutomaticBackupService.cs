@@ -11,7 +11,7 @@ public sealed class AutomaticBackupService : ObservableObject, IDisposable
     private static readonly TimeSpan MaximumRetryDelay = TimeSpan.FromMinutes(30);
     private readonly AutomaticBackupStateStore _stateStore;
     private readonly string _snapshotDirectory;
-    private readonly Func<NetdiskUploadTarget, string, string, CancellationToken, Task> _uploadAsync;
+    private readonly Func<NetdiskUploadTarget, string, string, bool, CancellationToken, Task> _uploadAsync;
     private readonly TimeSpan _stableWindow;
     private readonly TimeSpan _rescanInterval;
     private readonly TimeSpan _initialRetryDelay;
@@ -40,7 +40,7 @@ public sealed class AutomaticBackupService : ObservableObject, IDisposable
     internal AutomaticBackupService(
         AutomaticBackupStateStore stateStore,
         string snapshotDirectory,
-        Func<NetdiskUploadTarget, string, string, CancellationToken, Task> uploadAsync,
+        Func<NetdiskUploadTarget, string, string, bool, CancellationToken, Task> uploadAsync,
         TimeSpan stableWindow,
         TimeSpan rescanInterval,
         TimeSpan retryInterval)
@@ -149,14 +149,18 @@ public sealed class AutomaticBackupService : ObservableObject, IDisposable
 
     public void Dispose() => Shutdown();
 
-    private static Func<NetdiskUploadTarget, string, string, CancellationToken, Task> CreateUploadAdapter(
+    private static Func<NetdiskUploadTarget, string, string, bool, CancellationToken, Task> CreateUploadAdapter(
         NetdiskTransferService transfer)
     {
         ArgumentNullException.ThrowIfNull(transfer);
-        // Overwrite on purpose: an interrupted upload can leave a partial entry under the same
-        // name on the drive (create already ran, complete never did). The retry must replace it,
-        // not auto-rename into "xxx (1)" beside the broken copy.
-        return (target, relativeDirectory, localPath, ct) => transfer.UploadFileAsync(
+        // overwrite=true ONLY for in-place updates (the path has a prior success record whose
+        // hash no longer matches — the cloud copy is the old version of THIS file). A path with
+        // no record uploads with auto-rename: the cloud may legitimately hold a different file
+        // under the same name (e.g. 同名的另一份征信 backed up before the local copy was
+        // deleted — deleting it would destroy that backup). An interrupted upload's partial
+        // entry is invisible to listings, does not participate in name conflicts, and is
+        // cleaned up by the drive itself — it never needs an overwrite.
+        return (target, relativeDirectory, localPath, overwrite, ct) => transfer.UploadFileAsync(
             new NetdiskUploadTarget(
                 target.ProviderId,
                 target.AccountName,
@@ -164,7 +168,7 @@ public sealed class AutomaticBackupService : ObservableObject, IDisposable
                 AutomaticBackupFileFilter.CombineRemoteDirectory(target.RemoteDirectory, relativeDirectory)),
             localPath,
             ct,
-            overwrite: true);
+            overwrite: overwrite);
     }
 
     private FileSystemWatcher CreateWatcher(Generation generation)
@@ -532,10 +536,15 @@ public sealed class AutomaticBackupService : ObservableObject, IDisposable
                 return;
             }
 
+            // state != null means this path was backed up before and the content has since
+            // changed — an in-place update of THIS file, safe to replace its cloud copy.
+            // state == null means no prior record (new path, or a same-named file after a
+            // local delete) — auto-rename, never destroy whatever the cloud already holds.
             await _uploadAsync(
                 generation.Target,
                 AutomaticBackupFileFilter.GetRelativeDirectory(relativePath),
                 snapshotPath,
+                state is not null,
                 ct).ConfigureAwait(false);
             DateTimeOffset successUtc = DateTimeOffset.UtcNow;
             var uploaded = new AutomaticBackupState(length, lastWriteUtc, sha256, successUtc);
