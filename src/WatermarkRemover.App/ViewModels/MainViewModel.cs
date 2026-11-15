@@ -119,7 +119,14 @@ public sealed partial class MainViewModel : ObservableObject
         _preview = new PreviewStripCoordinator(
             Board.Jobs, _dialogs, _composition.PdfRenderer, _composition.OcrEngine,
             scanIntoStrip: progress => _scan.ScanIntoStripAsync(progress));
-        Netdisk = new NetdiskCoordinator(Settings, _dialogs, () => IsBusy);
+        Netdisk = new NetdiskCoordinator(Settings, _dialogs, () => IsBusy, IsNetdiskAdmin);
+        AutomaticBackup = new AutomaticBackupService(
+            Netdisk.Transfer,
+            new AutomaticBackupStateStore(Path.Combine(
+                AppFolders.Root, "automatic-backup", "state.json")),
+            Path.Combine(AppFolders.Root, "automatic-backup", "snapshots"));
+        Netdisk.Settings.AccountSaved += (_, _) => OnAutomaticBackupAccountsChanged();
+        Netdisk.AccountRemoved += (_, _) => OnAutomaticBackupAccountsChanged();
 
         OpenOutputCommand = new RelayCommand(p => OpenOutput(p as string), p => p is string path && File.Exists(path));
         SaveSettingsCommand = new RelayCommand(() => SaveSettings());
@@ -138,7 +145,7 @@ public sealed partial class MainViewModel : ObservableObject
         PreviewCommand = new RelayCommand(p => _preview.Toggle(p as FileJobViewModel), p => p is FileJobViewModel);
         UploadJobCommand = new RelayCommand(
             p => { if (p is FileJobViewModel job) _ = UploadJobAsync(job); },
-            p => p is FileJobViewModel);
+            p => IsNetdiskAdmin && p is FileJobViewModel);
         UploadVisibleCommand = new RelayCommand(() => _ = UploadVisibleAsync(), () => CanUploadBatch);
 
         // 任务中心：一个停止按钮同时管扫描和批处理；继续处理会区分"本地处理"和"上传"。
@@ -179,6 +186,8 @@ public sealed partial class MainViewModel : ObservableObject
         RestoreJournal();
         RestorePending();
         InitializeOutputWatcher();
+        ApplyAutomaticBackupStartup();
+        _ = ApplyAutomaticBackupConfigurationAsync();
     }
 
     /// <summary>Stops the running batch: files that have not started are marked 已停止.</summary>
@@ -204,7 +213,8 @@ public sealed partial class MainViewModel : ObservableObject
         get
         {
             int count = UnfinishedTaskCount;
-            PendingTaskEntry? first = _pending.FirstOrDefault(e => !IsScanEntry(e));
+            PendingTaskEntry? first = _pending.FirstOrDefault(e =>
+                !IsScanEntry(e) && (IsNetdiskAdmin || e.Kind != "upload"));
             return count == 0 || first is null
                 ? string.Empty
                 : $"上次有 {count} 个文件没处理完（{Path.GetFileName(first.InputPath)} 等），可以继续。";
@@ -214,6 +224,9 @@ public sealed partial class MainViewModel : ObservableObject
     public bool ShowPendingBanner => HasPendingTasks && !IsBusy;
 
     public AppSettings Settings { get; }
+
+    /// <summary>网盘管理与手动上传只在经过提升验证的管理员进程中开放。</summary>
+    public bool IsNetdiskAdmin => _composition.IsNetdiskAdmin;
 
     /// <summary>Left-navigation entries, in registration (priority) order.</summary>
     public ObservableCollection<FeatureNavItemViewModel> NavItems { get; }

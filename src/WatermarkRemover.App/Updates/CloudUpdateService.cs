@@ -86,10 +86,13 @@ public sealed class CloudApplyResult
 }
 
 /// <summary>
-/// 阿里云盘 file-level update channel. The repository holds one manifest per retained version and
-/// content-addressed chunks shared by all versions; a client hashes its own install, reuses chunks
-/// already on disk, downloads only the missing ones, then a detached PowerShell script replaces the
-/// files after the app exits and restores the backup if anything fails.
+/// 阿里云盘 file-level channel. NOTE: the update flow no longer runs through here — since the
+/// 腾讯云镜像 became the primary channel (<see cref="MirrorUpdateService"/>), this class only
+/// serves the netdisk features (登录包导出、日志/崩溃报告上传) that still need the account.
+/// The repository holds one manifest per retained version and content-addressed chunks shared by
+/// all versions; a client hashes its own install, reuses chunks already on disk, downloads only
+/// the missing ones, then a detached PowerShell script replaces the files after the app exits
+/// and restores the backup if anything fails.
 /// </summary>
 public sealed class CloudUpdateService
 {
@@ -99,15 +102,11 @@ public sealed class CloudUpdateService
     private readonly AppSettings _settings;
     private readonly ISecretProtector _protector;
     private readonly NetdiskAccountState? _account;
-    private readonly MirrorUpdateSource? _mirror;
 
     public CloudUpdateService(AppSettings settings, ISecretProtector protector)
     {
         _settings = settings;
         _protector = protector;
-        // The HTTP mirror is tried before every netdisk read; a failed fetch falls back
-        // transparently, and the breaker inside it short-circuits an unreachable mirror.
-        _mirror = MirrorUpdateSource.TryCreate(settings.UpdateMirrorUrl);
         // A login pack dropped beside the app or into the stable data folder is imported before
         // the account is resolved, so a fresh machine starts already logged in.
         AliyunpanCliRuntime.EnsureStableConfig();
@@ -568,14 +567,6 @@ public sealed class CloudUpdateService
                 long apiTicks = Stopwatch.GetTimestamp();
                 try
                 {
-                    // 镜像优先（files/<sha256>，与云盘同布局）：直连无 CDN 限流。镜像失败时
-                    // TryDownloadToFileAsync 已把 .part 清掉，这里直接走云盘通道。
-                    if (_mirror is not null &&
-                        await _mirror.TryDownloadToFileAsync($"files/{chunk.Sha256}", temp, token).ConfigureAwait(false))
-                    {
-                        break;
-                    }
-
                     // No extra total deadline here: DownloadAsync already bounds the link lookup
                     // (90 s) and treats 30 s without bytes as stalled.
                     await bundle.Session.DownloadAsync(remote[chunk.Sha256], temp, null, token).ConfigureAwait(false);
@@ -732,7 +723,7 @@ public sealed class CloudUpdateService
     private static long ElapsedMs(long startTicks) =>
         (long)Stopwatch.GetElapsedTime(startTicks).TotalMilliseconds;
 
-    /// <summary>Manifest download: HTTP mirror first, signed CDN with CLI fallback after it.</summary>
+    /// <summary>Manifest download: signed CDN with CLI fallback after it.</summary>
     private async Task<byte[]?> TryDownloadCloudBytesAsync(
         AliyunDriveSessionBundle bundle,
         string? folderId,
@@ -740,14 +731,6 @@ public sealed class CloudUpdateService
         string remotePath,
         CancellationToken cancellationToken)
     {
-        // 镜像优先：同一目录布局（latest.json / versions.json / history/…），直连国内服务器，
-        // 没有 CDN 限流和签名直链往返。失败（超时/非 2xx）静默回退云盘。
-        if (_mirror is not null)
-        {
-            byte[]? mirrored = await _mirror.TryGetBytesAsync(name, cancellationToken).ConfigureAwait(false);
-            if (mirrored is not null) return mirrored;
-        }
-
         return await CloudDownloader.TryDownloadBytesAsync(
             bundle.Session, folderId, name, remotePath, StateDirectory, cancellationToken).ConfigureAwait(false);
     }

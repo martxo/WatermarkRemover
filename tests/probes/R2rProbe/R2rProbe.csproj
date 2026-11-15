@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <PlatformTarget>x64</PlatformTarget>
+    <!-- Reproduce the shipped app's publish flags exactly: the PDFsharp AGPL probe only breaks
+         in the single-file + R2R combination, never in debug runs or tests. -->
+    <PublishSingleFile>false</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>false</EnableCompressionInSingleFile>
+    <PublishReadyToRun>true</PublishReadyToRun>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\WatermarkRemover.Pdf\WatermarkRemover.Pdf.csproj" />
+    <!-- Transitive package refs do not flow compile-time; the probe needs the API surface. -->
+    <PackageReference Include="PDFsharp" Version="6.5.0" />
+  </ItemGroup>
+</Project>

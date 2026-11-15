@@ -1,4 +1,4 @@
-﻿# Release pipeline for WatermarkRemover — four parameterised stages.
+﻿﻿# Release pipeline for WatermarkRemover — four parameterised stages.
 #
 #   powershell -ExecutionPolicy Bypass -File d:\code\release.ps1 -Version 1.16.51 -Stage local
 #   powershell -ExecutionPolicy Bypass -File d:\code\release.ps1 -Version 1.16.51 -Stage cloud

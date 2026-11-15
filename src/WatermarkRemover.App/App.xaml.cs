@@ -1,6 +1,7 @@
-﻿﻿using System.Diagnostics;
+﻿﻿﻿﻿using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.InteropServices;
+using System.Threading;
 using System.Windows;
 using System.Windows.Threading;
 using Velopack;
@@ -41,17 +42,41 @@ public partial class App : Application
         // created. Harmless no-op for green-directory (non-installed) runs.
         VelopackApp.Build().Run();
 
-        // A second double-click must not open another copy: signal the running instance to come
-        // forward and leave. This also stops concurrent aliyunpan renewals fighting over config.
-        _instanceGuard = new SingleInstanceGuard();
+        NetdiskAdminAccess.Initialize(e.Args);
+        if (NetdiskAdminAccess.IsRequested && !NetdiskAdminAccess.IsEnabled)
+        {
+            MessageBox.Show(
+                "网盘管理入口需要同时使用特殊启动参数和“以管理员身份运行”。",
+                "办公助理", MessageBoxButton.OK, MessageBoxImage.Information);
+            Environment.Exit(0);
+        }
+
+        // A second double-click must not open another copy. An administrator launch never sends
+        // its privileged argument to an existing ordinary process, nor starts a second backup.
+        // The exit-request callback is the hotkey hand-off: the elevated copy asks the running
+        // ordinary copy to quit so the user never has to find the tray menu themselves.
+        _instanceGuard = new SingleInstanceGuard(
+            signalExistingInstance: !NetdiskAdminAccess.IsRequested,
+            onExitRequested: () => (MainWindow as MainWindow)?.ExitForAdminSwitch());
         if (!_instanceGuard.IsFirst)
         {
-            // StartupUri cannot be cleared: WPF's setter rejects null with ArgumentNullException,
-            // so the old "clear it and shut down" crashed the second copy (APPCRASH in WER)
-            // instead of leaving quietly. Exit right here — nothing has been initialised yet and
-            // the first copy is already being activated by the guard.
-            _instanceGuard.Dispose();
-            Environment.Exit(0);
+            if (NetdiskAdminAccess.IsRequested &&
+                TryTakeOverAfterExistingInstanceExit())
+            {
+                AppLog.Info("管理员入口已接替正在运行的普通实例");
+            }
+            else
+            {
+                if (NetdiskAdminAccess.IsRequested)
+                {
+                    MessageBox.Show(
+                        "请先从托盘退出当前办公助理，再以管理员方式启动网盘管理入口。",
+                        "办公助理", MessageBoxButton.OK, MessageBoxImage.Information);
+                }
+
+                _instanceGuard.Dispose();
+                Environment.Exit(0);
+            }
         }
 
         base.OnStartup(e);
@@ -110,6 +135,30 @@ public partial class App : Application
         _instanceGuard?.Dispose();
         _instanceGuard = null;
         base.OnExit(e);
+    }
+
+    /// <summary>
+    /// Admin-launch hand-off: the running ordinary copy was asked to exit; poll for the
+    /// single-instance mutex it releases on shutdown (the graceful exit stops the backup
+    /// service first, so this normally completes within a second or two).
+    /// </summary>
+    private bool TryTakeOverAfterExistingInstanceExit()
+    {
+        _instanceGuard?.Dispose();
+        for (int attempt = 0; attempt < 30; attempt++)
+        {
+            Thread.Sleep(300);
+            var guard = new SingleInstanceGuard(signalExistingInstance: false);
+            if (guard.IsFirst)
+            {
+                _instanceGuard = guard;
+                return true;
+            }
+
+            guard.Dispose();
+        }
+
+        return false;
     }
 
     private static string GetVersion() =>

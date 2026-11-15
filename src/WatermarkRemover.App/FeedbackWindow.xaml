@@ -39,9 +39,8 @@
                  Background="{DynamicResource SurfaceBrush}" Foreground="{DynamicResource TextPrimaryBrush}"
                  BorderBrush="{DynamicResource BorderBrush}" Padding="10,8" FontSize="13"/>
 
-        <TextBlock Grid.Row="6" TextWrapping="Wrap" FontSize="12" Margin="0,12,0,0"
-                   Foreground="{DynamicResource TextSecondaryBrush}"
-                   Text="将附带：软件版本、系统信息、该次操作的日志和识别记录。不会上传你的文档内容。反馈先存本机，再上传阿里云盘私有目录。"/>
+        <TextBlock x:Name="PrivacyText" Grid.Row="6" TextWrapping="Wrap" FontSize="12" Margin="0,12,0,0"
+                   Foreground="{DynamicResource TextSecondaryBrush}"/>
 
         <StackPanel Grid.Row="7" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
             <TextBlock x:Name="StatusText" VerticalAlignment="Center" Margin="0,0,12,0" FontSize="12"

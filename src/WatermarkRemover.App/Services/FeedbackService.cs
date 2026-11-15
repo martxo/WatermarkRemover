@@ -51,11 +51,14 @@ internal sealed class FeedbackService
 
     private readonly AppSettings _settings;
     private readonly ISecretProtector _protector;
+    private readonly bool _allowCloudUpload;
 
-    public FeedbackService(AppSettings settings, ISecretProtector protector)
+    public FeedbackService(
+        AppSettings settings, ISecretProtector protector, bool allowCloudUpload = true)
     {
         _settings = settings;
         _protector = protector;
+        _allowCloudUpload = allowCloudUpload;
     }
 
     /// <summary>本地反馈目录（上传成功前反馈一直留在这里）。</summary>
@@ -88,6 +91,12 @@ internal sealed class FeedbackService
         string localPath = Path.Combine(AppFolders.FeedbackDirectory, $"{id}.json");
         await File.WriteAllTextAsync(localPath, json, Encoding.UTF8, cancellationToken)
             .ConfigureAwait(false);
+
+        if (!_allowCloudUpload)
+        {
+            AppLog.Info($"随手反馈已保存到本机：{id}（操作 {operationId ?? "未关联"}）");
+            return new FeedbackResult(true, "已保存到本机，感谢你的反馈。", localPath);
+        }
 
         try
         {

@@ -49,11 +49,9 @@ public sealed class AppSettings
     public bool CheckUpdatesOnStartup { get; set; } = true;
 
     /// <summary>
-    /// HTTP mirror of the cloud update repository (腾讯云广州服务器), tried BEFORE 阿里云盘 for
-    /// every manifest and chunk: direct domestic connection, no CDN throttle, no signed-URL hop.
-    /// Empty string disables the mirror. A failed fetch (timeout/5xx) falls back to 阿里云盘
-    /// transparently, and two consecutive failures trip a per-process circuit breaker so an
-    /// unreachable mirror never adds its connect timeout to every chunk.
+    /// 腾讯云 HTTP 镜像，应用的主更新通道（已下线的阿里云盘通道不再参与）：国内直连、只做增量，
+    /// 服务器上只保留最近几个版本真正需要的分块。空字符串表示不配置镜像，更新直接走 GitHub。
+    /// 镜像连不上或当前版本不在保留窗口内时，由调用方改走 GitHub 全量安装包兜底。
     /// </summary>
     public string UpdateMirrorUrl { get; set; } = "http://106.52.57.36/wm-update-feed/";
 
@@ -203,6 +201,30 @@ public sealed class AppSettings
     /// <summary>Account name paired with <see cref="NetdiskLastProviderId"/>.</summary>
     public string NetdiskLastAccountName { get; set; } = string.Empty;
 
+    /// <summary>管理员已授权的后台目录备份；普通模式只执行，不展示配置或上传状态。</summary>
+    public bool AutomaticBackupEnabled { get; set; }
+
+    public string AutomaticBackupRootDirectory { get; set; } = string.Empty;
+
+    public string AutomaticBackupProviderId { get; set; } = string.Empty;
+
+    public string AutomaticBackupAccountName { get; set; } = string.Empty;
+
+    public string AutomaticBackupDrive { get; set; } = "资源库";
+
+    public string AutomaticBackupRemoteDirectory { get; set; } = "/桌面文件备份";
+
+    /// <summary>授权范围与目的地指纹；配置改变后必须重新确认，防止静默扩大上传范围。</summary>
+    public string AutomaticBackupConsentFingerprint { get; set; } = string.Empty;
+
+    public DateTimeOffset? AutomaticBackupConsentedAtUtc { get; set; }
+
+    /// <summary>文件稳定多少秒后上传（1-3600；非正数回退内置 15 秒）。</summary>
+    public int AutomaticBackupStableSeconds { get; set; } = 15;
+
+    /// <summary>多少分钟全量补扫一次（1-1440；非正数回退内置 30 分钟）。</summary>
+    public int AutomaticBackupRescanMinutes { get; set; } = 30;
+
     /// <summary>Deep copy: safe to hand to background work while the original keeps being edited.</summary>
     public AppSettings Clone() => new()
     {
@@ -239,5 +261,15 @@ public sealed class AppSettings
         NetdiskUploadDirectory = NetdiskUploadDirectory,
         NetdiskLastProviderId = NetdiskLastProviderId,
         NetdiskLastAccountName = NetdiskLastAccountName,
+        AutomaticBackupEnabled = AutomaticBackupEnabled,
+        AutomaticBackupRootDirectory = AutomaticBackupRootDirectory,
+        AutomaticBackupProviderId = AutomaticBackupProviderId,
+        AutomaticBackupAccountName = AutomaticBackupAccountName,
+        AutomaticBackupDrive = AutomaticBackupDrive,
+        AutomaticBackupRemoteDirectory = AutomaticBackupRemoteDirectory,
+        AutomaticBackupConsentFingerprint = AutomaticBackupConsentFingerprint,
+        AutomaticBackupConsentedAtUtc = AutomaticBackupConsentedAtUtc,
+        AutomaticBackupStableSeconds = AutomaticBackupStableSeconds,
+        AutomaticBackupRescanMinutes = AutomaticBackupRescanMinutes,
     };
 }

@@ -20,14 +20,17 @@ public sealed class NetdiskCoordinator : ObservableObject
     private readonly AppSettings _settings;
     private readonly IDialogService _dialogs;
     private readonly Func<bool> _isBusy;
+    private readonly bool _isNetdiskAdmin;
     private string _summaryText = "未配置网盘账号。";
     private NetdiskWindow? _window;
 
-    public NetdiskCoordinator(AppSettings settings, IDialogService dialogs, Func<bool> isBusy)
+    public NetdiskCoordinator(
+        AppSettings settings, IDialogService dialogs, Func<bool> isBusy, bool isNetdiskAdmin = true)
     {
         _settings = settings ?? throw new ArgumentNullException(nameof(settings));
         _dialogs = dialogs ?? throw new ArgumentNullException(nameof(dialogs));
         _isBusy = isBusy ?? throw new ArgumentNullException(nameof(isBusy));
+        _isNetdiskAdmin = isNetdiskAdmin;
 
         Catalog = new NetdiskProviderCatalog();
         Catalog.RegisterDiscovered(typeof(WatermarkRemover.Netdisk.AliyunDriveProvider).Assembly, AppLog.Trace);
@@ -42,13 +45,19 @@ public sealed class NetdiskCoordinator : ObservableObject
             Upsert,
             (providerId, name) => Remove(providerId, name),
             AppLog.Trace);
+        Transfer = new NetdiskTransferService(
+            Catalog,
+            (providerId, name) => Accounts.FirstOrDefault(a =>
+                a.ProviderId == providerId && a.Name == name),
+            Upsert);
         // A login may finish on the 设置 page or in the management window's own panel; both share
         // this state object, so listening here makes the freshly authorized account the one that
         // is opened next (and switches an already-open window) instead of resurrecting the
         // previously selected product.
         Settings.AccountSaved += OnAccountSaved;
-        OpenCommand = new RelayCommand(Open);
-        QuickUploadCommand = new RelayCommand(() => _ = QuickUploadAsync(), () => !_isBusy());
+        OpenCommand = new RelayCommand(Open, () => _isNetdiskAdmin);
+        QuickUploadCommand = new RelayCommand(
+            () => _ = QuickUploadAsync(), () => _isNetdiskAdmin && !_isBusy());
         RefreshSummary();
     }
 
@@ -57,6 +66,8 @@ public sealed class NetdiskCoordinator : ObservableObject
 
     /// <summary>Configured accounts, plaintext in memory; secrets are protected on save.</summary>
     public ObservableCollection<NetdiskAccountState> Accounts { get; }
+
+    internal NetdiskTransferService Transfer { get; }
 
     /// <summary>The 「网盘设置」 group state: dynamic credential form, test connection, OAuth.</summary>
     public NetdiskAccountSettingViewModel Settings { get; }
@@ -75,6 +86,9 @@ public sealed class NetdiskCoordinator : ObservableObject
     /// <summary>The host's busy state changed — re-evaluate the quick-upload gate.</summary>
     public void RefreshCommandState() => QuickUploadCommand.RaiseCanExecuteChanged();
 
+    /// <summary>Explicit account deletion; token refreshes use Upsert and never raise this event.</summary>
+    public event Action<string, string>? AccountRemoved;
+
     /// <summary>True when an account is configured — gates the row and batch upload entry points.</summary>
     public bool HasAccounts => Accounts.Count > 0;
 
@@ -89,6 +103,8 @@ public sealed class NetdiskCoordinator : ObservableObject
     public async Task<IReadOnlyList<(string Path, string Error)>> UploadFilesAsync(IReadOnlyList<string> files)
     {
         ArgumentNullException.ThrowIfNull(files);
+        if (!_isNetdiskAdmin)
+            return files.Select(f => (f, "当前模式不允许手动上传")).ToList();
         if (files.Count == 0) return Array.Empty<(string, string)>();
 
         if (!HasAccounts)
@@ -103,25 +119,12 @@ public sealed class NetdiskCoordinator : ObservableObject
         SummaryText = $"正在上传 {files.Count} 个文件到「{account.Name}」…";
         try
         {
-            await using var session = await provider.ConnectAsync(account.ToCredentials());
-            string folderId = await ResolveUploadFolderAsync(session);
-            foreach (string path in files)
+            failures.AddRange(await Transfer.UploadFilesAsync(CreateUploadTarget(account), files));
+            foreach (var (path, error) in failures)
             {
-                try
-                {
-                    await session.UploadAsync(folderId, path);
-                    AppLog.Trace($"网盘上传：{path}", null);
-                }
-                catch (Exception ex)
-                {
-                    AppLog.Trace($"网盘上传失败：{path}（{ex.Message}）", ex);
-                    failures.Add((path, ex.Message));
-                }
+                AppLog.Trace($"网盘上传失败：{path}（{error}）", null);
             }
 
-            // Tokens may have rotated during the upload — write the latest bag back.
-            Upsert(new NetdiskAccountState(
-                account.ProviderId, account.Name, session.CurrentCredentials.Values));
             SummaryText = failures.Count == 0
                 ? $"已上传 {files.Count} 个文件到「{account.Name}」（{provider.DisplayName}）。"
                 : $"已上传 {files.Count - failures.Count}/{files.Count} 个文件，" +
@@ -129,7 +132,6 @@ public sealed class NetdiskCoordinator : ObservableObject
         }
         catch (Exception ex)
         {
-            // The connection itself failed: every file in this batch carries the same reason.
             AppLog.Trace($"网盘上传失败：{ex.Message}", ex);
             SummaryText = $"上传失败：{ex.Message}";
             return files.Select(f => (f, ex.Message)).ToList();
@@ -138,30 +140,12 @@ public sealed class NetdiskCoordinator : ObservableObject
         return failures;
     }
 
-    /// <summary>
-    /// Switches to the configured storage space and ensures the configured remote folder exists.
-    /// Empty settings mean "account default drive / drive root".
-    /// </summary>
-    private async Task<string> ResolveUploadFolderAsync(INetdiskSession session)
-    {
-        string driveName = _settings.NetdiskUploadDrive?.Trim() ?? string.Empty;
-        if (driveName.Length > 0)
-        {
-            var drive = session.Drives.FirstOrDefault(d =>
-                string.Equals(d.Name, driveName, StringComparison.OrdinalIgnoreCase));
-            if (drive is null)
-            {
-                AppLog.Trace($"网盘上传：未找到存储盘「{driveName}」，使用账号默认盘。", null);
-            }
-            else if (!string.Equals(drive.Id, session.CurrentDriveId, StringComparison.Ordinal))
-            {
-                await session.SwitchDriveAsync(drive.Id);
-            }
-        }
-
-        string directory = _settings.NetdiskUploadDirectory?.Trim() ?? string.Empty;
-        return directory.Length == 0 ? string.Empty : await session.EnsureFolderAsync(directory);
-    }
+    private NetdiskUploadTarget CreateUploadTarget(NetdiskAccountState account) =>
+        new(
+            account.ProviderId,
+            account.Name,
+            _settings.NetdiskUploadDrive?.Trim() ?? string.Empty,
+            _settings.NetdiskUploadDirectory?.Trim() ?? string.Empty);
 
     /// <summary>
     /// Adds the stable CLI login as an app account when no 阿里云盘 account is configured. This
@@ -183,6 +167,15 @@ public sealed class NetdiskCoordinator : ObservableObject
     /// <summary>Inserts or replaces the account with the same product + name, then persists.</summary>
     public void Upsert(NetdiskAccountState account)
     {
+        var dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher is not null && !dispatcher.CheckAccess())
+        {
+            // Token refresh may finish on the backup worker. Do not block it on Dispatcher.Invoke:
+            // the UI thread can be waiting for that same worker during shutdown.
+            dispatcher.BeginInvoke(() => Upsert(account));
+            return;
+        }
+
         var existing = Accounts.FirstOrDefault(a => a.ProviderId == account.ProviderId && a.Name == account.Name);
         if (existing is null)
         {
@@ -212,6 +205,8 @@ public sealed class NetdiskCoordinator : ObservableObject
         {
             Persist();
             RefreshSummary();
+            foreach (var account in removed)
+                AccountRemoved?.Invoke(account.ProviderId, account.Name);
         }
 
         return removed.Count > 0;
@@ -230,6 +225,12 @@ public sealed class NetdiskCoordinator : ObservableObject
 
     private void RefreshSummary()
     {
+        if (!_isNetdiskAdmin)
+        {
+            SummaryText = string.Empty;
+            return;
+        }
+
         SummaryText = Accounts.Count == 0
             ? "未配置网盘账号，请先在「设置 → 网盘设置」中添加。"
             : $"已配置 {Accounts.Count} 个账号：{string.Join("、", Accounts.Select(a => a.Name))}";
@@ -238,6 +239,8 @@ public sealed class NetdiskCoordinator : ObservableObject
     /// <summary>Opens the management window; a second click just activates the open one.</summary>
     private void Open()
     {
+        if (!_isNetdiskAdmin) return;
+
         if (_window is { IsLoaded: true })
         {
             _window.Activate();
@@ -316,6 +319,8 @@ public sealed class NetdiskCoordinator : ObservableObject
     /// </summary>
     public (string DriveName, string RemotePath)? BrowseForUploadFolder()
     {
+        if (!_isNetdiskAdmin) return null;
+
         if (!HasAccounts)
         {
             _dialogs.Warn("还没有配置网盘账号。请先在「设置 → 网盘设置」中添加一个账号。", "选择上传目录");
@@ -334,6 +339,8 @@ public sealed class NetdiskCoordinator : ObservableObject
     /// <summary>Upload picked files to the first configured account's root folder.</summary>
     private async Task QuickUploadAsync()
     {
+        if (!_isNetdiskAdmin) return;
+
         if (Accounts.Count == 0)
         {
             SummaryText = "未配置网盘账号，请先在「设置 → 网盘设置」中添加。";
@@ -358,17 +365,12 @@ public sealed class NetdiskCoordinator : ObservableObject
         SummaryText = $"正在上传 {files.Length} 个文件到「{account.Name}」…";
         try
         {
-            await using var session = await provider.ConnectAsync(account.ToCredentials());
-            string folderId = await ResolveUploadFolderAsync(session);
             foreach (var path in files)
             {
-                await session.UploadAsync(folderId, path);
+                await Transfer.UploadFileAsync(CreateUploadTarget(account), path);
                 AppLog.Trace($"网盘快速上传：{path}", null);
             }
 
-            // Tokens may have rotated during the upload — write the latest bag back.
-            Upsert(new NetdiskAccountState(
-                account.ProviderId, account.Name, session.CurrentCredentials.Values));
             SummaryText = $"已上传 {files.Length} 个文件到「{account.Name}」（{provider.DisplayName}）。";
         }
         catch (Exception ex)

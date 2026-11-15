@@ -18,11 +18,14 @@ public partial class FeedbackWindow : Window
     private bool _submitting;
 
     public FeedbackWindow(AppSettings settings, ISecretProtector protector,
-        string? operationId, string? contextText)
+        string? operationId, string? contextText, bool allowCloudUpload = true)
     {
         InitializeComponent();
-        _service = new FeedbackService(settings, protector);
+        _service = new FeedbackService(settings, protector, allowCloudUpload);
         _operationId = operationId;
+        PrivacyText.Text = allowCloudUpload
+            ? "将附带：软件版本、系统信息、该次操作的日志和识别记录。不会上传你的文档内容。反馈先存本机，再上传阿里云盘私有目录。"
+            : "将附带：软件版本、系统信息、该次操作的日志和识别记录。不会包含你的文档内容。反馈仅保存到本机。";
         if (!string.IsNullOrWhiteSpace(contextText))
         {
             ContextText.Text = $"关联操作：{contextText}";

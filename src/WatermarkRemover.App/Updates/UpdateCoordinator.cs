@@ -182,19 +182,20 @@ public static class UpdateCoordinator
     }
 
     /// <summary>
-    /// The GitHub/Velopack fallback as a callback for the cloud channel: invoked when the cloud
-    /// download dies on a network it cannot fix, so the update still completes in one session.
-    /// Portable (green-directory) copies have no Velopack feed — they keep the old guidance.
+    /// The GitHub/Velopack fallback as a callback for the mirror channel: invoked when the
+    /// mirror download dies on a network it cannot fix, so the update still completes in one
+    /// session. Portable (green-directory) copies have no Velopack feed — they keep the old
+    /// guidance.
     /// </summary>
     private static async Task RunVelopackFallbackAsync(Window? owner, IDialogService dialogs, bool silent)
     {
         if (!VelopackUpdateService.IsChannelUsable)
         {
-            AppLog.Info("云盘通道失败且 Velopack 通道不可用（解压版无增量源）");
+            AppLog.Info("镜像通道失败且 Velopack 通道不可用（解压版无增量源）");
             if (!silent)
             {
                 dialogs.Warn(
-                    "云更新失败，当前版本不受影响。\n\n原因：阿里云盘 CDN 对当前网络持续限流，" +
+                    "更新失败，当前版本不受影响。\n\n原因：更新镜像不可用，" +
                     "且解压版没有 GitHub 增量源。\n\n可稍后重试，或换一个网络环境再试。",
                     "软件更新");
             }
@@ -225,12 +226,11 @@ public static class UpdateCoordinator
             return;
         }
 
-        // 阿里云盘 is the primary channel: file-level chunks, version records and rollback. It
-        // only declines (false) when no account is configured or the cloud repository is
-        // unreachable, so GitHub/Velopack stay as the fallback. The same fallback also runs
-        // when the cloud download itself dies under the user (shared-IP CDN throttle, seen on
-        // 出差外地 machines): one click must still end in an updated app.
-        if (await CloudUpdateCoordinator.TryRunAsync(
+        // 腾讯云镜像是主更新通道：文件级分块、无需账号、无 CDN 限流。它只在没配镜像地址、
+        // 镜像不可达、或当前版本不在镜像保留窗口内时才退回（false），GitHub/Velopack 继续兜底。
+        // 镜像下载本身死在用户手里时（服务器宕机、出差外地网络）走同一个兜底：一次点击
+        // 必须换来一个更新完成的程序，而不是一个错误弹窗。
+        if (await MirrorUpdateCoordinator.TryRunAsync(
                 owner, dialogs, settings, silent,
                 () => RunVelopackFallbackAsync(owner, dialogs, silent)).ConfigureAwait(true))
         {

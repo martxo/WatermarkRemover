@@ -16,15 +16,18 @@ internal sealed class SingleInstanceGuard : IDisposable
 {
     private const string MutexName = "WatermarkRemover.App.SingleInstance";
     private const string ActivateEventName = "WatermarkRemover.App.Activate";
+    private const string ExitEventName = "WatermarkRemover.App.ExitRequest";
     private const int SwRestore = 9;
 
     private readonly Mutex _mutex;
     private readonly EventWaitHandle _activateEvent;
+    private readonly EventWaitHandle _exitEvent;
     private readonly bool _isFirst;
     private RegisteredWaitHandle? _wait;
+    private RegisteredWaitHandle? _exitWait;
     private bool _disposed;
 
-    public SingleInstanceGuard()
+    public SingleInstanceGuard(bool signalExistingInstance = true, Action? onExitRequested = null)
     {
         _mutex = new Mutex(initiallyOwned: false, MutexName);
 
@@ -48,15 +51,44 @@ internal sealed class SingleInstanceGuard : IDisposable
             _wait = ThreadPool.RegisterWaitForSingleObject(
                 _activateEvent, (_, _) => ActivateMainWindow(), null,
                 Timeout.Infinite, executeOnlyOnce: false);
+
+            // The elevated admin relaunch asks the running (non-elevated) copy to stand down:
+            // this graceful exit is what hands the single-instance mutex over, so the new
+            // process never needs the user to quit the app manually first.
+            if (onExitRequested is not null)
+            {
+                _exitEvent = new EventWaitHandle(
+                    initialState: false, EventResetMode.AutoReset, ExitEventName, out _);
+                _exitWait = ThreadPool.RegisterWaitForSingleObject(
+                    _exitEvent, (_, _) => Application.Current?.Dispatcher.BeginInvoke(onExitRequested),
+                    null, Timeout.Infinite, executeOnlyOnce: true);
+            }
+            else
+            {
+                _exitEvent = new EventWaitHandle(
+                    initialState: false, EventResetMode.AutoReset, ExitEventName, out _);
+            }
         }
         else
         {
-            // Wake the running copy; this process shuts down immediately afterwards.
-            _activateEvent.Set();
+            _exitEvent = new EventWaitHandle(
+                initialState: false, EventResetMode.AutoReset, ExitEventName, out _);
+            if (signalExistingInstance)
+            {
+                // Wake the running copy; this process shuts down immediately afterwards.
+                _activateEvent.Set();
+            }
         }
     }
 
     public bool IsFirst => _isFirst;
+
+    /// <summary>Asks the first instance (via the exit event) to exit gracefully.</summary>
+    public void RequestExistingExit()
+    {
+        try { _exitEvent.Set(); }
+        catch (ObjectDisposedException) { /* racing shutdown; nothing to signal */ }
+    }
 
     private static void ActivateMainWindow()
     {
@@ -89,7 +121,9 @@ internal sealed class SingleInstanceGuard : IDisposable
         _disposed = true;
 
         _wait?.Unregister(null);
+        _exitWait?.Unregister(null);
         _activateEvent.Dispose();
+        _exitEvent.Dispose();
         if (_isFirst)
         {
             try { _mutex.ReleaseMutex(); }

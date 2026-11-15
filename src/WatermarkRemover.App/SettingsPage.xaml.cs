@@ -77,7 +77,8 @@ public partial class SettingsPage : UserControl
         if (Window.GetWindow(this) is not { } window) return;
         var dialog = new FeedbackWindow(
             ViewModel?.Settings ?? Main?.Settings ?? new AppSettings(),
-            new Services.DpapiSecretProtector(), null, null)
+            new Services.DpapiSecretProtector(), null, null,
+            ViewModel?.IsNetdiskAdmin ?? Main?.IsNetdiskAdmin ?? false)
         {
             Owner = window,
         };
@@ -90,7 +91,8 @@ public partial class SettingsPage : UserControl
         if (Window.GetWindow(this) is not { } window) return;
         var dialog = new FeedbackWindow(
             ViewModel?.Settings ?? Main?.Settings ?? new AppSettings(),
-            new Services.DpapiSecretProtector(), e.OperationId, e.ContextText)
+            new Services.DpapiSecretProtector(), e.OperationId, e.ContextText,
+            ViewModel?.IsNetdiskAdmin ?? Main?.IsNetdiskAdmin ?? false)
         {
             Owner = window,
         };
@@ -98,6 +100,27 @@ public partial class SettingsPage : UserControl
     }
 
     private void OnDiscardClick(object sender, RoutedEventArgs e) => Main?.DiscardAndExitSettings();
+
+    private void OnAutomaticBackupConfigurationChanged(object sender, RoutedEventArgs e) =>
+        ViewModel?.NotifyAutomaticBackupChanged();
+
+    private void OnAutomaticBackupConfigurationTextChanged(object sender, TextChangedEventArgs e) =>
+        ViewModel?.NotifyAutomaticBackupChanged();
+
+    private void OnBrowseAutomaticBackupDirectory(object sender, RoutedEventArgs e)
+    {
+        if (ViewModel is not { IsNetdiskAdmin: true }) return;
+
+        var dialog = new OpenFolderDialog { Title = "选择自动备份监控目录" };
+        string current = ViewModel?.Settings.AutomaticBackupRootDirectory ?? string.Empty;
+        if (Directory.Exists(current)) dialog.InitialDirectory = current;
+        if (Window.GetWindow(this) is not { } window || dialog.ShowDialog(window) != true) return;
+        if (ViewModel is { } vm)
+        {
+            vm.Settings.AutomaticBackupRootDirectory = dialog.FolderName;
+            vm.NotifyAutomaticBackupChanged();
+        }
+    }
 
     private void OnSuffixTextChanged(object sender, TextChangedEventArgs e) =>
         ViewModel?.NotifySuffixChanged();
@@ -273,20 +296,14 @@ public partial class SettingsPage : UserControl
     }
 
     /// <summary>
-    /// Opens the 云更新中心. The window owns the cloud check/download/rollback flow; the login
-    /// button just switches this page to the 网盘设置 section so the existing scan login can run.
+    /// Opens the 云更新中心. The window owns the mirror check/download flow.
     /// </summary>
     private void OnOpenCloudUpdate(object sender, RoutedEventArgs e)
     {
-        if (ViewModel is not { } vm || Window.GetWindow(this) is not { } window) return;
+        if (ViewModel is not { IsNetdiskAdmin: true } vm || Window.GetWindow(this) is not { } window) return;
 
-        CloudUpdateWindow? dialog = null;
-        var cloud = new CloudUpdateViewModel(vm.SourceSettings, new Services.DialogService(window), () =>
-        {
-            dialog?.Close();
-            vm.SelectedNav = vm.NavItems.First(n => n.Id == "netdisk");
-        });
-        dialog = new CloudUpdateWindow(cloud) { Owner = window };
+        var cloud = new CloudUpdateViewModel(vm.SourceSettings, new Services.DialogService(window));
+        var dialog = new CloudUpdateWindow(cloud) { Owner = window };
         dialog.ShowDialog();
         vm.NotifyCloudChanged();
     }

@@ -1,4 +1,4 @@
-﻿﻿using WatermarkRemover.App.Services;
+﻿﻿﻿﻿using WatermarkRemover.App.Services;
 using WatermarkRemover.App.ViewModels;
 
 namespace WatermarkRemover.Tests.App;
@@ -124,5 +124,33 @@ public sealed class ScanPendingTests : IDisposable
         Assert.True(vm.HasPendingTasks);
         Assert.Equal(1, vm.PendingTaskCount); // 只算那个要重新处理的文件
         Assert.Contains("待处理.pdf", vm.PendingTasksText);
+    }
+
+    [Fact]
+    public void Ordinary_mode_neither_restores_nor_discards_a_hidden_upload_pending_entry()
+    {
+        string pdf = NewPdf("历史上传.pdf");
+        NewPending().Save(new[]
+        {
+            new PendingTaskEntry("watermark.badge", pdf, DateTime.Now) { Kind = "upload" },
+        });
+        var vm = new MainViewModel(
+            new FakeDialogs(), new FakeShell(), NewJournal(),
+            composition: new WatermarkRemover.App.AppComposition(isNetdiskAdmin: false),
+            pendingJournal: NewPending());
+
+        try
+        {
+            Assert.DoesNotContain(vm.NavItems, item => item.Feature.Id == "netdisk.page");
+            Assert.False(vm.HasPendingTasks);
+            Assert.Equal(0, vm.PendingTaskCount);
+            Assert.Empty(vm.PendingTasksText);
+            Assert.False(vm.ResumePendingCommand.CanExecute(null));
+            Assert.Single(NewPending().Load());
+        }
+        finally
+        {
+            vm.Shutdown();
+        }
     }
 }

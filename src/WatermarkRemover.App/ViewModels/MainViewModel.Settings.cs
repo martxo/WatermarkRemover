@@ -66,6 +66,9 @@ public sealed partial class MainViewModel
     /// <summary>The 网盘 section's state (products, accounts, management window, quick upload).</summary>
     public NetdiskCoordinator Netdisk { get; }
 
+    /// <summary>The process-wide authorized backup worker; never enters the visible job board.</summary>
+    public AutomaticBackupService AutomaticBackup { get; }
+
     /// <summary>The settings page view model; non-null only while the page is open.</summary>
     public SettingsViewModel? SettingsPage
     {
@@ -76,8 +79,13 @@ public sealed partial class MainViewModel
     /// <summary>Enters the settings second-level page (fresh working copy each time).</summary>
     public void OpenSettings()
     {
-        var page = new SettingsViewModel(Settings, _dialogs, _shell, netdisk: Netdisk.Settings,
-            browseUploadFolder: Netdisk.BrowseForUploadFolder);
+        var page = new SettingsViewModel(
+            Settings, _dialogs, _shell,
+            netdisk: Netdisk.Settings,
+            browseUploadFolder: Netdisk.BrowseForUploadFolder,
+            isNetdiskAdmin: IsNetdiskAdmin,
+            backupAccounts: Netdisk.Accounts,
+            automaticBackup: AutomaticBackup);
         page.RefreshLog();
         SettingsPage = page;
         IsSettingsOpen = true;
@@ -187,6 +195,8 @@ public sealed partial class MainViewModel
             return false;
         }
 
+        if (!ValidateAndAuthorizeAutomaticBackup(page)) return false;
+
         page.Commit();
         if (!SaveSettings())
         {
@@ -197,6 +207,8 @@ public sealed partial class MainViewModel
                 "保存失败");
             return false;
         }
+        ApplyAutomaticBackupStartup();
+        _ = ApplyAutomaticBackupConfigurationAsync();
         CloseSettings();
         return true;
     }
@@ -263,8 +275,119 @@ public sealed partial class MainViewModel
         SaveSettings();
     }
 
+    private bool ValidateAndAuthorizeAutomaticBackup(SettingsViewModel page)
+    {
+        if (!IsNetdiskAdmin || !page.Settings.AutomaticBackupEnabled) return true;
+
+        // 管理员可调的节奏参数：给出清晰边界，超界不保存（输入框清空时 WPF 绑定不写回，保持原值）。
+        if (page.Settings.AutomaticBackupStableSeconds is < 1 or > 3600)
+        {
+            _dialogs.Warn("文件稳定时间需在 1-3600 秒之间。", "自动备份");
+            return false;
+        }
+
+        if (page.Settings.AutomaticBackupRescanMinutes is < 1 or > 1440)
+        {
+            _dialogs.Warn("补扫间隔需在 1-1440 分钟之间。", "自动备份");
+            return false;
+        }
+
+        string fingerprint;
+        try
+        {
+            page.Settings.AutomaticBackupRootDirectory =
+                AutomaticBackupFileFilter.NormalizeRoot(page.Settings.AutomaticBackupRootDirectory);
+            fingerprint = AutomaticBackupFileFilter.ConsentFingerprint(page.Settings);
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException)
+        {
+            _dialogs.Warn($"自动备份配置无效：{ex.Message}", "自动备份");
+            return false;
+        }
+
+        if (!Directory.Exists(page.Settings.AutomaticBackupRootDirectory))
+        {
+            _dialogs.Warn("监控目录不存在，请选择一个已存在的目录。", "自动备份");
+            return false;
+        }
+
+        if (!HasAutomaticBackupAccount(page.Settings))
+        {
+            _dialogs.Warn("请选择仍然存在的上传账号。", "自动备份");
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(page.Settings.AutomaticBackupDrive) ||
+            string.IsNullOrWhiteSpace(page.Settings.AutomaticBackupRemoteDirectory))
+        {
+            _dialogs.Warn("请填写存储盘和云端目录。", "自动备份");
+            return false;
+        }
+
+        if (AutomaticBackupFileFilter.HasValidConsent(page.Settings)) return true;
+
+        bool consented = _dialogs.Confirm(
+            "即将启用目录自动监控与后台上传：\n\n" +
+            $"监控目录：{page.Settings.AutomaticBackupRootDirectory}（包含子目录）\n" +
+            "文件类型：PDF、常见图片、Office 文档、ZIP/RAR\n" +
+            $"上传账号：{page.Settings.AutomaticBackupProviderId} / {page.Settings.AutomaticBackupAccountName}\n" +
+            $"云端目的地：{page.Settings.AutomaticBackupDrive} / {page.Settings.AutomaticBackupRemoteDirectory}\n\n" +
+            "文件稳定后会自动上传；修改会再次上传，本地改名或删除不会删除云端旧文件。" +
+            "普通模式不显示该功能。只有明确同意以上内容后才会开始。",
+            "授权自动备份");
+        if (!consented) return false;
+
+        page.Settings.AutomaticBackupConsentFingerprint = fingerprint;
+        page.Settings.AutomaticBackupConsentedAtUtc = DateTimeOffset.UtcNow;
+        return true;
+    }
+
+    private bool HasAutomaticBackupAccount(AppSettings settings) =>
+        Netdisk.Accounts.Any(account =>
+            account.ProviderId == settings.AutomaticBackupProviderId &&
+            account.Name == settings.AutomaticBackupAccountName);
+
+    private void OnAutomaticBackupAccountsChanged()
+    {
+        ApplyAutomaticBackupStartup();
+        _ = ApplyAutomaticBackupConfigurationAsync();
+    }
+
+    private void ApplyAutomaticBackupStartup()
+    {
+        bool enabled = Settings.AutomaticBackupEnabled &&
+                       AutomaticBackupFileFilter.HasValidConsent(Settings) &&
+                       HasAutomaticBackupAccount(Settings);
+        try
+        {
+            AutomaticBackupStartup.Apply(enabled);
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("自动备份登录启动注册失败", ex);
+            if (IsNetdiskAdmin && !NetdiskAdminAccess.IsBackground)
+                _dialogs.Warn($"自动备份登录启动注册失败：{ex.Message}", "自动备份");
+        }
+    }
+
+    private async Task ApplyAutomaticBackupConfigurationAsync()
+    {
+        try
+        {
+            var configuration = Settings.Clone();
+            if (!HasAutomaticBackupAccount(configuration))
+                configuration.AutomaticBackupEnabled = false;
+            await AutomaticBackup.ApplyConfigurationAsync(configuration).ConfigureAwait(true);
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error("应用自动备份配置失败", ex);
+        }
+    }
+
     private void CloseSettings()
     {
+        SettingsPage?.Detach();
         IsSettingsOpen = false;
         SettingsPage = null;
     }

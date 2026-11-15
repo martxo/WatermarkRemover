@@ -81,6 +81,32 @@ public class FeedbackServiceTests
         Assert.Equal(Environment.MachineName, record.Machine);
     }
 
+    [Fact]
+    public async Task Ordinary_mode_saves_feedback_locally_without_attempting_cloud_upload()
+    {
+        var service = new FeedbackService(
+            new AppSettings(), new DpapiSecretProtector(), allowCloudUpload: false);
+        string? localPath = null;
+
+        try
+        {
+            FeedbackResult result = await service.SubmitAsync(
+                null, "reports", "普通模式反馈", null);
+            localPath = result.LocalPath;
+
+            Assert.True(result.Ok);
+            Assert.Equal("已保存到本机，感谢你的反馈。", result.Message);
+            Assert.True(File.Exists(localPath));
+            using var json = System.Text.Json.JsonDocument.Parse(
+                await File.ReadAllTextAsync(localPath));
+            Assert.Equal("普通模式反馈", json.RootElement.GetProperty("userText").GetString());
+        }
+        finally
+        {
+            if (localPath is not null && File.Exists(localPath)) File.Delete(localPath);
+        }
+    }
+
     /// <summary>建一个只含一个 app-*.log 的临时目录，返回目录路径（调用方负责删除）。</summary>
     private static string WriteTempLog(string[] lines)
     {

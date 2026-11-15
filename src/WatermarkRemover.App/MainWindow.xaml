@@ -1919,12 +1919,19 @@
                                                    FontSize="12" FontWeight="SemiBold"
                                                    VerticalAlignment="Center"
                                                    Margin="0,0,8,0"
-                                                   ToolTip="{Binding UploadTip}"
-                                                   Visibility="{Binding ShowUploadChip, Converter={StaticResource BoolToVis}}">
+                                                   ToolTip="{Binding UploadTip}">
                                             <TextBlock.Style>
                                                 <Style TargetType="TextBlock">
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
                                                     <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}"/>
                                                     <Style.Triggers>
+                                                        <MultiDataTrigger>
+                                                            <MultiDataTrigger.Conditions>
+                                                                <Condition Binding="{Binding ShowUploadChip}" Value="True"/>
+                                                                <Condition Binding="{Binding DataContext.IsNetdiskAdmin, RelativeSource={RelativeSource AncestorType=Window}}" Value="True"/>
+                                                            </MultiDataTrigger.Conditions>
+                                                            <Setter Property="Visibility" Value="Visible"/>
+                                                        </MultiDataTrigger>
                                                         <DataTrigger Binding="{Binding Upload}" Value="Uploaded">
                                                             <Setter Property="Foreground" Value="{StaticResource SuccessBrush}"/>
                                                         </DataTrigger>

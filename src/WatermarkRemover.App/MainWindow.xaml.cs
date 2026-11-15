@@ -5,6 +5,7 @@ using System.ComponentModel;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Interop;
 using System.Runtime.InteropServices;
 using Microsoft.Win32;
 using WatermarkRemover.App.Logging;
@@ -26,6 +27,47 @@ public partial class MainWindow : Window
     [DllImport("dwmapi.dll", PreserveSig = true)]
     private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
 
+    // ---- 前台激活权辅助：拿不到激活权的窗口不会被合成上屏，见 EnsureVisibleWithoutForegroundRights ----
+
+    private const uint FlashwStop = 0;
+    private const uint FlashwTray = 2;
+    private const uint FlashwTimerNofg = 12; // FLASHW_TIMERNOFG
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+
+    [DllImport("kernel32.dll")]
+    private static extern uint GetCurrentThreadId();
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool BringWindowToTop(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetForegroundWindow(IntPtr hWnd);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct FLASHWINFO
+    {
+        public uint cbSize;
+        public IntPtr hwnd;
+        public uint dwFlags;
+        public uint uCount;
+        public uint dwTimeout;
+    }
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool FlashWindowEx(ref FLASHWINFO pwfi);
+
     private readonly MainViewModel _viewModel = new();
     private readonly Services.IDialogService _dialogs = new Services.DialogService();
 
@@ -35,6 +77,10 @@ public partial class MainWindow : Window
     private GlobalHotkeyService? _fullScreenHotkeys;
     private GlobalHotkeyService? _shelfHotkeys;
 
+    /// <summary>Hidden admin entry (Ctrl+Alt+Shift+B) that relaunches the app elevated for the
+    /// netdisk management mode. Deliberately absent from every UI surface.</summary>
+    private GlobalHotkeyService? _netdiskHotkeys;
+
     /// <summary>The gestures currently registered (null when none); restored if a new one fails.</summary>
     private ScreenshotHotkey? _activeHotkey;
     private ScreenshotHotkey? _activeFullScreenHotkey;
@@ -43,6 +89,9 @@ public partial class MainWindow : Window
     private ScreenshotShelfWindow? _shelf;
     private TrayIconService? _tray;
     private bool _forceExit;
+
+    /// <summary>Set by the admin hotkey hand-off: Close() must not ask the busy-exit prompt.</summary>
+    private bool _adminSwitchExit;
     private WindowState _hiddenWindowState = WindowState.Normal;
 
     // Thumbnail gestures of a screenshot row: click copies, dragging hands the file to the target.
@@ -135,6 +184,8 @@ public partial class MainWindow : Window
         SourceInitialized += (_, _) =>
             AppLog.Info($"SourceInitialized 事件：{App.BootClock.Elapsed.TotalMilliseconds:0} ms");
         Loaded += OnWindowLoaded;
+        // 任务栏闪烁只是"我起来了"的提示，用户一点亮（激活）就停。
+        Activated += (_, _) => StopAttentionFlash();
     }
 
     /// <summary>
@@ -191,17 +242,30 @@ public partial class MainWindow : Window
         // visibility sync and the list stayed collapsed until the next scan added a row. Sync
         // once now that the bindings are live.
         SyncListVisibility();
-        // Explorer/double-click launches are usually allowed to take the foreground; calling
-        // Activate also covers a launch that started behind an already-open browser window.
-        Activate();
-        // 新默认设置的一次性提示（F1 / 全部识别 / 微信 OCR）：只询问，绝不静默覆盖已存选择。
-        try
+        if (NetdiskAdminAccess.IsBackground)
         {
-            _viewModel.OfferNewDefaultsOnce();
+            // Logon backup starts in the tray without taking the foreground or showing one-time UI.
+            _hiddenWindowState = WindowState.Normal;
+            Hide();
         }
-        catch (Exception ex)
+        else
         {
-            AppLog.Error("新默认设置提示失败", ex);
+            // Explorer/double-click launches are usually allowed to take the foreground; calling
+            // Activate also covers a launch that started behind an already-open browser window.
+            Activate();
+            // 启动上下文可能拿不到前台激活权（IDE 终端 / 脚本 / 更新器重启等不授予前台的启动方式）：
+            // 未激活的 WPF 窗口根本不会被合成上屏——DWM 直接透视，用户看到的就是"没有窗口"，
+            // 与挂死无异。先按普通启动的方式把前台抢回来；抢不回就闪烁任务栏按钮，点一下即显示。
+            EnsureVisibleWithoutForegroundRights();
+            // 新默认设置的一次性提示（F1 / 全部识别 / 微信 OCR）：只询问，绝不静默覆盖已存选择。
+            try
+            {
+                _viewModel.OfferNewDefaultsOnce();
+            }
+            catch (Exception ex)
+            {
+                AppLog.Error("新默认设置提示失败", ex);
+            }
         }
         // The line exists from startup: hovering the top edge must work even before the first
         // screenshot; it stays above the screen until the pointer asks for it.
@@ -244,8 +308,10 @@ public partial class MainWindow : Window
         _hotkeys = new GlobalHotkeyService(hwnd, 0x5348, OnScreenshotHotkey);
         _fullScreenHotkeys = new GlobalHotkeyService(hwnd, 0x534B, OnFullScreenHotkey);
         _shelfHotkeys = new GlobalHotkeyService(hwnd, 0x534A, OnShelfHotkey);
+        _netdiskHotkeys = new GlobalHotkeyService(hwnd, 0x4E44, OnNetdiskAdminHotkey);
         long t3 = App.BootClock.ElapsedMilliseconds;
         RegisterScreenshotHotkeys();
+        RegisterNetdiskAdminHotkey();
         long t4 = App.BootClock.ElapsedMilliseconds;
 
         _tray = new TrayIconService(hwnd, ShowFromTray, () => _ = _viewModel.CaptureScreenshotAsync(),
@@ -274,11 +340,143 @@ public partial class MainWindow : Window
         Focus();
     }
 
+    /// <summary>
+    /// A launch context that cannot grant the foreground (IDE terminal, script, updater
+    /// relaunch) leaves the window unactivated — and an unactivated WPF window is never
+    /// composited: DWM shows straight through it, so the user sees no window at all and the
+    /// app looks hung. Take the foreground the way a shell launch would; if Windows refuses,
+    /// flash the taskbar until the user clicks it (the documented attention pattern).
+    /// </summary>
+    private void EnsureVisibleWithoutForegroundRights()
+    {
+        if (IsActive) return;
+        // 等 Show 的收尾（首帧渲染）排完再动前台，避免打断 WPF 的呈现序列。
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            if (IsActive) return;
+            if (TryForceForeground()) return;
+            AppLog.Info("启动时未获得前台激活权，改闪任务栏按钮提示");
+            StartAttentionFlash();
+        }), System.Windows.Threading.DispatcherPriority.Background);
+    }
+
+    /// <summary>
+    /// Steals the foreground like a shell launch does: SetForegroundWindow is refused unless
+    /// the calling thread is attached to the current foreground window's input thread, so
+    /// attach, raise, detach. False when Windows still keeps another window in front.
+    /// </summary>
+    private bool TryForceForeground()
+    {
+        IntPtr handle = new WindowInteropHelper(this).Handle;
+        if (handle == IntPtr.Zero) return false;
+        if (GetForegroundWindow() == handle) return true;
+
+        IntPtr foreground = GetForegroundWindow();
+        uint foregroundProcess;
+        uint foregroundThread = GetWindowThreadProcessId(foreground, out foregroundProcess);
+        uint thisThread = GetCurrentThreadId();
+        bool attached = foregroundThread != thisThread &&
+                        AttachThreadInput(thisThread, foregroundThread, true);
+        try
+        {
+            BringWindowToTop(handle);
+            SetForegroundWindow(handle);
+        }
+        finally
+        {
+            if (attached) AttachThreadInput(thisThread, foregroundThread, false);
+        }
+        return GetForegroundWindow() == handle;
+    }
+
+    /// <summary>Taskbar flash until the window is activated; the Activated handler stops it.</summary>
+    private void StartAttentionFlash() => FlashTaskbar(FlashwTray | FlashwTimerNofg);
+
+    /// <summary>Stops the flash; a no-op when nothing is flashing.</summary>
+    private void StopAttentionFlash() => FlashTaskbar(FlashwStop);
+
+    private void FlashTaskbar(uint flags)
+    {
+        IntPtr handle = new WindowInteropHelper(this).Handle;
+        if (handle == IntPtr.Zero) return;
+        var info = new FLASHWINFO
+        {
+            cbSize = (uint)Marshal.SizeOf<FLASHWINFO>(),
+            hwnd = handle,
+            dwFlags = flags,
+            uCount = 0, // 0 + FLASHW_TIMERNOFG：一直闪到窗口被激活为止
+            dwTimeout = 0,
+        };
+        FlashWindowEx(ref info);
+    }
+
     /// <summary>Tray menu exit: the only path that actually ends the process.</summary>
     private void ExitFromTray()
     {
         _forceExit = true;
         Close();
+    }
+
+    /// <summary>Admin hotkey hand-off: the elevated copy has started and asked this ordinary
+    /// instance to stand down. Real exit (no tray hide) so the single-instance mutex is freed.
+    /// Skips the busy-exit prompt: the user already confirmed the switch on the hotkey dialog,
+    /// and a second prompt here would stall the elevated instance waiting for the mutex.</summary>
+    internal void ExitForAdminSwitch()
+    {
+        AppLog.Info("收到管理员切换请求，退出以移交网盘管理入口");
+        _adminSwitchExit = true;
+        _forceExit = true;
+        Close();
+    }
+
+    /// <summary>
+    /// Registers the hidden admin hotkey Ctrl+Alt+Shift+B. Failure is only logged: this entry
+    /// deliberately appears in no UI, so a silent fallback beats a dialog nobody expects.
+    /// </summary>
+    private void RegisterNetdiskAdminHotkey()
+    {
+        string? error = null;
+        bool registered =
+            _netdiskHotkeys?.Register(new ScreenshotHotkey(true, true, true, false, "B"), out error) == true;
+        if (!registered)
+        {
+            AppLog.Info($"网盘管理热键未注册：{error ?? "服务不可用"}");
+        }
+    }
+
+    /// <summary>
+    /// Ctrl+Alt+Shift+B: the whole "特殊方式" to reach the netdisk management mode — one hotkey
+    /// plus the Windows admin confirmation; no "以管理员身份运行" knowledge required. In admin
+    /// mode the same key just brings the netdisk page forward.
+    /// </summary>
+    private void OnNetdiskAdminHotkey()
+    {
+        if (_viewModel.IsNetdiskAdmin)
+        {
+            FeatureNavItemViewModel? netdisk = _viewModel.NavItems
+                .FirstOrDefault(item => item.Feature.Id == "netdisk.page");
+            if (netdisk is not null) _viewModel.SelectedNavItem = netdisk;
+            ShowFromTray();
+            return;
+        }
+
+        if (!_dialogs.ConfirmYesNo(
+                "即将进入网盘管理模式。\n\n点击「是」，然后在 Windows 弹出的确认框中再点「是」；\n当前窗口会自动切换为管理模式。",
+                "网盘管理"))
+        {
+            return;
+        }
+
+        if (NetdiskAdminAccess.TryLaunchElevated(out string? error))
+        {
+            AppLog.Info("热键已请求管理员重启，等待新实例接管");
+            // 不在这里退出：新实例启动后才发退出信号。用户在 Windows 确认框点「否」时，
+            // 新进程不会出现，当前实例照常运行，什么都不丢。
+        }
+        else if (error is not null)
+        {
+            _dialogs.Error("启动网盘管理入口失败：" + error, "网盘管理");
+        }
     }
 
     /// <summary>Windows shutdown/logoff must be allowed through, not turned into a tray hide.</summary>
@@ -533,7 +731,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (!_viewModel.ConfirmExit())
+        if (!_adminSwitchExit && !_viewModel.ConfirmExit())
         {
             e.Cancel = true;
             return;
@@ -552,6 +750,8 @@ public partial class MainWindow : Window
         _hotkeys = null;
         _shelfHotkeys?.Dispose();
         _shelfHotkeys = null;
+        _netdiskHotkeys?.Dispose();
+        _netdiskHotkeys = null;
         _activeHotkey = null;
         _shelf?.Close();
         _shelf = null;
@@ -666,7 +866,8 @@ public partial class MainWindow : Window
     /// 从某条识别记录进来的入口在设置页「识别报告」每一行（带操作号，日志按号切片）。</summary>
     private void OnFeedbackClick(object sender, RoutedEventArgs e)
     {
-        var window = new FeedbackWindow(_viewModel.Settings, new DpapiSecretProtector(), null, null)
+        var window = new FeedbackWindow(
+            _viewModel.Settings, new DpapiSecretProtector(), null, null, _viewModel.IsNetdiskAdmin)
         {
             Owner = this,
         };

@@ -1,4 +1,6 @@
 using System.Collections.ObjectModel;
+using System.Collections.Specialized;
+using System.ComponentModel;
 using System.IO;
 using System.Text;
 using System.Windows;
@@ -12,6 +14,7 @@ using WatermarkRemover.Core.Features;
 using WatermarkRemover.Core.Features.Layout;
 using WatermarkRemover.Core.Features.Ocr;
 using WatermarkRemover.Core.Logging;
+using WatermarkRemover.Core.Netdisk;
 using WatermarkRemover.Core.Recognition;
 using WatermarkRemover.Core.Settings;
 using WatermarkRemover.Imaging.Encoding;
@@ -33,6 +36,8 @@ public sealed class SettingsViewModel : ObservableObject
     private readonly AppSettings _target;
     private readonly IRecognitionReportStore _reportStore;
     private readonly Func<(string DriveName, string RemotePath)?>? _browseUploadFolder;
+    private readonly IReadOnlyList<NetdiskAccountState> _backupAccounts;
+    private readonly AutomaticBackupService? _automaticBackup;
     private int _selectedSuffixIndex = -1;
     private string _newSuffixText = string.Empty;
     private int _logRangeIndex;
@@ -40,6 +45,7 @@ public sealed class SettingsViewModel : ObservableObject
     private string _logStatusText = string.Empty;
     private string _reportsStatusText = string.Empty;
     private string _searchText = string.Empty;
+    private string _automaticBackupRuntimeStatusText = "后台尚未运行。";
     private SettingsNavItemViewModel _selectedNav;
 
     public SettingsViewModel(AppSettings settings)
@@ -49,7 +55,9 @@ public sealed class SettingsViewModel : ObservableObject
 
     internal SettingsViewModel(AppSettings settings, IDialogService dialogs, IShellOpenService shell,
         IRecognitionReportStore? reportStore = null, NetdiskAccountSettingViewModel? netdisk = null,
-        Func<(string DriveName, string RemotePath)?>? browseUploadFolder = null)
+        Func<(string DriveName, string RemotePath)?>? browseUploadFolder = null,
+        bool isNetdiskAdmin = true, IReadOnlyList<NetdiskAccountState>? backupAccounts = null,
+        AutomaticBackupService? automaticBackup = null)
     {
         ArgumentNullException.ThrowIfNull(settings);
         _target = settings;
@@ -58,9 +66,17 @@ public sealed class SettingsViewModel : ObservableObject
         _reportStore = reportStore ?? new RecognitionReportStore();
         Netdisk = netdisk;
         _browseUploadFolder = browseUploadFolder;
+        IsNetdiskAdmin = isNetdiskAdmin;
+        _backupAccounts = backupAccounts ?? Array.Empty<NetdiskAccountState>();
+        _automaticBackup = automaticBackup;
 
         // Edits land on a working copy so "取消" discards them; Commit copies them back.
         Settings = settings.Clone();
+        if (IsNetdiskAdmin && string.IsNullOrWhiteSpace(Settings.AutomaticBackupRootDirectory))
+        {
+            Settings.AutomaticBackupRootDirectory = Environment.GetFolderPath(
+                Environment.SpecialFolder.DesktopDirectory);
+        }
 
         // Settings nav, registered declaratively: a new section only needs a row here plus a
         // matching ContentControl trigger in SettingsPage — the sidebar/search/title follow.
@@ -69,12 +85,13 @@ public sealed class SettingsViewModel : ObservableObject
             new("general", "通用设置", "\uE713", "输出 文件名 后缀 目录 自动命名 去除标注 并发"),
             new("scan", "扫描设置", "\uE7F4", "扫描 色彩 黑白 彩色 灰度 自动 连续 批量 ADF 进纸 扫描仪"),
             new("screenshot", "截图设置", "\uE722", "截图 快捷键 全局热键 保存 目录 PNG 区域 标注 触发 热区 晾衣绳"),
-            new("netdisk", "网盘设置", "\uE753", "网盘 云盘 阿里云盘 授权 令牌 密钥 账号 上传"),
             new("ocr", "OCR 识别", "\uE7C3", "识别 引擎 微信 OCR PP-OCR Windows 文字"),
-            new("updates", "软件更新", "\uE72C", "升级 版本 检查更新 云更新 阿里云盘 增量 回滚 startup"),
+            new("updates", "软件更新", "\uE72C", "升级 版本 检查更新 镜像 增量 回滚 startup"),
             new("logs", "日志与排障", "\uE81C", "诊断 排查 导出 预览 记录"),
             new("reports", "识别报告", "\uE8D6", "识别 报告 类型 字段 坐标 复核 训练 朝向"),
         };
+        if (IsNetdiskAdmin)
+            NavItems.Insert(3, new("netdisk", "网盘设置", "\uE753", "网盘 云盘 阿里云盘 授权 令牌 密钥 账号 上传 自动备份"));
         _selectedNav = NavItems[0];
         NavItems[0].IsSelected = true;
 
@@ -90,7 +107,7 @@ public sealed class SettingsViewModel : ObservableObject
         RefreshLogCommand = new RelayCommand(_ => RefreshLog());
         CopyLogCommand = new RelayCommand(_ => CopyLog());
         ExportLogCommand = new RelayCommand(_ => ExportLog());
-        UploadLogCommand = new RelayCommand(_ => _ = UploadLogAsync());
+        UploadLogCommand = new RelayCommand(_ => _ = UploadLogAsync(), _ => IsNetdiskAdmin);
         OpenLogFolderCommand = new RelayCommand(_ => OpenLogFolder());
         OpenUpdateFolderCommand = new RelayCommand(_ => OpenUpdateFolder());
         CleanUpdateResidueCommand = new RelayCommand(_ => CleanUpdateResidue());
@@ -101,17 +118,25 @@ public sealed class SettingsViewModel : ObservableObject
         OpenReportsFolderCommand = new RelayCommand(_ => OpenReportsFolder());
         RefreshCrashReportsCommand = new RelayCommand(_ => RefreshCrashReports());
         OpenCrashFolderCommand = new RelayCommand(_ => OpenCrashFolder());
-        UploadCrashReportsCommand = new RelayCommand(_ => _ = UploadCrashReportsAsync());
+        UploadCrashReportsCommand = new RelayCommand(_ => _ = UploadCrashReportsAsync(), _ => IsNetdiskAdmin);
         RefreshCrashReports();
 
-        ExportLoginPackCommand = new RelayCommand(() => _ = ExportLoginPackAsync());
-        ImportLoginPackCommand = new RelayCommand(() => ImportLoginPackRequested?.Invoke(this, EventArgs.Empty));
+        ExportLoginPackCommand = new RelayCommand(() => _ = ExportLoginPackAsync(), () => IsNetdiskAdmin);
+        ImportLoginPackCommand = new RelayCommand(
+            () => ImportLoginPackRequested?.Invoke(this, EventArgs.Empty), () => IsNetdiskAdmin);
         LoginPackStatusText = DescribeLoginPack();
 
         // 快速上传位置的「浏览…」：弹云盘目录选择器回填。委托未注入（测试/旧宿主）时按钮置灰。
         BrowseUploadFolderCommand = new RelayCommand(
             _ => BrowseUploadFolder(),
-            _ => _browseUploadFolder is not null);
+            _ => IsNetdiskAdmin && _browseUploadFolder is not null);
+        RefreshAutomaticBackupAccounts();
+        if (Netdisk is not null) Netdisk.AccountSaved += OnAutomaticBackupAccountSaved;
+        if (_backupAccounts is INotifyCollectionChanged accountChanges)
+            accountChanges.CollectionChanged += OnAutomaticBackupAccountsChanged;
+        if (_automaticBackup is not null)
+            _automaticBackup.PropertyChanged += OnAutomaticBackupPropertyChanged;
+        UpdateAutomaticBackupRuntimeStatus();
     }
 
     /// <summary>The working copy the window binds to; untouched on cancel.</summary>
@@ -125,6 +150,7 @@ public sealed class SettingsViewModel : ObservableObject
     {
         get
         {
+            if (!IsNetdiskAdmin) return string.Empty;
             var service = new CloudUpdateService(_target, new DpapiSecretProtector());
             return service.IsConfigured
                 ? $"阿里云盘：已登录「{service.AccountName}」，云更新已启用。"
@@ -171,6 +197,7 @@ public sealed class SettingsViewModel : ObservableObject
 
     private void BrowseUploadFolder()
     {
+        if (!IsNetdiskAdmin) return;
         if (_browseUploadFolder?.Invoke() is { } picked)
         {
             // 根目录回填空串，与"留空 = 该盘根目录"的输入框约定一致。
@@ -181,6 +208,7 @@ public sealed class SettingsViewModel : ObservableObject
 
     private async Task ExportLoginPackAsync()
     {
+        if (!IsNetdiskAdmin) return;
         try
         {
             var service = new CloudUpdateService(_target, new DpapiSecretProtector());
@@ -227,6 +255,8 @@ public sealed class SettingsViewModel : ObservableObject
     /// <summary>Called by the view after the file picker returns a pack path.</summary>
     public void ImportLoginPackFrom(string path)
     {
+        if (!IsNetdiskAdmin) return;
+
         try
         {
             CloudUpdateService.ImportLoginPack(path, LoginPackPassphrase);
@@ -267,6 +297,107 @@ public sealed class SettingsViewModel : ObservableObject
     /// <summary>Netdisk account section; accounts persist on their own timeline (instant),
     /// independent of the settings working copy / Commit.</summary>
     public NetdiskAccountSettingViewModel? Netdisk { get; }
+
+    public bool IsNetdiskAdmin { get; }
+
+    public ObservableCollection<AutomaticBackupAccountOption> AutomaticBackupAccounts { get; } = new();
+
+    public AutomaticBackupAccountOption? SelectedAutomaticBackupAccount
+    {
+        get => AutomaticBackupAccounts.FirstOrDefault(a =>
+            a.ProviderId == Settings.AutomaticBackupProviderId && a.Name == Settings.AutomaticBackupAccountName);
+        set
+        {
+            Settings.AutomaticBackupProviderId = value?.ProviderId ?? string.Empty;
+            Settings.AutomaticBackupAccountName = value?.Name ?? string.Empty;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(AutomaticBackupConsentText));
+        }
+    }
+
+    public string AutomaticBackupConsentText =>
+        AutomaticBackupFileFilter.HasValidConsent(Settings)
+            ? $"已授权：{Settings.AutomaticBackupConsentedAtUtc:yyyy-MM-dd HH:mm}（UTC）"
+            : "首次启用或范围/账号/目的地变化后，保存时需要管理员明确授权。";
+
+    public string AutomaticBackupRuntimeStatusText
+    {
+        get => _automaticBackupRuntimeStatusText;
+        private set => SetProperty(ref _automaticBackupRuntimeStatusText, value);
+    }
+
+    public string LogPanelDescriptionText => IsNetdiskAdmin
+        ? "查看执行记录，可导出或上传到云盘用于分析问题。日志默认只保存在本机、保留 7 天，只有主动点击上传才会发出。"
+        : "查看最近一段时间的执行记录，可复制或导出用于分析问题。日志只保存在本机，保留 7 天。";
+
+    public string CrashPanelDescriptionText => IsNetdiskAdmin
+        ? "程序异常时会自动生成本机诊断包，最多保留 10 个，不含文档内容；管理员可选择上传。"
+        : "程序异常时会自动生成本机诊断包（版本、系统、异常、最近日志），最多保留 10 个，不含文档内容。";
+
+    private void RefreshAutomaticBackupAccounts()
+    {
+        AutomaticBackupAccounts.Clear();
+        foreach (var account in _backupAccounts)
+            AutomaticBackupAccounts.Add(new AutomaticBackupAccountOption(
+                account.ProviderId, account.Name, $"{account.ProviderId} · {account.Name}"));
+        OnPropertyChanged(nameof(SelectedAutomaticBackupAccount));
+    }
+
+    private void OnAutomaticBackupAccountSaved(string providerId, string accountName)
+    {
+        RefreshAutomaticBackupAccounts();
+        UpdateAutomaticBackupRuntimeStatus();
+    }
+
+    private void OnAutomaticBackupAccountsChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        RefreshAutomaticBackupAccounts();
+        UpdateAutomaticBackupRuntimeStatus();
+    }
+
+    private void OnAutomaticBackupPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName is nameof(AutomaticBackupService.IsRunning)
+            or nameof(AutomaticBackupService.PendingCount)
+            or nameof(AutomaticBackupService.LastSuccessUtc)
+            or nameof(AutomaticBackupService.LastError))
+            UpdateAutomaticBackupRuntimeStatus();
+    }
+
+    private void UpdateAutomaticBackupRuntimeStatus()
+    {
+        if (_automaticBackup is null)
+        {
+            AutomaticBackupRuntimeStatusText = "后台运行状态将在正式应用中显示。";
+            return;
+        }
+
+        string text = _automaticBackup.IsRunning
+            ? $"后台运行中，待处理 {_automaticBackup.PendingCount} 个文件。"
+            : Settings.AutomaticBackupEnabled
+                ? "后台未运行，请检查授权、监控目录和上传账号。"
+                : "后台未启用。";
+        if (_automaticBackup.LastSuccessUtc is { } success)
+            text += $" 最近成功：{success.ToLocalTime():yyyy-MM-dd HH:mm}。";
+        if (!string.IsNullOrWhiteSpace(_automaticBackup.LastError))
+            text += $" 最近错误：{_automaticBackup.LastError}";
+        AutomaticBackupRuntimeStatusText = text;
+    }
+
+    public void NotifyAutomaticBackupChanged()
+    {
+        OnPropertyChanged(nameof(AutomaticBackupConsentText));
+        UpdateAutomaticBackupRuntimeStatus();
+    }
+
+    internal void Detach()
+    {
+        if (Netdisk is not null) Netdisk.AccountSaved -= OnAutomaticBackupAccountSaved;
+        if (_backupAccounts is INotifyCollectionChanged accountChanges)
+            accountChanges.CollectionChanged -= OnAutomaticBackupAccountsChanged;
+        if (_automaticBackup is not null)
+            _automaticBackup.PropertyChanged -= OnAutomaticBackupPropertyChanged;
+    }
 
     public ObservableCollection<string> QuickSuffixes { get; }
 
@@ -712,6 +843,7 @@ public sealed class SettingsViewModel : ObservableObject
 
     private async Task UploadCrashReportsAsync()
     {
+        if (!IsNetdiskAdmin) return;
         IReadOnlyList<FileInfo> reports = CrashReporter.Reports();
         if (reports.Count == 0)
         {
@@ -781,6 +913,14 @@ public sealed class SettingsViewModel : ObservableObject
         _target.MinimizeToTrayOnClose = Settings.MinimizeToTrayOnClose;
         _target.NetdiskUploadDrive = Settings.NetdiskUploadDrive?.Trim() ?? string.Empty;
         _target.NetdiskUploadDirectory = Settings.NetdiskUploadDirectory?.Trim() ?? string.Empty;
+        _target.AutomaticBackupEnabled = Settings.AutomaticBackupEnabled;
+        _target.AutomaticBackupRootDirectory = Settings.AutomaticBackupRootDirectory?.Trim() ?? string.Empty;
+        _target.AutomaticBackupProviderId = Settings.AutomaticBackupProviderId;
+        _target.AutomaticBackupAccountName = Settings.AutomaticBackupAccountName;
+        _target.AutomaticBackupDrive = Settings.AutomaticBackupDrive?.Trim() ?? string.Empty;
+        _target.AutomaticBackupRemoteDirectory = Settings.AutomaticBackupRemoteDirectory?.Trim() ?? string.Empty;
+        _target.AutomaticBackupConsentFingerprint = Settings.AutomaticBackupConsentFingerprint;
+        _target.AutomaticBackupConsentedAtUtc = Settings.AutomaticBackupConsentedAtUtc;
     }
 
     private void AddSuffix(object? parameter)
@@ -903,6 +1043,7 @@ public sealed class SettingsViewModel : ObservableObject
     /// </summary>
     private async Task UploadLogAsync()
     {
+        if (!IsNetdiskAdmin) return;
         TimeSpan range = SelectedLogRange();
         IReadOnlyList<LogEntry> entries = LogExportService.Collect(range);
         if (entries.Count == 0)
@@ -1008,6 +1149,8 @@ public sealed class SettingsViewModel : ObservableObject
         _ => TimeSpan.FromHours(1),
     };
 }
+
+public sealed record AutomaticBackupAccountOption(string ProviderId, string Name, string DisplayName);
 
 /// <summary>One row in the recognition report list; <see cref="Text"/> is the preview line
 /// and <see cref="Report"/> carries the operation id used to slice logs on feedback.</summary>

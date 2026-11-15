@@ -29,11 +29,14 @@ namespace WatermarkRemover.App.ViewModels;
 public sealed partial class MainViewModel
 {
     /// <summary>Footer gate for 「上传本页全部」: an account exists and something is left to send.</summary>
-    public bool CanUploadBatch => Netdisk.HasAccounts && Board.Jobs.Any(IsUploadCandidate);
+    public bool CanUploadBatch =>
+        IsNetdiskAdmin && Netdisk.HasAccounts && Board.Jobs.Any(IsUploadCandidate);
 
-    public string UploadBatchHint => Netdisk.HasAccounts
-        ? $"把本页已完成的文件上传到「{Netdisk.PrimaryAccountName}」"
-        : "先在「设置 → 网盘设置」中添加网盘账号";
+    public string UploadBatchHint => !IsNetdiskAdmin
+        ? string.Empty
+        : Netdisk.HasAccounts
+            ? $"把本页已完成的文件上传到「{Netdisk.PrimaryAccountName}」"
+            : "先在「设置 → 网盘设置」中添加网盘账号";
 
     /// <summary>A row the batch upload may take: finished, not uploaded yet, file still on disk.</summary>
     private bool IsUploadCandidate(FileJobViewModel job) =>
@@ -215,6 +218,8 @@ public sealed partial class MainViewModel
     /// dies silently, even with no account configured.</summary>
     private async Task UploadJobAsync(FileJobViewModel job)
     {
+        if (!IsNetdiskAdmin) return;
+
         if (job.OutputPath is null || !File.Exists(job.OutputPath))
         {
             job.SetUploadState(UploadState.Failed, "文件已不存在，无法上传");
@@ -236,6 +241,8 @@ public sealed partial class MainViewModel
     /// <summary>Footer 「上传本页全部」: one connection for every candidate row of the section.</summary>
     private async Task UploadVisibleAsync()
     {
+        if (!IsNetdiskAdmin) return;
+
         if (!Netdisk.HasAccounts)
         {
             _dialogs.Warn("还没有配置网盘账号。请先在「设置 → 网盘设置」中添加一个账号。", "上传到网盘");
@@ -376,7 +383,8 @@ public sealed partial class MainViewModel
         string.Equals(entry.Kind, "scan", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>横幅负责的未完成文件数；扫描文档由它自己的记录行承接，不计入这里。</summary>
-    private int UnfinishedTaskCount => _pending.Count(e => !IsScanEntry(e));
+    private int UnfinishedTaskCount => _pending.Count(e =>
+        !IsScanEntry(e) && (IsNetdiskAdmin || e.Kind != "upload"));
 
     /// <summary>Snapshots the batch into the pending file before the first job starts.</summary>
     private void RecordPending(IEnumerable<FileJobViewModel> jobs, string kind = "process")
@@ -458,7 +466,8 @@ public sealed partial class MainViewModel
         if (count == 0) return;
 
         AppLog.Info($"任务中心：丢弃 {count} 个未完成任务记录");
-        _pending.RemoveAll(e => !IsScanEntry(e));
+        _pending.RemoveAll(e =>
+            !IsScanEntry(e) && (IsNetdiskAdmin || e.Kind != "upload"));
         _pendingJournal?.Save(_pending);
         RaisePendingChanged();
     }
@@ -468,7 +477,11 @@ public sealed partial class MainViewModel
     {
         if (IsBusy || _pending.Count == 0) return;
 
-        await ResumeUploadsAsync(_pending.Where(e => e.Kind == "upload").ToList()).ConfigureAwait(true);
+        if (IsNetdiskAdmin)
+        {
+            await ResumeUploadsAsync(
+                _pending.Where(e => e.Kind == "upload").ToList()).ConfigureAwait(true);
+        }
 
         // 扫描文档不能被"重新处理"：它等的是一轮新扫描，承接入口在它自己的行上。
         foreach (var group in _pending
@@ -505,6 +518,8 @@ public sealed partial class MainViewModel
     /// <summary>Continues the uploads an interrupted run left behind; failures stay pending.</summary>
     private async Task ResumeUploadsAsync(IReadOnlyList<PendingTaskEntry> entries)
     {
+        if (!IsNetdiskAdmin) return;
+
         var paths = entries.Select(e => e.InputPath).Where(File.Exists).ToList();
         if (paths.Count == 0) return;
 

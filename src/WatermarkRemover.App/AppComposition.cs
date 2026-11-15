@@ -23,21 +23,26 @@ namespace WatermarkRemover.App;
 /// </summary>
 public sealed class AppComposition
 {
-    private static readonly Lazy<AppComposition> LazyShared = new(() => new AppComposition());
+    private static readonly Lazy<AppComposition> LazyShared = new(
+        () => new AppComposition(NetdiskAdminAccess.IsEnabled));
 
     /// <summary>Process-wide instance used by the shell.</summary>
     public static AppComposition Shared => LazyShared.Value;
 
-    public AppComposition()
+    public AppComposition(bool isNetdiskAdmin = true)
     {
+        IsNetdiskAdmin = isNetdiskAdmin;
         PdfRenderer = new PdfiumPdfPageRenderer();
         // 渲染链诊断（原始位图/PNG/回读验证）走应用日志，排查「放大图底部丢失」用。
         PdfiumPdfPageRenderer.Diagnostics = message => AppLog.Debug(message);
         OcrEngine = ResolveOcrEngine();
-        Features = BuildFeatures(PdfRenderer, OcrEngine);
+        Features = BuildFeatures(PdfRenderer, OcrEngine, IsNetdiskAdmin);
         PdfToolbox = Features.OfType<PdfToolboxFeature>().Single();
         Registry = new FeatureRegistry(Features);
     }
+
+    /// <summary>Whether this elevated, specially launched process may expose netdisk management.</summary>
+    public bool IsNetdiskAdmin { get; }
 
     /// <summary>Stateless page rasteriser shared by OCR, naming and the preview strip.</summary>
     public IPdfPageRenderer PdfRenderer { get; }
@@ -68,7 +73,7 @@ public sealed class AppComposition
     }
 
     private static IReadOnlyList<IFeature> BuildFeatures(
-        IPdfPageRenderer renderer, IOcrEngine ocrEngine)
+        IPdfPageRenderer renderer, IOcrEngine ocrEngine, bool isNetdiskAdmin)
     {
         // 「PDF 工具」：去水印与文字识别合并为一个工作台页（不再各占一个菜单）。PDF 记录走
         // 去水印管线（含智能命名与页面管理），图片记录走 OCR，OCR 也可从记录行就地发起。
@@ -83,7 +88,7 @@ public sealed class AppComposition
         var ocr = new OcrFeature(renderer, ocrEngine, trace: AppLog.Trace,
             imageLoader: ImageOcrInput.LoadAsOcrPng);
 
-        return new IFeature[]
+        var features = new List<IFeature>
         {
             // Scan first: the app opens straight onto the scan page, so a walk-up user can scan
             // without touching navigation. Registration order drives both the sidebar and the
@@ -96,8 +101,9 @@ public sealed class AppComposition
             // 截图 is a tool page like 快速搜索: it produces its own PNG from the desktop, so it
             // never takes part in drop-file routing.
             new ScreenshotFeature(),
-            new NetdiskFeature(),
-            new LanTransferFeature(),
         };
+        if (isNetdiskAdmin) features.Add(new NetdiskFeature());
+        features.Add(new LanTransferFeature());
+        return features;
     }
 }

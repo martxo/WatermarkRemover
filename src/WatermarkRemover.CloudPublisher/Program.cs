@@ -33,6 +33,11 @@ if (options is null)
         "      --latest-file <文件>    使用本地 latest.json（下载接口不可用时）\n" +
         "      --versions-file <文件>  使用本地 versions.json\n" +
         "      --no-gc                 跳过历史清单下载与无引用分块清理\n" +
+        "      --mirror-keep <N>       腾讯云镜像保留最近 N 个版本（默认 3）\n" +
+        "      --mirror-only           只同步腾讯云镜像（不碰云盘）：对已发布版本重算保留窗口、\n" +
+        "                                推送缺失分块并清理窗口外文件，用于镜像瘦身\n" +
+        "      --mirror-publish        把新版本直接发布到腾讯云镜像（不碰云盘）：需要 --version/--source，\n" +
+        "                                清单从发布目录现算、previous 取镜像 latest.json，全程不连接阿里云盘\n" +
         "      --seed-mirror <目录>    把云盘更新仓库整体拉到本地目录并同步到腾讯云镜像\n" +
         "                                （断点续传：本地/镜像上已存在且大小一致的文件都跳过）");
     return 2;
@@ -84,6 +89,45 @@ if (options.SeedMirror is { } seedDir)
     }
 
     return 0;
+}
+
+// Mirror-only mode: re-shape the Tencent mirror for an already-published version without
+// touching 阿里云盘 at all. This is what shrinks the mirror to the retention window: it reads
+// latest.json / versions.json / history/<v>.json straight off the mirror, recomputes the chunk
+// set the retained clients actually need, pushes whatever is missing (when --source gives the
+// published output to slice from) and deletes everything outside the window. --dry-run prints
+// the plan without uploading or deleting anything.
+if (options.MirrorOnly)
+{
+    if (Environment.GetEnvironmentVariable("WM_MIRROR_PASS") is not { Length: > 0 } mirrorOnlyPass)
+    {
+        Console.Error.WriteLine("--mirror-only 需要镜像服务器凭据：环境变量 WM_MIRROR_PASS。");
+        return 2;
+    }
+
+    return await MirrorOnlyAsync(options, mirrorOnlyPass, ct);
+}
+
+// Mirror publish: ship a NEW version straight to the Tencent mirror without touching 阿里云盘.
+// The manifest is computed from --source with previous = the mirror's own latest.json, chunks are
+// sliced from the published payload, and versions.json / history / GC reuse the mirror-only
+// machinery. This is the release path the mirror-as-main-channel architecture actually needs:
+// the drive-based main flow above stays only for setups that still publish to the drive.
+if (options.MirrorPublish)
+{
+    if (Environment.GetEnvironmentVariable("WM_MIRROR_PASS") is not { Length: > 0 } mirrorPubPass)
+    {
+        Console.Error.WriteLine("--mirror-publish 需要镜像服务器凭据：环境变量 WM_MIRROR_PASS。");
+        return 2;
+    }
+
+    if (string.IsNullOrWhiteSpace(options.Version) || !Directory.Exists(options.Source))
+    {
+        Console.Error.WriteLine("--mirror-publish 需要 --version 和 --source（发布目录）。");
+        return 2;
+    }
+
+    return await MirrorPublishAsync(options, mirrorPubPass, ct);
 }
 
 // Private login pack: export the CLI config (device-local paths stripped) and upload it into the
@@ -453,7 +497,10 @@ if (index.Versions.Count > 1 && !options.NoGc)
 PrintSummary(summary);
 
 // ── 更新镜像推送（腾讯云广州服务器，nginx 静态目录）─────────────────────────
-// 发布完云盘后立刻同步镜像，客户端（镜像优先）下一章检查更新即可直连下载。
+// 发布完云盘后立刻同步镜像。镜像就是客户端的主更新通道，所以这里不只是"推送新分块"：
+// 推送集 = 保留窗口内各版本 → 最新版的增量并集，写完全部清单后还要把窗口外的
+// history/&lt;版本&gt;.json 和没有客户端需要的 files/&lt;sha256&gt; 删掉——服务器上只留
+// 最近几个版本真正要用的几十 MB，而不是几个 GB 的历史。
 // 凭据只从环境变量读，绝不进代码/仓库：
 //   WM_MIRROR_HOST / WM_MIRROR_USER / WM_MIRROR_PASS / WM_MIRROR_DIR
 // 未设 WM_MIRROR_PASS 时静默跳过（没配镜像的机器照常只发云盘）。
@@ -462,8 +509,8 @@ if (Environment.GetEnvironmentVariable("WM_MIRROR_PASS") is { Length: > 0 } mirr
     string mirrorHost = Environment.GetEnvironmentVariable("WM_MIRROR_HOST") ?? "106.52.57.36";
     string mirrorUser = Environment.GetEnvironmentVariable("WM_MIRROR_USER") ?? "ubuntu";
     string mirrorDir = Environment.GetEnvironmentVariable("WM_MIRROR_DIR") ?? "/var/www/wm-updates";
-    await PushMirrorAsync(mirrorHost, mirrorUser, mirrorPass, mirrorDir, previous, chunkSources,
-        manifest, index, ct);
+    await PushMirrorAsync(mirrorHost, mirrorUser, mirrorPass, mirrorDir, session, historyId,
+        manifest, index, chunkSources, options.MirrorKeep, ct);
 }
 
 return 0;
@@ -482,75 +529,34 @@ return 0;
 /// </summary>
 static async Task PushMirrorAsync(
     string host, string user, string pass, string dir,
-    CloudManifest? previousManifest,
+    INetdiskSession session, string historyId,
+    CloudManifest manifest, CloudVersionIndex index,
     Dictionary<string, (string path, int offset, int length)> chunkSources,
-    CloudManifest manifest, CloudVersionIndex index, CancellationToken ct)
+    int mirrorKeep, CancellationToken ct)
 {
-    List<string> mirrorChunks = previousManifest is null
-        ? manifest.AllChunkHashes().Distinct(StringComparer.Ordinal).ToList()
-        : manifest.AllChunkHashes()
-            .Except(previousManifest.AllChunkHashes(), StringComparer.Ordinal)
-            .ToList();
-    Console.WriteLine($"      [mirror] 推送 {mirrorChunks.Count} 个分块（新版本 − 上一版本差集）");
+    // 保留窗口：云盘索引（已按 --keep 裁剪）里最新的 mirrorKeep 条。
+    List<CloudVersionSummary> retained = index.Versions
+        .DistinctBy(v => v.Version, StringComparer.OrdinalIgnoreCase)
+        .Take(mirrorKeep)
+        .ToList();
+    MirrorNeededSet need = await ComputeMirrorNeededAsync(
+        manifest, retained, version => DownloadManifestAsync(session, historyId, version), ct)
+        .ConfigureAwait(false);
+
+    Console.WriteLine($"      [mirror] 保留窗口 {string.Join(" → ", need.Retained.Select(v => "v" + v.Version))}，" +
+                      $"推送 {need.Chunks.Count} 个分块");
     Console.WriteLine($"[mirror] 推送更新镜像 {user}@{host}:{dir} …");
     using var sftp = new Renci.SshNet.SftpClient(host, user, pass);
     sftp.Connect();
     Console.WriteLine($"      [mirror] 已连接，工作目录 {sftp.WorkingDirectory}");
     try
     {
-        MirrorEnsureDir(sftp, dir);
-        // SSH.NET 的 UploadFile 不建父目录：history/ 和 files/ 必须显式确保存在，
-        // 否则 history/<版本>.json 一上传就 SftpPathNotFoundException（前两个文件在
-        // dir 根下所以看起来是"成功的"）。
-        MirrorEnsureDir(sftp, $"{dir}/{CloudUpdateFormat.HistoryFolder}");
-        MirrorEnsureDir(sftp, $"{dir}/{CloudUpdateFormat.ChunksFolder}");
-
-        async Task PutAsync(string remote, byte[] bytes)
-        {
-            Console.WriteLine($"      [mirror] 上传 {remote} ({bytes.Length} B)…");
-            using var ms = new MemoryStream(bytes);
-            sftp.UploadFile(ms, remote, true);
-            await Task.CompletedTask;
-        }
-
-        byte[] latest = Encoding.UTF8.GetBytes(CloudUpdateFormat.Serialize(manifest));
-        byte[] versions = Encoding.UTF8.GetBytes(CloudUpdateFormat.Serialize(index));
-        byte[] history = latest;
-        await PutAsync($"{dir}/latest.json", latest);
-        await PutAsync($"{dir}/versions.json", versions);
-        await PutAsync($"{dir}/history/{manifest.Version}.json", history);
-        Console.WriteLine($"      latest.json / versions.json / history/{manifest.Version}.json 已推送");
-
-        string chunkDir = $"{dir}/{CloudUpdateFormat.ChunksFolder}";
-        int done = 0;
-        await Parallel.ForEachAsync(mirrorChunks,
-            new ParallelOptions { MaxDegreeOfParallelism = 4, CancellationToken = ct },
-            async (sha, token) =>
-            {
-                (string path, int offset, int length) = chunkSources[sha];
-                string temp = Path.Combine(Path.GetTempPath(), "wr-mirror", sha);
-                Directory.CreateDirectory(Path.GetDirectoryName(temp)!);
-                await SliceToFileAsync(path, offset, length, temp, token);
-                try
-                {
-                    using var fs = File.OpenRead(temp);
-                    sftp.UploadFile(fs, $"{chunkDir}/{sha}", true);
-                }
-                finally
-                {
-                    File.Delete(temp);
-                }
-                int finished = Interlocked.Increment(ref done);
-                if (finished % 20 == 0 || finished == mirrorChunks.Count)
-                {
-                    Console.WriteLine($"      分块 {finished}/{mirrorChunks.Count}");
-                }
-            });
-        Console.WriteLine($"[mirror] 完成：{mirrorChunks.Count} 个分块 + 3 个清单");
+        await MirrorSyncAsync(sftp, dir, manifest, need, chunkSources, ct).ConfigureAwait(false);
+        Console.WriteLine($"[mirror] 完成：保留 {need.Retained.Count} 个版本、{need.Chunks.Count} 个分块");
     }
     catch (Exception ex)
     {
-        // 镜像推送失败不影响云盘发布结果：客户端会回退云盘，下次发布自动补齐。
+        // 镜像推送失败不影响云盘发布结果：客户端会回退 GitHub，下次发布自动补齐。
         Console.WriteLine($"      [mirror] 推送失败（不影响云盘发布）：{ex.GetType().Name}: {ex.Message}");
         if (ex.InnerException is not null)
         {
@@ -561,6 +567,439 @@ static async Task PushMirrorAsync(
     {
         sftp.Disconnect();
     }
+}
+
+/// <summary>
+/// --mirror-only：对已发布版本单独跑一遍镜像步骤（不连接云盘）。清单全部从镜像上读：
+/// latest.json 是 M_L，versions.json 给出保留窗口，history/&lt;v&gt;.json 是窗口内各版本的清单。
+/// 用于镜像瘦身——当前镜像上堆着几个 GB 的历史分块，跑一次就只剩窗口内客户端真正需要的字节。
+/// </summary>
+static async Task<int> MirrorOnlyAsync(PublishOptions options, string pass, CancellationToken ct)
+{
+    string host = Environment.GetEnvironmentVariable("WM_MIRROR_HOST") ?? "106.52.57.36";
+    string user = Environment.GetEnvironmentVariable("WM_MIRROR_USER") ?? "ubuntu";
+    string dir = Environment.GetEnvironmentVariable("WM_MIRROR_DIR") ?? "/var/www/wm-updates";
+    int keep = options.MirrorKeep;
+
+    using var sftp = new Renci.SshNet.SftpClient(host, user, pass);
+    sftp.Connect();
+    try
+    {
+        CloudManifest? manifest = options.LatestFile is { } latestPath
+            ? ReadManifestFile(latestPath)
+            : await MirrorDownloadJsonAsync<CloudManifest>(
+                    sftp, $"{dir}/{CloudUpdateFormat.LatestFile}", ct).ConfigureAwait(false);
+        if (manifest is null)
+        {
+            Console.Error.WriteLine("镜像上没有可用的 latest.json（可用 --latest-file 指定本地清单）。");
+            return 2;
+        }
+
+        CloudVersionIndex index = options.VersionsFile is { } versionsPath
+            ? ReadIndexFile(versionsPath) ?? new CloudVersionIndex()
+            : await MirrorDownloadJsonAsync<CloudVersionIndex>(
+                    sftp, $"{dir}/{CloudUpdateFormat.VersionsFile}", ct).ConfigureAwait(false)
+              ?? new CloudVersionIndex();
+
+        // 最新版必须置顶；老索引里没有它（被裁剪过/手工维护）就补一条摘要。
+        index.Versions.RemoveAll(v => string.Equals(v.Version, manifest.Version, StringComparison.OrdinalIgnoreCase));
+        index.Versions.Insert(0, new CloudVersionSummary
+        {
+            Version = manifest.Version,
+            PublishedAt = manifest.PublishedAt,
+            Note = manifest.Note,
+            FileCount = manifest.Files.Count,
+            TotalBytes = manifest.TotalBytes,
+            ChangedFiles = manifest.Files.Count,
+            NewChunks = manifest.AllChunkHashes().Count(),
+            NewBytes = manifest.TotalBytes,
+        });
+
+        List<CloudVersionSummary> retained = index.Versions
+            .DistinctBy(v => v.Version, StringComparer.OrdinalIgnoreCase)
+            .Take(keep)
+            .ToList();
+        MirrorNeededSet need = await ComputeMirrorNeededAsync(
+            manifest, retained,
+            version => MirrorDownloadJsonAsync<CloudManifest>(
+                sftp, $"{dir}/{CloudUpdateFormat.HistoryFolder}/{version}.json", ct),
+            ct).ConfigureAwait(false);
+
+        Dictionary<string, int> sizes = manifest.Files.SelectMany(f => f.Chunks)
+            .GroupBy(c => c.Sha256, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.First().Size, StringComparer.Ordinal);
+        long keepBytes = need.Chunks.Sum(sha => sizes.TryGetValue(sha, out int size) ? size : 0);
+        Console.WriteLine($"[mirror-only] 保留窗口 {string.Join(" → ", need.Retained.Select(v => "v" + v.Version))}");
+        Console.WriteLine($"[mirror-only] 需要 {need.Chunks.Count} 个分块 / {FormatBytes(keepBytes)}");
+
+        Dictionary<string, (string Path, int Offset, int Length)>? sources = null;
+        if (!string.IsNullOrEmpty(options.Source) && Directory.Exists(options.Source))
+        {
+            sources = new Dictionary<string, (string, int, int)>(StringComparer.Ordinal);
+            CloudUpdatePlanner.BuildManifest(options.Source, manifest.Version, manifest.Note, null,
+                chunkSources: sources);
+            Console.WriteLine($"[mirror-only] 发布目录 {options.Source}，可切片补推缺失分块");
+        }
+
+        if (options.DryRun)
+        {
+            Console.WriteLine("[mirror-only][dry-run] 不上传、不删除，以下只是计划：");
+            await MirrorPlanAsync(sftp, dir, need, sources).ConfigureAwait(false);
+            return 0;
+        }
+
+        await MirrorSyncAsync(sftp, dir, manifest, need, sources, ct).ConfigureAwait(false);
+        Console.WriteLine($"[mirror-only] 完成：保留 {need.Retained.Count} 个版本、{need.Chunks.Count} 个分块");
+        return 0;
+    }
+    finally
+    {
+        sftp.Disconnect();
+    }
+}
+
+/// <summary>
+/// --mirror-publish：把一个新版本直接发布到腾讯云镜像，全程不连接阿里云盘。
+/// 清单从本地发布目录现算（previous 取镜像上的 latest.json；重发同版本时改取上一条历史，
+/// 摘要才描述真实差异），分块从发布目录切片补推，versions.json / history / GC 复用
+/// --mirror-only 的同一套逻辑。镜像现在是主更新通道，这是它对应的发布路径。
+/// </summary>
+static async Task<int> MirrorPublishAsync(PublishOptions options, string pass, CancellationToken ct)
+{
+    string host = Environment.GetEnvironmentVariable("WM_MIRROR_HOST") ?? "106.52.57.36";
+    string user = Environment.GetEnvironmentVariable("WM_MIRROR_USER") ?? "ubuntu";
+    string dir = Environment.GetEnvironmentVariable("WM_MIRROR_DIR") ?? "/var/www/wm-updates";
+    int keep = options.MirrorKeep;
+
+    using var sftp = new Renci.SshNet.SftpClient(host, user, pass);
+    sftp.Connect();
+    try
+    {
+        CloudManifest? previous = await MirrorDownloadJsonAsync<CloudManifest>(
+            sftp, $"{dir}/{CloudUpdateFormat.LatestFile}", ct).ConfigureAwait(false);
+        CloudVersionIndex index = await MirrorDownloadJsonAsync<CloudVersionIndex>(
+                sftp, $"{dir}/{CloudUpdateFormat.VersionsFile}", ct).ConfigureAwait(false)
+            ?? new CloudVersionIndex();
+
+        Console.WriteLine($"[mirror-publish] v{options.Version}（镜像上一版 {previous?.Version ?? "（空，首发）"}）");
+        if (previous is not null &&
+            string.Equals(previous.Version, options.Version, StringComparison.OrdinalIgnoreCase))
+        {
+            // 重发同版本：diff 基准改取索引里下一条版本的历史清单。
+            string? below = index.Versions.Skip(1).FirstOrDefault()?.Version;
+            previous = below is null
+                ? null
+                : await MirrorDownloadJsonAsync<CloudManifest>(
+                    sftp, $"{dir}/{CloudUpdateFormat.HistoryFolder}/{below}.json", ct).ConfigureAwait(false);
+        }
+
+        var chunkSources = new Dictionary<string, (string Path, int Offset, int Length)>(StringComparer.Ordinal);
+        CloudManifest manifest = CloudUpdatePlanner.BuildManifest(
+            options.Source, options.Version, options.Note, previous, chunkSources: chunkSources);
+        Console.WriteLine(
+            $"      文件 {manifest.Files.Count} 个 / {FormatBytes(manifest.TotalBytes)}，分块 {manifest.AllChunkHashes().Count()} 个");
+
+        // 镜像需求集先算：上传量、摘要里的 NewChunks 都以它为准（而不是全清单），
+        // 否则一次只改 15 个文件的发布会报出「需上传 907 个分块 / 548 MB」的假数字。
+        var mirrorChunks = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var file in sftp.ListDirectory($"{dir}/{CloudUpdateFormat.ChunksFolder}"))
+        {
+            if (!file.IsDirectory && IsChunkName(file.Name)) mirrorChunks.Add(file.Name.ToLowerInvariant());
+        }
+
+        index.Versions.RemoveAll(v => string.Equals(v.Version, manifest.Version, StringComparison.OrdinalIgnoreCase));
+        index.Versions.Insert(0, new CloudVersionSummary { Version = manifest.Version });
+        List<CloudVersionSummary> retained = index.Versions
+            .DistinctBy(v => v.Version, StringComparer.OrdinalIgnoreCase)
+            .Take(keep)
+            .ToList();
+        MirrorNeededSet need = await ComputeMirrorNeededAsync(
+            manifest, retained,
+            version => MirrorDownloadJsonAsync<CloudManifest>(
+                sftp, $"{dir}/{CloudUpdateFormat.HistoryFolder}/{version}.json", ct),
+            ct).ConfigureAwait(false);
+
+        List<string> newChunks = need.Chunks
+            .Where(sha => !mirrorChunks.Contains(sha))
+            .ToList();
+        long newChunkBytes = newChunks.Sum(sha => (long)chunkSources[sha].Length);
+        Console.WriteLine(
+            $"      镜像已有 {mirrorChunks.Count} 个分块；本次需上传 {newChunks.Count} 个 / {FormatBytes(newChunkBytes)}");
+
+        // 占位对象同时被 index.Versions[0] 和 need.Retained[0] 引用，而 versions.json 是由
+        // need.Retained 写出的——必须就地填属性，替换引用只会改到 index.Versions 那一份。
+        CloudVersionSummary summary = index.Versions[0];
+        summary.PublishedAt = manifest.PublishedAt;
+        summary.Note = manifest.Note;
+        summary.FileCount = manifest.Files.Count;
+        summary.TotalBytes = manifest.TotalBytes;
+        summary.ChangedFiles = CountChanged(previous, manifest);
+        summary.DeletedFiles = manifest.Deleted.Count;
+        summary.NewChunks = newChunks.Count;
+        summary.NewBytes = newChunkBytes;
+
+        Console.WriteLine($"[mirror-publish] 保留窗口 {string.Join(" → ", need.Retained.Select(v => "v" + v.Version))}，" +
+                          $"需要 {need.Chunks.Count} 个分块");
+
+        if (options.DryRun)
+        {
+            Console.WriteLine("[mirror-publish][dry-run] 不上传、不删除，以下只是计划：");
+            await MirrorPlanAsync(sftp, dir, need, chunkSources).ConfigureAwait(false);
+            return 0;
+        }
+
+        await MirrorSyncAsync(sftp, dir, manifest, need, chunkSources, ct).ConfigureAwait(false);
+        PrintSummary(summary);
+        Console.WriteLine($"[mirror-publish] 完成：保留 {need.Retained.Count} 个版本、{need.Chunks.Count} 个分块");
+        return 0;
+    }
+    finally
+    {
+        sftp.Disconnect();
+    }
+}
+
+/// <summary>
+/// 镜像需求集：保留窗口内各版本 → 最新版，客户端真正要下载的分块并集。
+/// 对每个保留版本 V：M_L 里整文件哈希与 V 不同的文件，其分块再去掉 V 已有的一部分
+/// （内容定义分块让未改动区域天然复用），剩下的就是一个干净的 V 客户端还缺的字节——
+/// 正是客户端 <c>CloudUpdatePlanner.CreatePlan</c> 算出的 required 集合的超集。
+/// 某个 V 的清单拿不到时退化为全量 M_L：多传不少传，客户端要的是「镜像上有」。
+/// 同时只把「确实拿到清单」的版本放进 Retained——镜像的 versions.json 与 history/ 目录
+/// 严格一一对应，客户端的保留窗口闸门（history/&lt;当前版本&gt;.json）才不会给出假答案。
+/// </summary>
+static async Task<MirrorNeededSet> ComputeMirrorNeededAsync(
+    CloudManifest manifest,
+    List<CloudVersionSummary> retained,
+    Func<string, Task<CloudManifest?>> fetchOld,
+    CancellationToken ct)
+{
+    var chunks = new HashSet<string>(StringComparer.Ordinal);
+    var withManifest = new List<CloudVersionSummary>();
+    foreach (CloudVersionSummary version in retained)
+    {
+        if (string.Equals(version.Version, manifest.Version, StringComparison.OrdinalIgnoreCase))
+        {
+            withManifest.Add(version);
+            continue;
+        }
+
+        CloudManifest? old = await fetchOld(version.Version).ConfigureAwait(false);
+        if (old is null)
+        {
+            Console.WriteLine($"      [mirror] 拿不到 v{version.Version} 的清单，本次退化为推送全量");
+            return new MirrorNeededSet(
+                new HashSet<string>(manifest.AllChunkHashes(), StringComparer.Ordinal), retained);
+        }
+
+        withManifest.Add(version);
+        Dictionary<string, string> oldHashes =
+            old.Files.ToDictionary(f => f.Path, f => f.Sha256, StringComparer.OrdinalIgnoreCase);
+        HashSet<string> oldChunks = old.AllChunkHashes().ToHashSet(StringComparer.Ordinal);
+        foreach (CloudManifestFile file in manifest.Files)
+        {
+            if (oldHashes.TryGetValue(file.Path, out string? sha) &&
+                string.Equals(sha, file.Sha256, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            foreach (CloudChunkRef chunk in file.Chunks)
+            {
+                if (!oldChunks.Contains(chunk.Sha256)) chunks.Add(chunk.Sha256);
+            }
+        }
+    }
+
+    return new MirrorNeededSet(chunks, withManifest);
+}
+
+/// <summary>
+/// 镜像同步主体：写三份清单（versions.json 只保留窗口内的版本）→ 补推缺失的需求分块
+/// （<paramref name="chunkSources"/> 为 null 时只检查不推送）→ 删掉窗口外的 history 清单和
+/// 没有引用的 files 分块。删除只认两种名字：history/&lt;x.y.z&gt;.json 和 files/&lt;64 位十六进制&gt;，
+/// 目录里任何其它文件一律不碰。
+/// </summary>
+static async Task MirrorSyncAsync(
+    Renci.SshNet.SftpClient sftp, string dir,
+    CloudManifest manifest, MirrorNeededSet need,
+    Dictionary<string, (string Path, int Offset, int Length)>? chunkSources,
+    CancellationToken ct)
+{
+    MirrorEnsureDir(sftp, dir);
+    // SSH.NET 的 UploadFile 不建父目录：history/ 和 files/ 必须显式确保存在。
+    MirrorEnsureDir(sftp, $"{dir}/{CloudUpdateFormat.HistoryFolder}");
+    MirrorEnsureDir(sftp, $"{dir}/{CloudUpdateFormat.ChunksFolder}");
+
+    var index = new CloudVersionIndex
+    {
+        UpdatedAt = DateTimeOffset.UtcNow.ToString("O"),
+        Keep = need.Retained.Count,
+        Versions = need.Retained,
+    };
+    byte[] latest = Encoding.UTF8.GetBytes(CloudUpdateFormat.Serialize(manifest));
+    byte[] versions = Encoding.UTF8.GetBytes(CloudUpdateFormat.Serialize(index));
+    await MirrorPutAsync(sftp, $"{dir}/{CloudUpdateFormat.LatestFile}", latest).ConfigureAwait(false);
+    await MirrorPutAsync(sftp, $"{dir}/{CloudUpdateFormat.VersionsFile}", versions).ConfigureAwait(false);
+    await MirrorPutAsync(sftp,
+        $"{dir}/{CloudUpdateFormat.HistoryFolder}/{manifest.Version}.json", latest).ConfigureAwait(false);
+    Console.WriteLine($"      [mirror] latest.json / versions.json（{need.Retained.Count} 个版本）/ " +
+                      $"history/{manifest.Version}.json 已写入");
+
+    string chunkDir = $"{dir}/{CloudUpdateFormat.ChunksFolder}";
+    List<string> missing = need.Chunks
+        .Where(sha => !MirrorChunkPresent(sftp, chunkDir, sha, chunkSources))
+        .ToList();
+    int present = need.Chunks.Count - missing.Count;
+    if (missing.Count > 0 && chunkSources is null)
+    {
+        Console.WriteLine($"      [mirror] 警告：{missing.Count} 个需求分块不在镜像上，" +
+                          "且未提供 --source，无法补推（这些客户端会回退 GitHub）");
+    }
+
+    int pushed = 0;
+    if (missing.Count > 0 && chunkSources is not null)
+    {
+        string tempDir = Path.Combine(Path.GetTempPath(), "wr-mirror", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            await Parallel.ForEachAsync(missing,
+                new ParallelOptions { MaxDegreeOfParallelism = 4, CancellationToken = ct },
+                async (sha, token) =>
+                {
+                    (string path, int offset, int length) = chunkSources[sha];
+                    string temp = Path.Combine(tempDir, sha);
+                    await SliceToFileAsync(path, offset, length, temp, token).ConfigureAwait(false);
+                    try
+                    {
+                        using var fs = File.OpenRead(temp);
+                        sftp.UploadFile(fs, $"{chunkDir}/{sha}", true);
+                    }
+                    finally
+                    {
+                        try { File.Delete(temp); } catch { /* best effort */ }
+                    }
+
+                    int finished = Interlocked.Increment(ref pushed);
+                    if (finished % 20 == 0 || finished == missing.Count)
+                    {
+                        Console.WriteLine($"      分块 {finished}/{missing.Count}");
+                    }
+                }).ConfigureAwait(false);
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, recursive: true); } catch { /* best effort */ }
+        }
+    }
+
+    Console.WriteLine($"      [mirror] 分块：已有 {present} 个，补推 {pushed} 个");
+    MirrorGc(sftp, dir, need);
+}
+
+/// <summary>dry-run 用的镜像盘点：不写不删，只打印同步后会留下什么、删掉什么。</summary>
+static async Task MirrorPlanAsync(
+    Renci.SshNet.SftpClient sftp, string dir, MirrorNeededSet need,
+    Dictionary<string, (string Path, int Offset, int Length)>? chunkSources)
+{
+    HashSet<string> keepHistory = need.Retained
+        .Select(v => $"{v.Version}.json")
+        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+    int historyDrop = 0, chunkDrop = 0, chunkMissing = 0;
+    long dropBytes = 0;
+    foreach (var file in sftp.ListDirectory($"{dir}/{CloudUpdateFormat.HistoryFolder}"))
+    {
+        if (file.IsDirectory || !IsVersionFileName(file.Name)) continue;
+        if (keepHistory.Contains(file.Name)) continue;
+        historyDrop++;
+    }
+
+    foreach (var file in sftp.ListDirectory($"{dir}/{CloudUpdateFormat.ChunksFolder}"))
+    {
+        if (file.IsDirectory || !IsChunkName(file.Name)) continue;
+        if (need.Chunks.Contains(file.Name.ToLowerInvariant())) continue;
+        chunkDrop++;
+        dropBytes += file.Length;
+    }
+
+    foreach (string sha in need.Chunks)
+    {
+        if (!MirrorChunkPresent(sftp, $"{dir}/{CloudUpdateFormat.ChunksFolder}", sha, chunkSources)) chunkMissing++;
+    }
+
+    Console.WriteLine($"      保留：history {keepHistory.Count} 份、files {need.Chunks.Count} 个分块");
+    Console.WriteLine($"      删除：history {historyDrop} 份、files {chunkDrop} 个分块（{FormatBytes(dropBytes)}）");
+    Console.WriteLine($"      需求分块缺失 {chunkMissing} 个" +
+                      (chunkSources is null ? "（未提供 --source，不会补推）" : "（将补推）"));
+    await Task.CompletedTask.ConfigureAwait(false);
+}
+
+/// <summary>分块已在镜像上且大小与切片来源一致时为真；不存在/取不到属性都算缺失，重传幂等。</summary>
+static bool MirrorChunkPresent(
+    Renci.SshNet.SftpClient sftp, string chunkDir, string sha,
+    Dictionary<string, (string Path, int Offset, int Length)>? chunkSources)
+{
+    string remote = $"{chunkDir}/{sha}";
+    if (!sftp.Exists(remote)) return false;
+    if (chunkSources is null) return true; // 没有切片来源时无法校验大小，存在即算数
+    try
+    {
+        return sftp.GetAttributes(remote).Size == chunkSources[sha].Length;
+    }
+    catch (Exception)
+    {
+        return false;
+    }
+}
+
+/// <summary>删掉保留窗口之外的 history 清单和没有引用的 files 分块（只认这两种名字）。</summary>
+static void MirrorGc(Renci.SshNet.SftpClient sftp, string dir, MirrorNeededSet need)
+{
+    HashSet<string> keepHistory = need.Retained
+        .Select(v => $"{v.Version}.json")
+        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+    int historyDeleted = 0;
+    foreach (var file in sftp.ListDirectory($"{dir}/{CloudUpdateFormat.HistoryFolder}"))
+    {
+        if (file.IsDirectory || !IsVersionFileName(file.Name)) continue;
+        if (keepHistory.Contains(file.Name)) continue;
+        sftp.DeleteFile(file.FullName);
+        historyDeleted++;
+    }
+
+    int chunksDeleted = 0;
+    foreach (var file in sftp.ListDirectory($"{dir}/{CloudUpdateFormat.ChunksFolder}"))
+    {
+        if (file.IsDirectory || !IsChunkName(file.Name)) continue;
+        if (need.Chunks.Contains(file.Name.ToLowerInvariant())) continue;
+        sftp.DeleteFile(file.FullName);
+        chunksDeleted++;
+    }
+
+    Console.WriteLine($"      [mirror] 清理：历史清单 {historyDeleted} 份、无引用分块 {chunksDeleted} 个");
+}
+
+/// <summary>只删 <c>&lt;x.y.z&gt;.json</c> 这种版本清单名，目录里的其它文件一律不碰。</summary>
+static bool IsVersionFileName(string name) =>
+    name.EndsWith(".json", StringComparison.OrdinalIgnoreCase) &&
+    Version.TryParse(name[..^5], out _);
+
+static async Task MirrorPutAsync(Renci.SshNet.SftpClient sftp, string remote, byte[] bytes)
+{
+    using var ms = new MemoryStream(bytes);
+    sftp.UploadFile(ms, remote, true);
+    await Task.CompletedTask.ConfigureAwait(false);
+}
+
+static async Task<T?> MirrorDownloadJsonAsync<T>(
+    Renci.SshNet.SftpClient sftp, string remote, CancellationToken ct) where T : class
+{
+    if (!sftp.Exists(remote)) return null;
+    using var ms = new MemoryStream();
+    await Task.Run(() => sftp.DownloadFile(remote, ms), ct).ConfigureAwait(false);
+    return CloudUpdateFormat.TryParse<T>(Encoding.UTF8.GetString(ms.ToArray()));
 }
 
 /// <summary>mkdir -p over SFTP（协议没有递归建目录）。</summary>
@@ -837,10 +1276,13 @@ static PublishOptions? ParseArgs(string[] arguments)
     string? seedMirror = null;
     string note = string.Empty;
     int keep = CloudUpdateFormat.DefaultKeep;
+    int mirrorKeep = 3;
     bool dryRun = false;
     bool exportLogin = false;
     bool probeMove = false;
     bool noGc = false;
+    bool mirrorOnly = false;
+    bool mirrorPublish = false;
 
     for (int i = 0; i < arguments.Length; i++)
     {
@@ -891,13 +1333,25 @@ static PublishOptions? ParseArgs(string[] arguments)
             case "--seed-mirror":
                 seedMirror = ++i < arguments.Length ? arguments[i] : null;
                 break;
+            case "--mirror-keep":
+                if (++i < arguments.Length && int.TryParse(arguments[i], out int mk))
+                {
+                    mirrorKeep = Math.Max(1, mk);
+                }
+                break;
+            case "--mirror-only":
+                mirrorOnly = true;
+                break;
+            case "--mirror-publish":
+                mirrorPublish = true;
+                break;
         }
     }
 
     // The passphrase may also arrive through the environment, which keeps it out of shell history.
     loginPassphrase ??= Environment.GetEnvironmentVariable("WM_LOGIN_PACK_KEY");
 
-    bool toolMode = exportLogin || probeMove ||
+    bool toolMode = exportLogin || probeMove || mirrorOnly || mirrorPublish ||
                     !string.IsNullOrWhiteSpace(probe) || !string.IsNullOrWhiteSpace(importLogin) ||
                     !string.IsNullOrWhiteSpace(seedMirror);
     if (!toolMode &&
@@ -919,7 +1373,10 @@ static PublishOptions? ParseArgs(string[] arguments)
         versionsFile is null ? null : Path.GetFullPath(versionsFile),
         noGc,
         loginPassphrase,
-        seedMirror is null ? null : Path.GetFullPath(seedMirror));
+        seedMirror is null ? null : Path.GetFullPath(seedMirror),
+        mirrorKeep,
+        mirrorOnly,
+        mirrorPublish);
 }
 
 internal sealed record PublishOptions(
@@ -937,4 +1394,10 @@ internal sealed record PublishOptions(
     string? VersionsFile,
     bool NoGc,
     string? LoginPassphrase,
-    string? SeedMirror);
+    string? SeedMirror,
+    int MirrorKeep,
+    bool MirrorOnly,
+    bool MirrorPublish);
+
+/// <summary>The chunk set the retained clients need, plus the versions the mirror can serve.</summary>
+sealed record MirrorNeededSet(HashSet<string> Chunks, List<CloudVersionSummary> Retained);
