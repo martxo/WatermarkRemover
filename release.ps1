@@ -11,13 +11,16 @@
 #            verify every installed file matches the published payload (a Setup that was cut
 #            off halfway used to leave a truncated WatermarkRemover.exe behind, which then
 #            failed to start — the byte-size check catches that before anyone double-clicks).
-#   cloud  — incremental publish to 阿里云盘. If the repository API download times out (seen
-#            repeatedly on this network), the manifests are prefetched with the local aliyunpan
-#            CLI and the publisher is retried with --latest-file/--versions-file --no-gc.
-#   portable — zip the published payload into the green (unzip-and-run) build and upload it to
-#            阿里云盘 /WatermarkRemover/portable/. A green copy carries no Update.exe, so the
-#            app stores settings/journal beside the exe instead of %APPDATA% — testers can run
-#            a new build next to an installed release without either touching the other.
+#   cloud  — incremental publish straight to the Tencent cloud mirror (--mirror-publish). The
+#            manifest is computed from the staged payload with previous = the mirror's own
+#            latest.json, so no drive is involved. The mirror keeps the last 3 versions of
+#            incremental chunks (limited server disk); older clients fall back to GitHub.
+#   portable — opt-in only (not part of -Stage all): zip the published payload into the green
+#            (unzip-and-run) build and upload it to 阿里云盘 /WatermarkRemover/portable/. The
+#            drive stays in service as general cloud storage; updates just don't go through it.
+#            A green copy carries no Update.exe, so the app stores settings/journal beside the
+#            exe instead of %APPDATA% — testers can run a new build next to an installed release
+#            without either touching the other.
 #   github — upload to GitHub Releases, verify the remote current-only feed, commit the version
 #            stamp and push.
 #
@@ -29,7 +32,9 @@
 param(
     [Parameter(Mandatory = $true)]
     [string]$Version,
-    # local | cloud | portable | github | all — all runs local → cloud → portable → github.
+    # local | cloud | portable | github | all — all runs local → cloud → github (portable is
+    # opt-in: packaging the green zip uploads hundreds of MB that the mirror's small disk and
+    # the GitHub release don't need unless someone explicitly asks for it).
     [ValidateSet('local', 'cloud', 'portable', 'github', 'all')]
     [string]$Stage = 'all',
     # Release note shown in the 云更新版本列表 (defaults to the version tag).
@@ -198,31 +203,13 @@ function Invoke-CloudStage {
         throw "缺少 $full — 请先运行 -Stage local"
     }
 
-    Write-Host '== [cloud] publish 阿里云盘 incremental (only changed chunks) =='
-    $exit = Invoke-CloudPublish @()
-    if ($exit -eq 0) { return }
-
-    # The repository manifests live behind a signed download URL; on this network that hop
-    # sometimes times out while the rest of the API works. Prefetch the two manifests with the
-    # CLI (it downloads through its own transport) and let the publisher work offline.
-    Write-Host "  云端清单接口不可用（退出码 $exit），改用 aliyunpan CLI 预取清单后重试…"
-    $cli = Find-AliyunpanCli
-    if (-not $cli) { throw "云发布失败（$exit），且未找到 aliyunpan CLI 可供回退。" }
-
-    $env:ALIYUNPAN_CONFIG_DIR = Join-Path $env:APPDATA 'WatermarkRemover\aliyunpan'
-    $dir = Join-Path $env:TEMP ("wr-cloud-" + $Version + "-" + [guid]::NewGuid().ToString('N'))
-    New-Item -ItemType Directory -Force -Path $dir | Out-Null
-    & $cli download --saveto $dir --ow /WatermarkRemover/latest.json /WatermarkRemover/versions.json
-    if ($LASTEXITCODE -ne 0) { throw "aliyunpan CLI 下载清单失败（$LASTEXITCODE）" }
-
-    $latest = Get-ChildItem -LiteralPath $dir -Recurse -File -Filter 'latest.json' | Select-Object -First 1
-    $versions = Get-ChildItem -LiteralPath $dir -Recurse -File -Filter 'versions.json' | Select-Object -First 1
-    if (-not $latest -or -not $versions) { throw 'CLI 未下载到 latest.json / versions.json' }
-
-    $exit = Invoke-CloudPublish @('--latest-file', $latest.FullName,
-        '--versions-file', $versions.FullName, '--no-gc')
-    if ($exit -ne 0) { throw "云发布重试仍失败（$exit）" }
-    Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
+    # Updates ship exclusively through the Tencent cloud mirror now. The publisher needs
+    # WM_MIRROR_PASS (it exits 2 with a clear message when it is missing). The mirror keeps the
+    # last 3 versions of chunks — the server's disk is small, and clients older than the window
+    # fall back to the GitHub channel, which carries every full package anyway.
+    Write-Host '== [cloud] publish 腾讯云镜像增量更新（保留最近 3 个版本，全程不连阿里云盘） =='
+    $exit = Invoke-CloudPublish @('--mirror-publish', '--mirror-keep', '3')
+    if ($exit -ne 0) { throw "镜像发布失败（$exit）" }
 }
 
 function Invoke-PortableStage {
@@ -384,7 +371,6 @@ switch ($Stage) {
     'all' {
         Invoke-LocalStage
         Invoke-CloudStage
-        Invoke-PortableStage
         Invoke-GitHubStage
     }
 }
