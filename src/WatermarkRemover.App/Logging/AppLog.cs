@@ -17,18 +17,11 @@ namespace WatermarkRemover.App.Logging;
 /// </summary>
 public static class AppLog
 {
-    private const int FlushAfterLines = 16;
-
-    /// <summary>Plain lines are flushed at least this often, so a hard kill loses at most ~1s.</summary>
-    private const long MaxFlushIntervalMs = 1000;
-
     private static readonly object Sync = new();
     private static readonly AsyncLocal<OperationContext?> Ambient = new();
     private static readonly Process Self = Process.GetCurrentProcess();
     private static StreamWriter? _writer;
     private static DateTime _writerDate;
-    private static int _unflushed;
-    private static long _lastFlushTicks = Environment.TickCount64;
     private static int _nextOperationId;
     private static LogLevel _minimumLevel = ResolveMinimumLevel();
 
@@ -188,17 +181,11 @@ public static class AppLog
             lock (Sync)
             {
                 EnsureWriter();
+                // AutoFlush writer: every line is on disk the moment this returns. The old
+                // 16-line/1-second batching only flushed when the NEXT log call happened — an
+                // app that goes quiet right after startup (the normal case) left its last few
+                // lines in the buffer indefinitely, and the log looked cut off mid-startup.
                 _writer!.WriteLine(line);
-                _unflushed++;
-
-                // Flush errors immediately (they are what survives a crash), and otherwise batch:
-                // one cached writer avoids opening/closing the file for every OCR trace line.
-                if (exception is not null ||
-                    _unflushed >= FlushAfterLines ||
-                    Environment.TickCount64 - _lastFlushTicks >= MaxFlushIntervalMs)
-                {
-                    FlushLocked();
-                }
             }
         }
         catch
@@ -220,10 +207,9 @@ public static class AppLog
             new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite),
             new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false))
         {
-            AutoFlush = false,
+            AutoFlush = true,
         };
         _writerDate = today;
-        _unflushed = 0;
     }
 
     /// <summary>Caller holds <see cref="Sync"/>.</summary>
@@ -234,8 +220,6 @@ public static class AppLog
         try
         {
             _writer.Flush();
-            _unflushed = 0;
-            _lastFlushTicks = Environment.TickCount64;
         }
         catch
         {

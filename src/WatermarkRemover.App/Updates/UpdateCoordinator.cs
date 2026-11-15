@@ -145,11 +145,16 @@ public static class UpdateCoordinator
         Window? owner, AppSettings settings, bool silent, bool forceApply = false)
     {
         var dialogs = new DialogService(owner);
+        AppLog.Info($"启动更新检查开始（silent={silent}，startupFlag={settings.CheckUpdatesOnStartup}，configured={UpdateConfig.IsConfigured}）");
 
         // A package downloaded by an earlier session is applied before anything else: this is
         // what makes a plain close-and-reopen ("安装后重启") actually update. Startup checks being
         // disabled or the network being down must not leave a verified package unapplied.
-        if (silent && TryApplyPendingUpdate(dialogs, forceApply)) return;
+        if (silent && TryApplyPendingUpdate(dialogs, forceApply))
+        {
+            AppLog.Info("启动更新检查：已转交待应用更新流程");
+            return;
+        }
 
         if (!UpdateConfig.IsConfigured)
         {
@@ -159,7 +164,11 @@ public static class UpdateCoordinator
             return;
         }
 
-        if (!settings.CheckUpdatesOnStartup && silent) return;
+        if (!settings.CheckUpdatesOnStartup && silent)
+        {
+            AppLog.Info("启动更新检查被设置关闭，跳过");
+            return;
+        }
 
         if (Interlocked.Exchange(ref _running, 1) == 1)
         {
@@ -174,6 +183,7 @@ public static class UpdateCoordinator
         try
         {
             await RunCheckCoreAsync(owner, dialogs, settings, silent).ConfigureAwait(true);
+            AppLog.Info("启动更新检查结束");
         }
         finally
         {
