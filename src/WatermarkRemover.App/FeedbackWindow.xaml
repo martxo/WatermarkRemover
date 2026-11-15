@@ -4,7 +4,7 @@
         Title="问题反馈"
         Width="470" SizeToContent="Height"
         WindowStartupLocation="CenterOwner" ResizeMode="NoResize"
-        ShowInTaskbar="False" Background="{DynamicResource WindowBackgroundBrush}"
+        ShowInTaskbar="False" Background="{DynamicResource PageBrush}"
         TextOptions.TextFormattingMode="Display">
     <Grid Margin="20">
         <Grid.RowDefinitions>
@@ -31,13 +31,13 @@
                  TextWrapping="Wrap" AcceptsReturn="True" VerticalContentAlignment="Top"
                  VerticalScrollBarVisibility="Auto"
                  Background="{DynamicResource SurfaceBrush}" Foreground="{DynamicResource TextPrimaryBrush}"
-                 BorderBrush="{DynamicResource BorderBrush}" Padding="10,8" FontSize="13"/>
+                 BorderBrush="{DynamicResource BorderBrushLight}" Padding="10,8" FontSize="13"/>
 
         <TextBlock Grid.Row="4" Text="联系方式（选填，方便我们回复你）" Style="{StaticResource SectionLabel}"
                    Margin="0,12,0,0"/>
         <TextBox x:Name="ContactBox" Grid.Row="5"
                  Background="{DynamicResource SurfaceBrush}" Foreground="{DynamicResource TextPrimaryBrush}"
-                 BorderBrush="{DynamicResource BorderBrush}" Padding="10,8" FontSize="13"/>
+                 BorderBrush="{DynamicResource BorderBrushLight}" Padding="10,8" FontSize="13"/>
 
         <TextBlock x:Name="PrivacyText" Grid.Row="6" TextWrapping="Wrap" FontSize="12" Margin="0,12,0,0"
                    Foreground="{DynamicResource TextSecondaryBrush}"/>

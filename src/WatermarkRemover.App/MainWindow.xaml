@@ -1239,6 +1239,7 @@
                 <!-- 随手反馈：主界面常驻入口。从某条识别记录进来时会自动带上该次操作号，
                      这里是不关联具体操作的全局入口（只附最近日志尾部）。 -->
                 <Button Style="{StaticResource SmallButton}"
+                        WindowChrome.IsHitTestVisibleInChrome="True"
                         Click="OnFeedbackClick"
                         Margin="14,0,0,0"
                         Padding="10,5"
