@@ -153,6 +153,9 @@ public sealed class AutomaticBackupService : ObservableObject, IDisposable
         NetdiskTransferService transfer)
     {
         ArgumentNullException.ThrowIfNull(transfer);
+        // Overwrite on purpose: an interrupted upload can leave a partial entry under the same
+        // name on the drive (create already ran, complete never did). The retry must replace it,
+        // not auto-rename into "xxx (1)" beside the broken copy.
         return (target, relativeDirectory, localPath, ct) => transfer.UploadFileAsync(
             new NetdiskUploadTarget(
                 target.ProviderId,
@@ -160,7 +163,8 @@ public sealed class AutomaticBackupService : ObservableObject, IDisposable
                 target.DriveName,
                 AutomaticBackupFileFilter.CombineRemoteDirectory(target.RemoteDirectory, relativeDirectory)),
             localPath,
-            ct);
+            ct,
+            overwrite: true);
     }
 
     private FileSystemWatcher CreateWatcher(Generation generation)

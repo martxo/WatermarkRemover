@@ -30,7 +30,8 @@ public sealed class NetdiskTransferService
     public async Task UploadFileAsync(
         NetdiskUploadTarget target,
         string localPath,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool overwrite = false)
     {
         ArgumentNullException.ThrowIfNull(target);
         ArgumentNullException.ThrowIfNull(localPath);
@@ -43,7 +44,7 @@ public sealed class NetdiskTransferService
             await UploadWithSessionAsync(target, account, provider, async (session, folderId) =>
             {
                 await session.UploadAsAsync(
-                    folderId, localPath, Path.GetFileName(localPath), false, null, cancellationToken);
+                    folderId, localPath, Path.GetFileName(localPath), overwrite, null, cancellationToken);
             }, cancellationToken);
         }
         finally
