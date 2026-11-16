@@ -210,7 +210,7 @@ public sealed class AppSettings
 
     public string AutomaticBackupAccountName { get; set; } = string.Empty;
 
-    public string AutomaticBackupDrive { get; set; } = "资源库";
+    public string AutomaticBackupDrive { get; set; } = "备份盘";
 
     public string AutomaticBackupRemoteDirectory { get; set; } = "/桌面文件备份";
 

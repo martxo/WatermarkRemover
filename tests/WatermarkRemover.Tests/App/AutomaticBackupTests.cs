@@ -89,7 +89,7 @@ public sealed class AutomaticBackupTests : IDisposable
             effective.AutomaticBackupRootDirectory);
         Assert.Equal("alipan", effective.AutomaticBackupProviderId);
         Assert.Equal("阿里云盘（本机登录）", effective.AutomaticBackupAccountName);
-        Assert.Equal("资源库", effective.AutomaticBackupDrive);
+        Assert.Equal("备份盘", effective.AutomaticBackupDrive);
         Assert.Equal("/桌面文件备份", effective.AutomaticBackupRemoteDirectory);
         Assert.True(AutomaticBackupFileFilter.HasValidConsent(effective));
         // 授权字段只落在内存里的生效配置，不回写用户的设置对象。
