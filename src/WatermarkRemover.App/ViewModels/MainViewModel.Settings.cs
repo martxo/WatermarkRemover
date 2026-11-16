@@ -355,9 +355,8 @@ public sealed partial class MainViewModel
 
     private void ApplyAutomaticBackupStartup()
     {
-        bool enabled = Settings.AutomaticBackupEnabled &&
-                       AutomaticBackupFileFilter.HasValidConsent(Settings) &&
-                       HasAutomaticBackupAccount(Settings);
+        // 自动默认（无需管理员/授权）：有网盘账号就注册登录自启，账号消失则撤销。
+        bool enabled = AutomaticBackupDefaults.BuildEffective(Settings, Netdisk.Accounts) is not null;
         try
         {
             AutomaticBackupStartup.Apply(enabled);
@@ -374,9 +373,10 @@ public sealed partial class MainViewModel
     {
         try
         {
-            var configuration = Settings.Clone();
-            if (!HasAutomaticBackupAccount(configuration))
-                configuration.AutomaticBackupEnabled = false;
+            // 手动配置优先；否则自动默认（桌面 → 第一个账号的 /桌面文件备份）。
+            // 没有账号时传关闭状态的克隆，让正在运行的服务停下来。
+            var configuration = AutomaticBackupDefaults.BuildEffective(Settings, Netdisk.Accounts)
+                ?? Settings.Clone();
             await AutomaticBackup.ApplyConfigurationAsync(configuration).ConfigureAwait(true);
         }
         catch (Exception ex)

@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using WatermarkRemover.App.Services;
+using WatermarkRemover.Core.Netdisk;
 using WatermarkRemover.Core.Settings;
 
 namespace WatermarkRemover.Tests.App;
@@ -67,6 +68,71 @@ public sealed class AutomaticBackupTests : IDisposable
         changed = settings.Clone();
         changed.AutomaticBackupEnabled = false;
         Assert.False(AutomaticBackupFileFilter.HasValidConsent(changed));
+    }
+
+    [Fact]
+    public void A_logged_in_account_enables_desktop_backup_without_manual_consent()
+    {
+        // 产品决策 2026-11-16：有网盘账号就自动备份桌面，不弹授权、不需要管理员。
+        var settings = new AppSettings();
+        var accounts = new List<NetdiskAccountState>
+        {
+            new("alipan", "阿里云盘（本机登录）", new Dictionary<string, string>()),
+        };
+
+        AppSettings? effective = AutomaticBackupDefaults.BuildEffective(settings, accounts);
+
+        Assert.NotNull(effective);
+        Assert.True(effective!.AutomaticBackupEnabled);
+        Assert.Equal(
+            Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
+            effective.AutomaticBackupRootDirectory);
+        Assert.Equal("alipan", effective.AutomaticBackupProviderId);
+        Assert.Equal("阿里云盘（本机登录）", effective.AutomaticBackupAccountName);
+        Assert.Equal("资源库", effective.AutomaticBackupDrive);
+        Assert.Equal("/桌面文件备份", effective.AutomaticBackupRemoteDirectory);
+        Assert.True(AutomaticBackupFileFilter.HasValidConsent(effective));
+        // 授权字段只落在内存里的生效配置，不回写用户的设置对象。
+        Assert.False(AutomaticBackupFileFilter.HasValidConsent(settings));
+    }
+
+    [Fact]
+    public void A_manual_configuration_wins_and_a_stale_account_reference_falls_back_to_the_first_account()
+    {
+        AppSettings manual = ValidSettings();
+        var accounts = new List<NetdiskAccountState>
+        {
+            new("alipan", "阿里云盘", new Dictionary<string, string>()),
+        };
+
+        // 管理员明确启用的配置原样生效，不被自动默认改写。
+        Assert.Same(manual, AutomaticBackupDefaults.BuildEffective(manual, accounts));
+
+        // 手动配置处于关闭状态：自动默认接管；设置里指向的账号不存在 → 回退第一个账号。
+        AppSettings disabled = ValidSettings();
+        disabled.AutomaticBackupEnabled = false;
+        AppSettings? effective = AutomaticBackupDefaults.BuildEffective(disabled, accounts);
+        Assert.NotNull(effective);
+        Assert.Equal("alipan", effective!.AutomaticBackupProviderId);
+
+        // 设置里指向的账号仍存在时沿用，不跳到别的账号。
+        var present = new List<NetdiskAccountState>
+        {
+            new("stub", "alice", new Dictionary<string, string>()),
+        };
+        effective = AutomaticBackupDefaults.BuildEffective(disabled, present);
+        Assert.NotNull(effective);
+        Assert.Equal("stub", effective!.AutomaticBackupProviderId);
+        Assert.Equal("alice", effective.AutomaticBackupAccountName);
+    }
+
+    [Fact]
+    public void Without_any_account_automatic_defaults_do_not_apply()
+    {
+        var settings = new AppSettings();
+
+        Assert.Null(AutomaticBackupDefaults.BuildEffective(
+            settings, Array.Empty<NetdiskAccountState>()));
     }
 
     [Fact]
