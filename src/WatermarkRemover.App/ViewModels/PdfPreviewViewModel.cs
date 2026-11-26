@@ -84,13 +84,17 @@ public sealed partial class PdfPreviewViewModel : ObservableObject
     /// <summary>Whether blank pages are dropped by themselves after load (scan rows do).</summary>
     private readonly bool _autoCleanBlank;
 
+    /// <summary>Whether a scan inserted/appended into this document is auto-oriented (OCR).
+    /// Follows the OCR setting even for imported PDFs, whose own load is never auto-oriented.</summary>
+    private readonly bool _orientInsertedPages;
+
     /// <summary>每页烤进 PDF 的顺时针 90° 次数（0–3，按页序）。条带的种子图是扫描时未裁决的
     /// 原始画面，只有照样转过去才能和写进文件的方向一致；缺省 = 不转。</summary>
     private readonly IReadOnlyList<int> _pageTurns;
 
-    /// <summary>Host dialog for batch upright: page count in, direction + scope out (null =
-    /// cancelled or no host). Null = the command is unavailable (tests).</summary>
-    private readonly Func<int, BatchUprightChoice?>? _chooseBatchUpright;
+    /// <summary>Host dialog for per-page rotation: the strip's pages in, the chosen clockwise
+    /// quarter turns out (null = cancelled or no host). Null = command unavailable (tests).</summary>
+    private readonly Func<IReadOnlyList<RotatePageItem>, IReadOnlyList<PageRotation>?>? _choosePageRotation;
 
     /// <summary>Scan dataset session directory, when the export switch was on for this scan.
     /// Manual rotations refresh its truth.txt and append to manual-rotations.txt.</summary>
@@ -143,9 +147,10 @@ public sealed partial class PdfPreviewViewModel : ObservableObject
         Func<int, bool>? confirmPageDelete = null,
         IOcrEngine? ocrEngine = null, bool autoOrient = false,
         Action<string>? onRelocated = null, bool autoCleanBlank = false,
+        bool orientInsertedPages = true,
         Func<IProgress<string>, Task<string?>>? scanProvider = null,
         IReadOnlyList<ImageSource>? seedThumbnails = null,
-        Func<int, BatchUprightChoice?>? chooseBatchUpright = null,
+        Func<IReadOnlyList<RotatePageItem>, IReadOnlyList<PageRotation>?>? choosePageRotation = null,
         string? datasetDirectory = null,
         IDialogService? dialogs = null,
         IReadOnlyList<int>? pageTurns = null)
@@ -157,10 +162,11 @@ public sealed partial class PdfPreviewViewModel : ObservableObject
         _autoOrient = autoOrient;
         _onRelocated = onRelocated;
         _autoCleanBlank = autoCleanBlank;
+        _orientInsertedPages = orientInsertedPages;
         _scanProvider = scanProvider;
         _seedThumbnails = seedThumbnails;
         _pageTurns = pageTurns ?? Array.Empty<int>();
-        _chooseBatchUpright = chooseBatchUpright;
+        _choosePageRotation = choosePageRotation;
         _datasetDirectory = datasetDirectory;
         _dialogs = dialogs ?? DialogService.Default;
 
@@ -203,14 +209,11 @@ public sealed partial class PdfPreviewViewModel : ObservableObject
         ZoomOutCommand = new RelayCommand(
             () => ThumbnailScale = Math.Round(ThumbnailScale - ThumbScaleStep, 2),
             () => ThumbnailScale > MinThumbScale + 0.001);
-        AutoOrientCommand = new RelayCommand(
-            () => _ = AutoOrientAsync(reportFailure: true),
-            () => _ocrEngine is not null && !IsOrienting && !IsRotating && PageCount > 0);
-        // 一键批量摆正：方向与范围交给宿主对话框，逐页裁决没搞定的页一次改完。命令始终可用
-        // （没有未定页时也能整份微调），宿主没提供对话框时（测试）禁用。
-        BatchUprightCommand = new RelayCommand(
-            () => _ = PromptBatchUprightAsync(),
-            () => _chooseBatchUpright is not null && !IsOrienting && !IsRotating && PageCount > 0);
+        // 按页旋转：勾选全选/奇数页/偶数页或多选，点一次转 90°，一次写盘。宿主没提供
+        // 选择器时（测试）禁用。
+        RotatePagesCommand = new RelayCommand(
+            () => _ = PromptRotatePagesAsync(),
+            () => _choosePageRotation is not null && !IsOrienting && !IsRotating && PageCount > 0);
         // Any document with at least one page accepts a scan at any slot — front, middle or
         // end. A one-page scan is exactly the case that needs the bookends most (the missing
         // page is usually the one before or after), so PageCount > 0, never > 1.
@@ -325,11 +328,10 @@ public sealed partial class PdfPreviewViewModel : ObservableObject
 
     public RelayCommand ZoomInCommand { get; }
     public RelayCommand ZoomOutCommand { get; }
-    public RelayCommand AutoOrientCommand { get; }
 
-    /// <summary>One-click batch upright for pages the per-page verdict left undecided (and for
-    /// manual whole-document fixes). The host supplies the direction/scope dialog.</summary>
-    public RelayCommand BatchUprightCommand { get; }
+    /// <summary>Per-page rotation picker (all / multi / odd / even), one save for the batch.
+    /// The host supplies the dialog; without one the command is disabled.</summary>
+    public RelayCommand RotatePagesCommand { get; }
 
     /// <summary>Gap button between two pages: scans fresh pages and splices them into the PDF
     /// right after the page the gap follows. Without a host scanner the gaps never enable.</summary>
@@ -457,6 +459,10 @@ public sealed partial class PdfPreviewViewModel : ObservableObject
                 CommandManager.InvalidateRequerySuggested();
         }
     }
+
+    /// <summary>Whether this strip runs the automatic orientation pass after load (scan rows
+    /// with an OCR engine). The manual button was removed; the pass itself still runs.</summary>
+    internal bool AutoOrientEnabled => _autoOrient && _ocrEngine is not null;
 
     /// <summary>Live stage text ("正在渲染第 2 页…") or a readable failure reason. Never a popup.</summary>
     public string StatusText

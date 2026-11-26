@@ -118,6 +118,14 @@ public sealed class AppSettings
     /// 不上传；环境变量 WMR_DATASET_EXPORT=1 也可开启（便于不改 UI 直接抓数据）。</summary>
     public bool ScanDatasetExportEnabled { get; set; }
 
+    /// <summary>扫描后自动检测页面方向（OCR）：开（默认）时扫描落盘或插入扫描页会自动判断
+    /// 朝向并旋转；关掉后完全不做 OCR 判向，仍可在预览里用「摆正」手动按页旋转。</summary>
+    public bool ScanAutoOrientEnabled { get; set; } = true;
+
+    /// <summary>身份证合成时自动识别（OCR）：开（默认）时按识别出的姓名/正反面自动排序拼版；
+    /// 关掉后按你选择的图片顺序直接拼版，不调用任何识别。</summary>
+    public bool IdCardAutoOcrEnabled { get; set; } = true;
+
     /// <summary>Scan colour mode (扫描色彩): 0 = 自动, 1 = 彩色, 2 = 灰度, 3 = 黑白. Defaults to
     /// 黑白 — text documents scan ~2x faster and produce far smaller, crisper PDFs.</summary>
     public int ScanColor { get; set; } = 3;
@@ -243,6 +251,8 @@ public sealed class AppSettings
         ScanDuplex = ScanDuplex,
         ContinuousScan = ContinuousScan,
         ScanDatasetExportEnabled = ScanDatasetExportEnabled,
+        ScanAutoOrientEnabled = ScanAutoOrientEnabled,
+        IdCardAutoOcrEnabled = IdCardAutoOcrEnabled,
         ScanColor = ScanColor,
         ScanOutputDirectory = ScanOutputDirectory,
         TransferOutputDirectory = TransferOutputDirectory,

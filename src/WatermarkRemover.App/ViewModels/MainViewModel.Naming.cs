@@ -66,6 +66,7 @@ public sealed partial class MainViewModel
             AutoNameResult? suggestion = earlyNaming is null
                 ? null
                 : await earlyNaming.ConfigureAwait(false);
+            AutoNameResult? probed = null;
             string finalPath;
             if (suggestion is not null)
             {
@@ -79,9 +80,13 @@ public sealed partial class MainViewModel
             }
             else
             {
-                finalPath = await _naming.TryRenameAsync(pdfPath).ConfigureAwait(false);
+                (finalPath, probed) = await _naming.TryRenameDetailedAsync(pdfPath).ConfigureAwait(false);
                 op.Step("PDF 探测", Path.GetFileName(finalPath));
             }
+
+            // 放大复查的结论跟着命名结果走：首屏结果被复用时用它的标记，整页探测则用探测结果。
+            suggestion ??= probed;
+            string? review = suggestion is { NeedsManualReview: true } ? suggestion.ReviewEvidence : null;
 
             if (string.Equals(finalPath, pdfPath, StringComparison.OrdinalIgnoreCase))
             {
@@ -97,6 +102,7 @@ public sealed partial class MainViewModel
                 }
 
                 if (namingOn) job.SetNamingNote("未识别到标题，保留时间戳名");
+                job.SetNeedsReview(null);
                 op.Complete("无更名");
                 LogScanChain(chainTicks, finalPath, "保留时间戳名");
                 return;
@@ -109,6 +115,7 @@ public sealed partial class MainViewModel
             if (dispatcher is null)
             {
                 job.SetNamingNote(null);
+                job.SetNeedsReview(review);
                 op.Complete($"→ {Path.GetFileName(finalPath)}");
                 LogScanChain(chainTicks, finalPath, "已改名");
                 return;
@@ -118,6 +125,7 @@ public sealed partial class MainViewModel
             {
                 job.UpdateRenamed(finalPath);
                 job.SetNamingNote(null);
+                job.SetNeedsReview(review);
                 // 改名是应用自己做的，直接把新路径喂给打开着的预览会话，不等下一次渲染失败
                 // 再靠指纹去目录里「找回来」——找回复命中的文件头哈希读不到（看图窗口持锁）
                 // 就会给出「候选 0 个」并把预览条永远钉在死路径上。

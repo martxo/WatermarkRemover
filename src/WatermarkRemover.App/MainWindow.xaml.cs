@@ -92,7 +92,15 @@ public partial class MainWindow : Window
 
     /// <summary>Set by the admin hotkey hand-off: Close() must not ask the busy-exit prompt.</summary>
     private bool _adminSwitchExit;
+
+    /// <summary>Set by 「疑难重启」: the user already confirmed there; a running scan must not
+    /// raise a second "退出会丢失" prompt and cancel the restart.</summary>
+    private bool _restartExit;
     private WindowState _hiddenWindowState = WindowState.Normal;
+
+    /// <summary>Guards the once-per-process startup work (shelf + update check) across both the
+    /// visible launch (Loaded) and the logon background host (never shown).</summary>
+    private bool _startupTasksRan;
 
     // Thumbnail gestures of a screenshot row: click copies, dragging hands the file to the target.
     private FileJobViewModel? _thumbnailDragJob;
@@ -237,20 +245,14 @@ public partial class MainWindow : Window
     /// <summary>
     /// Quiet update check on startup; never disturbs normal work.
     /// </summary>
-    private async void OnWindowLoaded(object sender, RoutedEventArgs e)
+    private void OnWindowLoaded(object sender, RoutedEventArgs e)
     {
         // The ViewModel restores the journal INSIDE its constructor, before this window can
         // subscribe to Jobs.CollectionChanged — so a restored scan history never fired the
         // visibility sync and the list stayed collapsed until the next scan added a row. Sync
         // once now that the bindings are live.
         SyncListVisibility();
-        if (NetdiskAdminAccess.IsBackground)
-        {
-            // Logon backup starts in the tray without taking the foreground or showing one-time UI.
-            _hiddenWindowState = WindowState.Normal;
-            Hide();
-        }
-        else
+        if (!NetdiskAdminAccess.IsBackground)
         {
             // Explorer/double-click launches are usually allowed to take the foreground; calling
             // Activate also covers a launch that started behind an already-open browser window.
@@ -269,9 +271,42 @@ public partial class MainWindow : Window
                 AppLog.Error("新默认设置提示失败", ex);
             }
         }
+        RunStartupTasks();
+    }
+
+    /// <summary>
+    /// Logon background start (the Run-key <c>--background</c> launch): create the window host so
+    /// the tray icon, global hotkeys and the screenshot shelf are live, but never present a first
+    /// frame. A window first rendered while Windows is still bringing the session up can keep a
+    /// dead DWM surface for the rest of the session — opening 办公助理 later then shows an
+    /// all-black page until the app is restarted. Deferring the first render until the user
+    /// actually asks for the window keeps that failure impossible (and costs one less render).
+    /// </summary>
+    internal void BeginBackgroundHost()
+    {
+        _hiddenWindowState = WindowState.Normal;
+        // Creates the HWND — SourceInitialized runs here, wiring the tray icon and hotkeys —
+        // without showing, laying out or rendering anything.
+        new WindowInteropHelper(this).EnsureHandle();
+        RunStartupTasks();
+    }
+
+    /// <summary>
+    /// Work that must happen exactly once per process whether or not the window is ever shown:
+    /// the top-edge shelf (hover + screenshot trigger) and the quiet update check.
+    /// </summary>
+    private void RunStartupTasks()
+    {
+        if (_startupTasksRan) return;
+        _startupTasksRan = true;
         // The line exists from startup: hovering the top edge must work even before the first
         // screenshot; it stays above the screen until the pointer asks for it.
         EnsureShelf();
+        _ = RunStartupUpdateCheckAsync();
+    }
+
+    private async Task RunStartupUpdateCheckAsync()
+    {
         try
         {
             await UpdateCoordinator.RunCheckAsync(this, _viewModel.Settings, silent: true);
@@ -427,6 +462,42 @@ public partial class MainWindow : Window
     {
         AppLog.Info("收到管理员切换请求，退出以移交网盘管理入口");
         _adminSwitchExit = true;
+        _forceExit = true;
+        Close();
+    }
+
+    /// <summary>
+    /// 设置 →「疑难重启」：扫描一直卡住、打印机不动、官方软件也不响应时，结束本软件残留进程
+    /// 和官方打印/扫描软件的用户级进程，再启动新实例并退出当前进程。新实例启动失败时不退出，
+    /// 用户仍可手动处理。
+    /// </summary>
+    internal void RestartAfterTroubleshooting()
+    {
+        if (!_dialogs.ConfirmYesNo(
+                "将结束本软件和 Brother 打印/扫描软件的运行进程，然后重新启动本软件。\n\n" +
+                "正在进行的扫描会中断；已扫描完成的页面已经保存，不会丢失。\n" +
+                "本页尚未保存的设置修改不会保留。\n\n继续吗？",
+                "疑难重启"))
+        {
+            return;
+        }
+
+        AppLog.Info("疑难重启：用户已确认");
+        TroubleshootRestartResult cleanup = TroubleshootRestartService
+            .StopConflictingProcesses(Environment.ProcessId);
+        AppLog.Info($"疑难重启：{cleanup.Describe()}");
+
+        if (!TroubleshootRestartService.TryRelaunch(Environment.ProcessId, out string? error))
+        {
+            AppLog.Error($"疑难重启：启动新实例失败：{error}");
+            _dialogs.Error(
+                $"已结束冲突进程，但重新启动本软件失败：\n{error}\n\n请手动关闭本程序后重新打开。",
+                "疑难重启");
+            return;
+        }
+
+        App.NoteExitReason("疑难重启");
+        _restartExit = true;
         _forceExit = true;
         Close();
     }
@@ -733,7 +804,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (!_adminSwitchExit && !_viewModel.ConfirmExit())
+        if (!_adminSwitchExit && !_restartExit && !_viewModel.ConfirmExit())
         {
             e.Cancel = true;
             return;
@@ -869,7 +940,7 @@ public partial class MainWindow : Window
     private void OnFeedbackClick(object sender, RoutedEventArgs e)
     {
         var window = new FeedbackWindow(
-            _viewModel.Settings, new DpapiSecretProtector(), null, null, _viewModel.IsNetdiskAdmin)
+            _viewModel.Settings, new DpapiSecretProtector(), null, null)
         {
             Owner = this,
         };
@@ -880,7 +951,7 @@ public partial class MainWindow : Window
     private void OnRecordFeedbackRequested(object? sender, FeedbackRequestEventArgs e)
     {
         var window = new FeedbackWindow(
-            _viewModel.Settings, new DpapiSecretProtector(), e.OperationId, e.ContextText, _viewModel.IsNetdiskAdmin)
+            _viewModel.Settings, new DpapiSecretProtector(), e.OperationId, e.ContextText)
         {
             Owner = this,
         };

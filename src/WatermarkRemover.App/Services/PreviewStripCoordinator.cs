@@ -6,6 +6,7 @@ using WatermarkRemover.App.Logging;
 using WatermarkRemover.Pdf.Rendering;
 using WatermarkRemover.App.ViewModels;
 using WatermarkRemover.Core.Features.Ocr;
+using WatermarkRemover.Core.Settings;
 
 namespace WatermarkRemover.App.Services;
 
@@ -23,18 +24,23 @@ public sealed class PreviewStripCoordinator
     private readonly IOcrEngine _ocr;
     private readonly Func<IProgress<string>, Task<string?>>? _scanIntoStrip;
 
+    /// <summary>Live settings: the OCR auto-orientation switch is read at strip-open time.</summary>
+    private readonly AppSettings _settings;
+
     public PreviewStripCoordinator(
         ObservableCollection<FileJobViewModel> jobs,
         IDialogService dialogs,
         IPdfPageRenderer renderer,
         IOcrEngine ocr,
-        Func<IProgress<string>, Task<string?>>? scanIntoStrip)
+        Func<IProgress<string>, Task<string?>>? scanIntoStrip,
+        AppSettings settings)
     {
         _jobs = jobs ?? throw new ArgumentNullException(nameof(jobs));
         _dialogs = dialogs ?? throw new ArgumentNullException(nameof(dialogs));
         _renderer = renderer ?? throw new ArgumentNullException(nameof(renderer));
         _ocr = ocr ?? throw new ArgumentNullException(nameof(ocr));
         _scanIntoStrip = scanIntoStrip;
+        _settings = settings ?? throw new ArgumentNullException(nameof(settings));
     }
 
     /// <summary>Opens the screen-level viewer for a strip; supplied by the host so no window
@@ -126,19 +132,23 @@ public sealed class PreviewStripCoordinator
         // orientation vote and blank-page removal are scan-capture conveniences and would
         // silently rewrite a file the user only wanted to edit.
         bool autoPostProcess = scanRow && !skipScanPostProcess && !job.SuppressAutoPostProcess;
+        // OCR 方向识别总开关（设置 → OCR 识别 → 自动识别）：关掉后扫描落盘和插入/追加的
+        // 扫描页都保持原方向；空白页清理不走 OCR，仍然照常执行。
+        bool autoOrient = autoPostProcess && _settings.ScanAutoOrientEnabled;
         var strip = new PdfPreviewViewModel(
             path, job.DisplayName, _renderer,
             confirmPageDelete: index => _dialogs.Confirm(
                 $"确定要删除第 {index + 1} 页吗？\n\n该页将从 PDF 中移除并立即保存，删除后无法恢复。",
                 "删除确认"),
             ocrEngine: _ocr,
-            autoOrient: autoPostProcess,
+            autoOrient: autoOrient,
+            orientInsertedPages: _settings.ScanAutoOrientEnabled,
             onRelocated: job.UpdateRenamed, // a renamed file is tracked, the row follows
             autoCleanBlank: autoPostProcess, // duplex scans drop their blank back sides by themselves
             scanProvider: scanRow ? _scanIntoStrip : null, // scan rows can insert scans into gaps
             seedThumbnails: seedThumbnails,
             pageTurns: pageTurns,
-            chooseBatchUpright: count => BatchUprightDialog.Show(Application.Current?.MainWindow, count),
+            choosePageRotation: pages => RotatePagesDialog.Show(Application.Current?.MainWindow, pages),
             datasetDirectory: datasetDirectory,
             dialogs: _dialogs);
         strip.EnlargeRequested += (_, _) => EnlargeRequested(strip);

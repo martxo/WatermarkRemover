@@ -118,7 +118,8 @@ public sealed partial class MainViewModel : ObservableObject
         _renamer = new JobRenamer(_dialogs);
         _preview = new PreviewStripCoordinator(
             Board.Jobs, _dialogs, _composition.PdfRenderer, _composition.OcrEngine,
-            scanIntoStrip: progress => _scan.ScanIntoStripAsync(progress));
+            scanIntoStrip: progress => _scan.ScanIntoStripAsync(progress),
+            settings: Settings);
         Netdisk = new NetdiskCoordinator(Settings, _dialogs, () => IsBusy, IsNetdiskAdmin);
         AutomaticBackup = new AutomaticBackupService(
             Netdisk.Transfer,

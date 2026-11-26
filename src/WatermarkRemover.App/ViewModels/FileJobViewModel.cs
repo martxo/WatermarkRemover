@@ -190,6 +190,7 @@ public sealed class FileJobViewModel : ObservableObject
     /// </summary>
     public string StatusLine =>
         State == JobState.Failed ? Detail
+        : NeedsReview ? $"需人工核实：{_reviewNote ?? "放大复查不一致"}"
         : NamingNote is { Length: > 0 } note ? note
         : Detail;
 
@@ -455,6 +456,31 @@ public sealed class FileJobViewModel : ObservableObject
             NamingNote = note;
         else
             dispatcher.Invoke(() => NamingNote = note);
+    }
+
+    /// <summary>True when the enlarged OCR re-read disagreed with the name: the row asks for a
+    /// human check instead of silently trusting it. Cleared when a later naming confirms it.</summary>
+    public bool NeedsReview { get; private set; }
+
+    private string? _reviewNote;
+
+    /// <summary>Sets/clears the manual-review flag from any thread (naming runs off the UI thread).</summary>
+    public void SetNeedsReview(string? evidence)
+    {
+        void Apply()
+        {
+            bool flagged = !string.IsNullOrWhiteSpace(evidence);
+            _reviewNote = flagged ? evidence : null;
+            NeedsReview = flagged;
+            OnPropertyChanged(nameof(NeedsReview));
+            OnPropertyChanged(nameof(StatusLine));
+        }
+
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (dispatcher is null || dispatcher.CheckAccess())
+            Apply();
+        else
+            dispatcher.Invoke(Apply);
     }
 
     /// <summary>

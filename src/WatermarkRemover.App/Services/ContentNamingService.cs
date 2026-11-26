@@ -2,6 +2,7 @@ using System.IO;
 using WatermarkRemover.App.Logging;
 using WatermarkRemover.App.Naming;
 using WatermarkRemover.App.Ocr;
+using WatermarkRemover.App.Recognition;
 using WatermarkRemover.Pdf.Rendering;
 using WatermarkRemover.Ocr;
 using WatermarkRemover.Imaging;
@@ -9,6 +10,7 @@ using WatermarkRemover.Core.Features.Layout;
 using WatermarkRemover.Core.Features.Naming;
 using WatermarkRemover.Core.Features.Ocr;
 using WatermarkRemover.Core.Logging;
+using WatermarkRemover.Core.Recognition;
 using WatermarkRemover.Core.Settings;
 
 namespace WatermarkRemover.App.Services;
@@ -39,25 +41,34 @@ public sealed class ContentNamingService
     private readonly IPdfPageRenderer _renderer;
     private readonly IOcrEngine _ocr;
 
+    /// <summary>Independent enlarged re-read used to flag an unclear page for a human check.</summary>
+    private readonly OcrRecheck _recheck;
+
     public ContentNamingService(AppSettings settings, IPdfPageRenderer renderer, IOcrEngine ocr)
     {
         _settings = settings ?? throw new ArgumentNullException(nameof(settings));
         _renderer = renderer ?? throw new ArgumentNullException(nameof(renderer));
         _ocr = ocr ?? throw new ArgumentNullException(nameof(ocr));
+        _recheck = new OcrRecheck(ocr);
     }
 
     /// <summary>
     /// Returns the path to file into the job list: the renamed target when a page was confidently
     /// recognised, otherwise <paramref name="pdfPath"/> unchanged.
     /// </summary>
-    public async Task<string> TryRenameAsync(string pdfPath)
+    public async Task<string> TryRenameAsync(string pdfPath) =>
+        (await TryRenameDetailedAsync(pdfPath).ConfigureAwait(true)).Path;
+
+    /// <summary>Same as <see cref="TryRenameAsync"/> but keeps the suggestion so the caller can
+    /// surface the "需人工核实" flag produced by the enlarged re-read.</summary>
+    public async Task<(string Path, AutoNameResult? Suggestion)> TryRenameDetailedAsync(string pdfPath)
     {
-        if (!_settings.AutoNameByContent) return pdfPath;
+        if (!_settings.AutoNameByContent) return (pdfPath, null);
 
         AutoNameResult? autoName = await TrySuggestAsync(pdfPath).ConfigureAwait(true);
         return autoName is null
-            ? pdfPath
-            : await ApplyAsync(pdfPath, autoName).ConfigureAwait(true);
+            ? (pdfPath, null)
+            : (await ApplyAsync(pdfPath, autoName).ConfigureAwait(true), autoName);
     }
 
     /// <summary>
@@ -82,7 +93,7 @@ public sealed class ContentNamingService
                 if (length == 0 || length > MaxReceivedImageBytes) return path;
 
                 byte[] image = await File.ReadAllBytesAsync(path).ConfigureAwait(true);
-                AutoNameResult? suggestion = await TrySuggestFromImageAsync(image).ConfigureAwait(true);
+                AutoNameResult? suggestion = await TrySuggestFromImageAsync(image, sourcePath: path).ConfigureAwait(true);
                 return suggestion is null
                     ? path
                     : await ApplyAsync(path, suggestion).ConfigureAwait(true);
@@ -121,7 +132,8 @@ public sealed class ContentNamingService
                 byte[] image = await _renderer.RenderPageAsync(pdfPath, pageIndex, NamingRenderDpi, priority: true).ConfigureAwait(true);
                 op.Step($"第 {pageIndex + 1}/{pageCount} 页渲染",
                     $"{NamingRenderDpi}dpi，{image.Length / 1024} KB");
-                AutoNameResult? suggestion = await SuggestFromPageAsync(image, pageIndex, pageCount, op).ConfigureAwait(true);
+                AutoNameResult? suggestion = await SuggestFromPageAsync(
+                    image, pageIndex, pageCount, op, sourcePath: pdfPath).ConfigureAwait(true);
                 if (suggestion is not null)
                 {
                     op.Complete($"识别为 {suggestion.SuggestedStem}");
@@ -146,7 +158,8 @@ public sealed class ContentNamingService
     /// for this page (v1.16.83): the vote is shared, not repeated — the chain only turns the
     /// pixels. Null keeps the old behaviour (detect inside this call).
     /// </summary>
-    public async Task<AutoNameResult?> TrySuggestFromImageAsync(byte[] imageBytes, int? preOrientedSteps = null)
+    public async Task<AutoNameResult?> TrySuggestFromImageAsync(
+        byte[] imageBytes, int? preOrientedSteps = null, string sourcePath = "")
     {
         if (!_settings.AutoNameByContent || imageBytes.Length == 0) return null;
 
@@ -156,7 +169,7 @@ public sealed class ContentNamingService
         try
         {
             AutoNameResult? suggestion = await SuggestFromPageAsync(
-                imageBytes, pageIndex: 0, pageCount: 1, op, preOrientedSteps).ConfigureAwait(true);
+                imageBytes, pageIndex: 0, pageCount: 1, op, preOrientedSteps, sourcePath).ConfigureAwait(true);
             op.Complete(suggestion is null ? "未识别出可信名称" : $"识别为 {suggestion.SuggestedStem}");
             return suggestion;
         }
@@ -240,7 +253,8 @@ public sealed class ContentNamingService
     /// <paramref name="preOrientedSteps"/>: a verdict decided upstream (the scan's shared vote);
     /// when present the detection pass is skipped and the turn applied directly.</summary>
     private async Task<AutoNameResult?> SuggestFromPageAsync(
-        byte[] image, int pageIndex, int pageCount, OperationScope op, int? preOrientedSteps = null)
+        byte[] image, int pageIndex, int pageCount, OperationScope op,
+        int? preOrientedSteps = null, string sourcePath = "")
     {
         // A blank page cannot name anything, but it used to pay the orientation vote (four OCR
         // passes) plus a full-page OCR — the slow "空白页也在识别" the scanner reported. The pixel
@@ -274,7 +288,7 @@ public sealed class ContentNamingService
         {
             AutoNameResult result = AutoNameResult.Create(located, CreditReportTypeShortName);
             AppLog.Trace($"命名：自动命名成功 → {result.SuggestedStem}", null);
-            return result;
+            return await VerifyAsync(result, image, located, sourcePath, op).ConfigureAwait(true);
         }
 
         IReadOnlyList<RecognizedLine> lines = await _ocr
@@ -296,12 +310,52 @@ public sealed class ContentNamingService
         {
             AutoNameResult fromGeometry = AutoNameResult.Create(fromLines, CreditReportTypeShortName);
             AppLog.Trace($"命名：自动命名成功 → {fromGeometry.SuggestedStem}", null);
-            return fromGeometry;
+            return await VerifyAsync(
+                fromGeometry, image, TextOf(lines), sourcePath, op).ConfigureAwait(true);
         }
 
         AutoNameResult? built = SmartNamingService.TryBuildName(lines, AppLog.Trace);
         op.Step($"第 {pageIndex + 1}/{pageCount} 页文本规则命名",
             built is null ? "未识别" : built.SuggestedStem);
-        return built;
+        return built is null
+            ? null
+            : await VerifyAsync(built, image, TextOf(lines), sourcePath, op).ConfigureAwait(true);
+    }
+
+    private static string TextOf(IReadOnlyList<RecognizedLine> lines) =>
+        string.Join("\n", lines.Select(line => line.Text));
+
+    /// <summary>
+    /// 独立二次识别：把同一张图放大再读一遍，名称读不回来 / 文差异过大就标人工核实。
+    /// 只加标记与报告，不改名；异常已在 <see cref="OcrRecheck"/> 内部吞掉。
+    /// </summary>
+    private async Task<AutoNameResult> VerifyAsync(
+        AutoNameResult result, byte[] image, string firstPassText,
+        string sourcePath, OperationScope op)
+    {
+        OcrRecheck.Outcome outcome = await _recheck
+            .CheckAsync(image, firstPassText, result.PersonName).ConfigureAwait(true);
+        op.Step("放大复查", outcome.Evidence);
+        if (!outcome.NeedsReview) return result;
+
+        AppLog.Warn($"命名复核：{result.SuggestedStem} — {outcome.Evidence}");
+        result.MarkForReview(outcome.Evidence);
+        new RecognitionReportStore().Append(new RecognitionReport
+        {
+            Timestamp = DateTimeOffset.Now,
+            InputPath = sourcePath,
+            FeatureName = "自动命名",
+            EngineName = _ocr.DisplayName,
+            PageCount = 1,
+            PersonName = result.PersonName,
+            SuggestedStem = result.SuggestedStem,
+            Issues = new[]
+            {
+                new ReviewIssue("ocr.unstable", ReviewSeverity.Warning,
+                    "放大二次识别不一致，建议人工核实", outcome.Evidence),
+            },
+            OperationId = AppLog.CurrentOperationId ?? string.Empty,
+        });
+        return result;
     }
 }

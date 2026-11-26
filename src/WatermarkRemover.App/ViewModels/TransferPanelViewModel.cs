@@ -555,8 +555,11 @@ public sealed class TransferPanelViewModel : ObservableObject, IDisposable
 
         // ID cards are a fixed, fully determined output: compose without waiting for a click.
         // The OCR confirmation inside keeps a card-shaped licence pair from being forced into
-        // the ID sheet — those stay in the gallery for the user to pack manually.
-        if (SelectedLayout.Kind == ComposeLayoutKind.IdCardA4 && _idCardOcr is not null)
+        // the ID sheet — those stay in the gallery for the user to pack manually. With the OCR
+        // switch off there is no confirmation, so no clickless compose either.
+        if (SelectedLayout.Kind == ComposeLayoutKind.IdCardA4
+            && _idCardOcr is not null
+            && _settings.IdCardAutoOcrEnabled)
         {
             StatusText = "检测到身份证，正在自动识别姓名与正反面…";
             _ = ComposePendingAsync(ComposeLayoutCatalog.IdCardA4, SelectedCropMode, autoConfirmed: true);
@@ -671,7 +674,9 @@ public sealed class TransferPanelViewModel : ObservableObject, IDisposable
             byte[][] selected = chosen.Select(p => p.Bytes).ToArray();
             string? personName = null;
             IdCardPlan? plan = null;
-            if (layout.Kind == ComposeLayoutKind.IdCardA4 && _idCardOcr is not null)
+            if (layout.Kind == ComposeLayoutKind.IdCardA4
+                && _idCardOcr is not null
+                && _settings.IdCardAutoOcrEnabled)
             {
                 StatusText = "正在识别身份证姓名与正反面…";
                 try

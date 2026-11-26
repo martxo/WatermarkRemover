@@ -1804,6 +1804,10 @@
                                                             <DataTrigger Binding="{Binding State}" Value="Processing">
                                                                 <Setter Property="Foreground" Value="{StaticResource AccentBrush}"/>
                                                             </DataTrigger>
+                                                            <DataTrigger Binding="{Binding NeedsReview}" Value="True">
+                                                                <Setter Property="Foreground" Value="{StaticResource WarningBrush}"/>
+                                                                <Setter Property="FontWeight" Value="SemiBold"/>
+                                                            </DataTrigger>
                                                             <DataTrigger Binding="{Binding State}" Value="Failed">
                                                                 <Setter Property="Foreground" Value="{StaticResource DangerBrush}"/>
                                                             </DataTrigger>
@@ -2100,40 +2104,14 @@
                                                 </Button.Style>
                                             </Button>
 
-                                            <!-- OCR votes on the four quarter turns and rights the
-                                                 whole document in one save; scan rows run it by
-                                                 themselves, this is the manual entry / retry. -->
-                                            <Button Command="{Binding Strip.AutoOrientCommand}"
-                                                    ToolTipService.ShowOnDisabled="True"
-                                                    ToolTip="自动摆正：检测页面方向并整份修正"
-                                                    FontSize="11"
-                                                    Padding="4,2"
-                                                    Margin="0,6,0,0"
-                                                    Focusable="False">
-                                                <Button.Style>
-                                                    <Style TargetType="Button" BasedOn="{StaticResource SmallButton}">
-                                                        <Setter Property="Content">
-                                                            <Setter.Value>
-                                                                <TextBlock Text="&#xE7AD;" FontFamily="Segoe MDL2 Assets"/>
-                                                            </Setter.Value>
-                                                        </Setter>
-                                                        <Style.Triggers>
-                                                            <Trigger Property="IsEnabled" Value="False">
-                                                                <Setter Property="Opacity" Value="0.35"/>
-                                                            </Trigger>
-                                                        </Style.Triggers>
-                                                    </Style>
-                                                </Button.Style>
-                                            </Button>
-                                            <!-- One-click batch upright: whole document or only the
-                                                 pages the per-page verdict left undecided. The
-                                                 direction/scope dialog is the host's, so the user
-                                                 picks once instead of rotating page by page. -->
-                                            <Button Command="{Binding Strip.BatchUprightCommand}"
+                                            <!-- Per-page rotation: check all / odd / even /
+                                                 any pages, press 旋转 (90° per press) and save
+                                                 the batch in one write. -->
+                                            <Button Command="{Binding Strip.RotatePagesCommand}"
                                                     Content="摆正"
                                                     Style="{StaticResource SmallButton}"
                                                     ToolTipService.ShowOnDisabled="True"
-                                                    ToolTip="批量摆正：按选择的方向整份或逐页旋转"
+                                                    ToolTip="选择页面旋转：可全选、多选、奇数页、偶数页，一次保存"
                                                     FontSize="11"
                                                     Padding="4,2"
                                                     Margin="0,6,0,0"

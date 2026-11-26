@@ -198,9 +198,37 @@ internal sealed class FeedbackService
 
     private async Task UploadAsync(string id, string json, CancellationToken ct)
     {
-        IReadOnlyDictionary<string, string>? values = TryBuildAccountValues()
-            ?? throw new InvalidOperationException("尚未登录阿里云盘，反馈只存到了本机。");
+        List<string> errors = new();
+        // 两轮：aliyunpan 配置常被另一个网盘进程短暂占用（续期、下载、自动备份），
+        // 600ms 后重来一轮基本都能拿到锁，避免一次失败就把反馈永久留在本机。
+        for (int round = 0; round < 2; round++)
+        {
+            foreach (IReadOnlyDictionary<string, string> values in BuildCredentialCandidates())
+            {
+                try
+                {
+                    await UploadWithAsync(values, id, json, ct).ConfigureAwait(false);
+                    return;
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    // 换下一个凭据：CLI 配置被占用时，设置里存的账号通常还能用。
+                    errors.Add(ex.Message);
+                    AppLog.Warn($"随手反馈上传凭据不可用，尝试下一个：{ex.Message}");
+                }
+            }
 
+            if (round == 0) await Task.Delay(600, ct).ConfigureAwait(false);
+        }
+
+        throw new InvalidOperationException(errors.Count == 0
+            ? "尚未登录阿里云盘，反馈只存到了本机。"
+            : errors[^1]);
+    }
+
+    private static async Task UploadWithAsync(
+        IReadOnlyDictionary<string, string> values, string id, string json, CancellationToken ct)
+    {
         await using var session = await new AliyunDriveProvider()
             .ConnectAsync(new NetdiskCredentials(values))
             .ConfigureAwait(false);
@@ -213,27 +241,40 @@ internal sealed class FeedbackService
             .ConfigureAwait(false);
     }
 
-    /// <summary>账号解析与 CloudUpdateService 一致：设置里保存的账号优先，本机 CLI 登录兜底。</summary>
-    private IReadOnlyDictionary<string, string>? TryBuildAccountValues()
+    /// <summary>
+    /// 可尝试的凭据，按「新鲜度 + 可用性」排序：本机 aliyunpan 当前令牌优先（自动备份用的
+    /// 就是这一份，最新），再回退设置里保存的账号。任一凭据能上传即成功，避免单一路径失败
+    /// 导致反馈卡在本机——普通模式（非管理员）也必须能提交反馈。
+    /// </summary>
+    private List<IReadOnlyDictionary<string, string>> BuildCredentialCandidates()
     {
+        var candidates = new List<IReadOnlyDictionary<string, string>>();
+
+        try
+        {
+            AliyunpanCliRuntime.EnsureStableConfig();
+            IReadOnlyDictionary<string, string>? cli = AliyunpanCliRuntime.TryBuildAccountValues();
+            if (cli is not null) candidates.Add(cli);
+        }
+        catch (Exception ex)
+        {
+            AppLog.Warn($"读取本机 aliyunpan 登录失败：{ex.Message}");
+        }
+
         try
         {
             IEnumerable<NetdiskAccountState> accounts = NetdiskAccountPersistence.Decode(
                 _settings.NetdiskAccounts, _protector, (message, _) => AppLog.Warn(message));
-            NetdiskAccountState? account = accounts.FirstOrDefault(a => a.ProviderId == ProviderId);
-            if (account is not null)
-            {
-                return account.Values;
-            }
-
-            AliyunpanCliRuntime.EnsureStableConfig();
-            return AliyunpanCliRuntime.TryBuildAccountValues();
+            candidates.AddRange(accounts
+                .Where(a => a.ProviderId == ProviderId)
+                .Select(a => a.Values));
         }
         catch (Exception ex)
         {
             AppLog.Warn($"读取网盘账号失败：{ex.Message}");
-            return null;
         }
+
+        return candidates;
     }
 
     private static string AppVersionText()

@@ -87,7 +87,7 @@ public sealed class SettingsViewModel : ObservableObject
             new("screenshot", "截图设置", "\uE722", "截图 快捷键 全局热键 保存 目录 PNG 区域 标注 触发 热区 晾衣绳"),
             new("ocr", "OCR 识别", "\uE7C3", "识别 引擎 微信 OCR PP-OCR Windows 文字"),
             new("updates", "软件更新", "\uE72C", "升级 版本 检查更新 镜像 增量 回滚 startup"),
-            new("logs", "日志与排障", "\uE81C", "诊断 排查 导出 预览 记录"),
+            new("logs", "日志与排障", "\uE81C", "诊断 排查 导出 预览 记录 疑难 重启 卡住 扫描仪 打印机"),
             new("reports", "识别报告", "\uE8D6", "识别 报告 类型 字段 坐标 复核 训练 朝向"),
         };
         if (IsNetdiskAdmin)
@@ -899,6 +899,8 @@ public sealed class SettingsViewModel : ObservableObject
         _target.ScanColor = Settings.ScanColor;
         _target.ContinuousScan = Settings.ContinuousScan;
         _target.ScanDatasetExportEnabled = Settings.ScanDatasetExportEnabled;
+        _target.ScanAutoOrientEnabled = Settings.ScanAutoOrientEnabled;
+        _target.IdCardAutoOcrEnabled = Settings.IdCardAutoOcrEnabled;
         _target.ScanOutputDirectory = Settings.ScanOutputDirectory?.Trim() ?? string.Empty;
         _target.TransferOutputDirectory = Settings.TransferOutputDirectory?.Trim() ?? string.Empty;
         _target.ScreenshotHotkey = Settings.ScreenshotHotkey;
@@ -1137,7 +1139,10 @@ public sealed class SettingsViewModel : ObservableObject
             ? $"{c.TypeShortName}（{c.Score}）"
             : "未分类";
         string issues = report.Issues.Count > 0 ? $" · 问题 {report.Issues.Count}" : string.Empty;
-        return $"{report.Timestamp:yyyy-MM-dd HH:mm:ss} · {Path.GetFileName(report.InputPath)}" +
+        // 放大二次识别不一致的记录一眼能认出来：这是需要人工核实的，不是普通统计行。
+        string review = report.Issues.Any(issue =>
+            issue.RuleId.StartsWith("ocr.", StringComparison.Ordinal)) ? "【需核实】" : string.Empty;
+        return $"{review}{report.Timestamp:yyyy-MM-dd HH:mm:ss} · {Path.GetFileName(report.InputPath)}" +
                $" · {classification} · 姓名={report.PersonName ?? "-"}" +
                $" · 字段 {report.Fields.Count}{issues}";
     }

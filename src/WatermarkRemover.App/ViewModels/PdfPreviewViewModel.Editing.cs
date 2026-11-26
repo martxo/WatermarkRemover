@@ -72,43 +72,58 @@ public sealed partial class PdfPreviewViewModel
         ScanDatasetExporter.RefreshTruth(_datasetDirectory, _file.Path, reason);
     }
 
-    /// <summary>Host dialog → batch upright; no host dialog or user cancel means no change.</summary>
-    private async Task PromptBatchUprightAsync()
+    /// <summary>Host picker → rotate the chosen pages; cancel or no host means no change.</summary>
+    private async Task PromptRotatePagesAsync()
     {
-        if (_chooseBatchUpright is null || IsOrienting || IsRotating || PageCount <= 0) return;
-        BatchUprightChoice? choice = _chooseBatchUpright(0);
-        if (choice is null) return;
-        await ApplyBatchUprightAsync(choice.QuarterTurns, choice.OnlyUndecided);
+        if (_choosePageRotation is null || IsOrienting || IsRotating || PageCount <= 0) return;
+
+        List<RotatePageItem> pages = Thumbnails
+            .Select(tile => new RotatePageItem(tile.Index, tile.Image))
+            .ToList();
+        if (pages.Count == 0)
+        {
+            // 缩略图还没建好（极少见）：用页码兜底，至少能按奇偶选页。
+            pages = Enumerable.Range(0, PageCount)
+                .Select(index => new RotatePageItem(index, null))
+                .ToList();
+        }
+
+        IReadOnlyList<PageRotation>? rotations = _choosePageRotation(pages);
+        if (rotations is null || rotations.Count == 0) return;
+        await ApplyPageRotationsAsync(rotations);
     }
 
     /// <summary>
-    /// 一键批量摆正：整份按用户选择的方向一次写盘，然后重建所有表面。
+    /// 按页旋转：把选择器里勾中的页各转若干 90°，一次写盘，然后重建缩略图与画布。
     /// 失败时文件不动并给出原因。
     /// </summary>
-    internal async Task ApplyBatchUprightAsync(int quarterTurns, bool onlyUndecided)
+    internal async Task ApplyPageRotationsAsync(IReadOnlyList<PageRotation> rotations)
     {
-        int turns = ((quarterTurns % 4) + 4) % 4;
-        if (turns == 0 || IsCancelled || IsRotating || IsOrienting || PageCount <= 0) return;
+        if (IsCancelled || IsRotating || IsOrienting || PageCount <= 0) return;
+
+        var turns = rotations
+            .Where(r => r.Index >= 0 && r.Index < PageCount)
+            .Select(r => (PageIndex: r.Index, QuarterTurns: ((r.QuarterTurns % 4) + 4) % 4))
+            .Where(r => r.QuarterTurns != 0)
+            .GroupBy(r => r.PageIndex)
+            .Select(group => (PageIndex: group.Key, QuarterTurns: group.Last().QuarterTurns))
+            .ToList();
+        if (turns.Count == 0) return;
 
         using var op = AppLog.BeginOperation(
-            LogCategory.Preview, "批量摆正", Path.GetFileName(_file.Path), slowMs: 0);
+            LogCategory.Preview, "旋转页面", Path.GetFileName(_file.Path), slowMs: 0);
 
         IsRotating = true;
-        StatusText = "正在批量摆正…";
+        StatusText = "正在旋转页面…";
         try
         {
-            // 整份同转时代没有“未裁决页”概念：批量摆正始终整份旋转。
-            int affected = PageCount;
+            await _edits.RotatePagesAsync(turns);
+            op.Step("旋转写盘", $"{turns.Count} 页");
 
-            await _edits.RotateAllAsync(turns);
-            op.Step("旋转写盘", $"顺时针 {turns * 90}°，整份共 {affected} 页");
-
-            // Batch upright is a manual correction too: one line per affected page, then refresh.
-            int[] affectedPages = Enumerable.Range(0, PageCount).ToArray();
-            foreach (int index in affectedPages)
+            foreach (var (pageIndex, quarterTurns) in turns)
                 ScanDatasetExporter.AppendManualRotation(
-                    _datasetDirectory, index + 1, turns * 90, "Batch");
-            ScanDatasetExporter.RefreshTruth(_datasetDirectory, _file.Path, "batch-upright");
+                    _datasetDirectory, pageIndex + 1, quarterTurns * 90, "Batch");
+            ScanDatasetExporter.RefreshTruth(_datasetDirectory, _file.Path, "rotate-pages");
 
             if (IsCancelled)
             {
@@ -121,8 +136,8 @@ public sealed partial class PdfPreviewViewModel
             await RenderAsync(PageIndex, force: true);
 
             if (StatusText.Length == 0)
-                ShowTransientStatus($"已批量摆正（顺时针 {turns * 90}°），已保存");
-            op.Complete($"顺时针 {turns * 90}°，{affected} 页");
+                ShowTransientStatus($"已旋转 {turns.Count} 页，已保存");
+            op.Complete($"{turns.Count} 页");
         }
         catch (OperationCanceledException)
         {
@@ -130,8 +145,8 @@ public sealed partial class PdfPreviewViewModel
         }
         catch (Exception ex)
         {
-            op.Fail("批量摆正失败", ex);
-            if (!IsCancelled) StatusText = $"批量摆正失败：{ex.Message}（文件未改动）";
+            op.Fail("旋转页面失败", ex);
+            if (!IsCancelled) StatusText = $"旋转页面失败：{ex.Message}（文件未改动）";
         }
         finally
         {
@@ -476,11 +491,10 @@ public sealed partial class PdfPreviewViewModel
     /// <summary>
     /// Auto-orientation: render the first page, let the OCR engine vote on the four quarter
     /// turns, and — if the verdict is decisive — turn the whole document in a single save, then
-    /// rebuild every surface (tiles, render cache, canvas). The pass that runs by itself stays
-    /// quiet when the engine cannot judge; <paramref name="reportFailure"/> (an explicit click)
-    /// says why the page was left alone and that the file is untouched.
+    /// rebuild every surface (tiles, render cache, canvas). Runs by itself after a scan and
+    /// stays quiet when the engine cannot judge (there is no manual button any more).
     /// </summary>
-    internal async Task AutoOrientAsync(bool reportFailure = false)
+    internal async Task AutoOrientAsync()
     {
         if (IsCancelled || _ocrEngine is null || IsOrienting) return;
         if (PageCount <= 0 || _isLoading) return; // let the initial paint finish first
@@ -504,8 +518,6 @@ public sealed partial class PdfPreviewViewModel
             if (!result.OcrAvailable)
             {
                 op.Complete("OCR 不可用，未改动");
-                if (reportFailure)
-                    ShowTransientStatus("自动摆正失败：本机没有可用的 OCR 引擎（文件未改动）");
                 return;
             }
 

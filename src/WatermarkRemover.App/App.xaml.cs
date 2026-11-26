@@ -6,6 +6,7 @@ using System.Windows;
 using System.Windows.Threading;
 using Velopack;
 using WatermarkRemover.App.Logging;
+using WatermarkRemover.App.Services;
 using WatermarkRemover.App.Updates;
 using WatermarkRemover.Core.Settings;
 using WatermarkRemover.Netdisk;
@@ -41,6 +42,10 @@ public partial class App : Application
         // arguments and fast-exit the process, which only works before any file IO or window is
         // created. Harmless no-op for green-directory (non-installed) runs.
         VelopackApp.Build().Run();
+
+        // 「疑难重启」拉起的新实例：旧实例还在关闭（停后台服务、释放单实例互斥体），先等它
+        // 真正退出，否则新实例会把自己当成第二次启动而直接退出。
+        var restartedFrom = TroubleshootRestartService.WaitForPreviousInstance(e.Args);
 
         NetdiskAdminAccess.Initialize(e.Args);
         if (NetdiskAdminAccess.IsRequested && !NetdiskAdminAccess.IsEnabled)
@@ -85,6 +90,17 @@ public partial class App : Application
         AppLog.Initialize();
         BootClock.Restart();
         AppLog.Info($"应用启动 v{GetVersion()}，数据目录：{AppFolders.Root}");
+        if (restartedFrom is { } previous)
+        {
+            AppLog.Info(previous switch
+            {
+                { Exited: true, Forced: true } =>
+                    $"疑难重启：旧进程 {previous.ProcessId} 未按时退出，已强制结束，新实例已启动",
+                { Exited: true } =>
+                    $"疑难重启：旧进程 {previous.ProcessId} 已退出，新实例已启动",
+                _ => $"疑难重启：旧进程 {previous.ProcessId} 无法结束，仍继续启动",
+            });
+        }
         // Where this process runs and what Velopack thinks is installed: the two answers differ
         // whenever an old shortcut or a second copy is launched, which otherwise looks exactly
         // like "the update downloaded but the version never changed".
@@ -117,6 +133,10 @@ public partial class App : Application
                     $"区域 {CultureInfo.CurrentCulture.Name}；.NET {Environment.Version}");
         AppLog.Debug($"日志级别：{AppLog.MinimumLevel}；内存[启动]：{AppLog.MemorySnapshot()}");
 
+        // 每台装了本软件的电脑每 10 分钟上报桌面备份概况（备份与征信页）。放在进程里而不是
+        // 每台机器手工装计划任务：随软件更新自动覆盖所有电脑，也不闪控制台窗口。
+        BackupStatsReporter.Shared.Start();
+
         DispatcherUnhandledException += OnDispatcherUnhandledException;
         AppDomain.CurrentDomain.UnhandledException += OnDomainUnhandledException;
         TaskScheduler.UnobservedTaskException += OnUnobservedTaskException;
@@ -126,10 +146,25 @@ public partial class App : Application
         {
             if (MainWindow is MainWindow window) window.AllowExitOnSystemShutdown();
         };
+
+        // The window is created here rather than through StartupUri: a logon background start
+        // must obtain a window handle (tray icon, hotkeys, shelf) WITHOUT presenting a first
+        // frame. See MainWindow.BeginBackgroundHost for why that distinction matters.
+        var mainWindow = new MainWindow();
+        MainWindow = mainWindow;
+        if (NetdiskAdminAccess.IsBackground)
+        {
+            mainWindow.BeginBackgroundHost();
+        }
+        else
+        {
+            mainWindow.Show();
+        }
     }
 
     protected override void OnExit(ExitEventArgs e)
     {
+        BackupStatsReporter.Shared.Dispose();
         AppLog.Info($"应用退出（{_exitReason}）");
         AppLog.Shutdown();
         _instanceGuard?.Dispose();

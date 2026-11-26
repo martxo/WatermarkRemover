@@ -68,14 +68,6 @@ public class PdfAutoOrientTests
         }
     }
 
-    private sealed class UnusableOcr : IOcrEngine
-    {
-        public string DisplayName => "Unusable";
-
-        public Task<IReadOnlyList<string>> RecognizeAsync(byte[] imageBytes) =>
-            throw new InvalidOperationException("本机没有可用的 OCR 引擎");
-    }
-
     /// <summary>Holds the first recognition call open until the test releases it, so the
     /// ordering of orientation vs. tile filling can be observed without timing luck.</summary>
     private sealed class GatedOcr : IOcrEngine
@@ -184,33 +176,6 @@ public class PdfAutoOrientTests
 
             ocr.Release();
             await DrainAsync(vm);
-        }
-        finally
-        {
-            File.Delete(pdf);
-        }
-    }
-
-    [Fact]
-    public async Task An_unusable_engine_leaves_the_file_and_the_ui_alone()
-    {
-        string pdf = Path.Combine(Path.GetTempPath(), "wm-orient-" + Guid.NewGuid().ToString("N") + ".pdf");
-        File.WriteAllBytes(pdf, PdfFixture.CamScannerLike().Build());
-        try
-        {
-            var vm = new PdfPreviewViewModel(pdf, "scan.pdf", new FakeRenderer(1),
-                ocrEngine: new UnusableOcr(), autoOrient: false);
-            await vm.LoadAsync();
-            await DrainAsync(vm);
-
-            // The automatic pass is quiet; the button click must answer with the reason.
-            vm.AutoOrientCommand.Execute(null);
-            await DrainAsync(vm);
-
-            Assert.Equal(0, RotationOf(pdf));
-            Assert.StartsWith("自动摆正失败：", vm.StatusText);
-            Assert.Contains("文件未改动", vm.StatusText);
-            Assert.NotNull(vm.CurrentImage); // the strip still works
         }
         finally
         {

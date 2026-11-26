@@ -71,14 +71,20 @@ public partial class SettingsPage : UserControl
 
     private void OnBackClick(object sender, RoutedEventArgs e) => Main?.SaveAndExitSettings();
 
+    /// <summary>日志与排障 →「疑难重启」：清理冲突进程后由主窗口重启自身。</summary>
+    private void OnTroubleshootRestart(object sender, RoutedEventArgs e)
+    {
+        if (Window.GetWindow(this) is MainWindow window)
+            window.RestartAfterTroubleshooting();
+    }
+
     /// <summary>侧栏「反馈」：页面级入口，不关联具体操作，只附最近日志尾部。</summary>
     private void OnFeedbackClick(object sender, RoutedEventArgs e)
     {
         if (Window.GetWindow(this) is not { } window) return;
         var dialog = new FeedbackWindow(
             ViewModel?.Settings ?? Main?.Settings ?? new AppSettings(),
-            new Services.DpapiSecretProtector(), null, null,
-            ViewModel?.IsNetdiskAdmin ?? Main?.IsNetdiskAdmin ?? false)
+            new Services.DpapiSecretProtector(), null, null)
         {
             Owner = window,
         };
@@ -91,8 +97,7 @@ public partial class SettingsPage : UserControl
         if (Window.GetWindow(this) is not { } window) return;
         var dialog = new FeedbackWindow(
             ViewModel?.Settings ?? Main?.Settings ?? new AppSettings(),
-            new Services.DpapiSecretProtector(), e.OperationId, e.ContextText,
-            ViewModel?.IsNetdiskAdmin ?? Main?.IsNetdiskAdmin ?? false)
+            new Services.DpapiSecretProtector(), e.OperationId, e.ContextText)
         {
             Owner = window,
         };

@@ -110,7 +110,14 @@ public sealed partial class MainViewModel
         ScanOutcome outcome;
         try
         {
-            outcome = await _scan.ScanOnceAsync(stageProgress, pageProgress, orientationVote.Task).ConfigureAwait(true);
+            // 只有「自动命名」产生的早期方向票才存在；命名关闭时这个任务永远不会完成，必须传
+            // null，否则扫描管线会一直等它。关掉「自动检测页面方向」时也不把票交给扫描管线：
+            // 命名仍可用它给自己预旋转，但扫描件本身保持原方向。
+            Task<int?>? scanOrientationVote =
+                Settings.AutoNameByContent && Settings.ScanAutoOrientEnabled
+                    ? orientationVote.Task
+                    : null;
+            outcome = await _scan.ScanOnceAsync(stageProgress, pageProgress, scanOrientationVote).ConfigureAwait(true);
         }
         catch (ScannerBusyException ex)
         {
@@ -212,13 +219,14 @@ public sealed partial class MainViewModel
             PreviewStripCoordinator.AlignSeedsToPdf(
                 job.LiveThumbnails, outcome.SourcePageNumbers, outcome.PageCount);
         int? settledTurns = earlyNaming is null ? null : await orientationVote.Task.ConfigureAwait(true);
+        bool skipPostProcess = Settings.ScanAutoOrientEnabled && settledTurns is not null;
         _preview.Open(job, livePages,
-            skipScanPostProcess: settledTurns is not null,
+            skipScanPostProcess: skipPostProcess,
             datasetDirectory: outcome.DatasetDirectory,
             pageTurns: outcome.PageTurns);
         job.ClearLiveThumbnails();
         op.Step("记录已展开", $"{Path.GetFileName(path)}，{livePages.Count} 页缩略图，" +
-                             (settledTurns is not null ? "方向已裁决，跳过自动后处理" : "无裁决，保留预览自动摆正"));
+                             (skipPostProcess ? "方向已裁决，跳过自动后处理" : "无裁决，保留预览自动摆正"));
 
         // Naming may already have finished from page 1 while the scan continued; the rename
         // still waits for the PDF (and the strip's writes) before moving the file.
@@ -249,7 +257,12 @@ public sealed partial class MainViewModel
         // 乐观改名（v1.16.92）：识别结果一出来就先把名字写到卡片和预览标题上，磁盘上仍是
         // 时间戳文件；真正的 File.Move 仍等 PDF 落盘与预览稳定之后。路径字段完全不动。
         if (suggestion is not null)
+        {
             job.SetOptimisticDisplayName(suggestion.SuggestedStem + ".pdf");
+            // 放大复查不一致时先标上，后台命名完成后再按最终结果确认/清除。
+            if (suggestion.NeedsManualReview)
+                job.SetNeedsReview(suggestion.ReviewEvidence);
+        }
 
         // 扫描已经落盘时，行上的命名状态由后台命名接手；这份「扫描结束后改名」的旧话不能再写，
         // 否则一页文档这种"落地比识别还快"的情况会把最终状态盖掉。

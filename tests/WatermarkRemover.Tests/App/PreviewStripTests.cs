@@ -88,7 +88,7 @@ public class PreviewStripTests
         // fast enough (90dpi probes, early vertical verdict) to finish BEFORE this drain
         // looks, so IsOrienting can be false again while the renderer's file handle is still
         // winding down. DeleteWhenReleased absorbs that transient window.
-        if (strip.AutoOrientCommand.CanExecute(null))
+        if (strip.AutoOrientEnabled)
         {
             for (int i = 0; i < 300 && !strip.IsOrienting; i++)
                 await Task.Delay(10);

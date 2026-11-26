@@ -1,0 +1,652 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>备份与征信 — WatermarkRemover</title>
+<style>
+  :root {
+    --bg: #f5f6f8; --card: #ffffff; --line: #e5e7eb;
+    --text: #1f2937; --muted: #6b7280; --accent: #2563eb;
+    --green: #16a34a; --warn: #d97706; --red: #dc2626; --radius: 12px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    background: var(--bg); color: var(--text);
+    padding: 24px 16px; max-width: 1080px; margin: 0 auto;
+    font-size: 14px;
+  }
+  header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px; margin-bottom: 14px; }
+  header h1 { font-size: 20px; }
+  header .sub { color: var(--muted); font-size: 13px; }
+  header .machine { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+  select, input[type=text] {
+    padding: 5px 8px; border: 1px solid var(--line); border-radius: 8px;
+    background: var(--card); font-size: 13px; color: var(--text);
+  }
+  input[type=text] { width: 200px; }
+  .tabs { display: flex; gap: 6px; margin-bottom: 16px; border-bottom: 1px solid var(--line); }
+  .tab {
+    padding: 8px 16px; cursor: pointer; font-size: 14px; color: var(--muted);
+    border-bottom: 2px solid transparent; user-select: none;
+  }
+  .tab.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+  .panel { display: none; }
+  .panel.active { display: block; }
+  .banner {
+    display: none; padding: 11px 14px; border-radius: 10px; margin-bottom: 14px;
+    font-size: 14px; font-weight: 600; border: 1px solid transparent;
+  }
+  .banner.ok { display: block; background: #ecfdf3; color: #166534; border-color: #bbf7d0; }
+  .banner.bad { display: block; background: #fef2f2; color: #991b1b; border-color: #fecaca; }
+  .banner.info { display: block; background: #eff6ff; color: #1e40af; border-color: #bfdbfe; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 18px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; }
+  .card .label { color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+  .card .value { font-size: 26px; font-weight: 600; }
+  .card .value.green { color: var(--green); }
+  .card .value.warn { color: var(--warn); }
+  .card .value.red { color: var(--red); }
+  .card .hint { color: var(--muted); font-size: 12px; margin-top: 4px; }
+  .card .hint.bad { color: var(--red); }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; margin-bottom: 18px; }
+  section h2 { font-size: 15px; margin-bottom: 12px; }
+  .filters { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; align-items: center; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); font-size: 13px; vertical-align: top; }
+  th { color: var(--muted); font-weight: 500; background: #fafbfc; position: sticky; top: 0; }
+  td.path { font-size: 13px; word-break: break-all; }
+  td.num { text-align: right; white-space: nowrap; }
+  table.days td.num { font-variant-numeric: tabular-nums; }
+  .table-wrap { max-height: 460px; overflow-y: auto; border: 1px solid var(--line); border-radius: 8px; }
+  .table-wrap.plain { max-height: none; }
+  .empty { color: var(--muted); text-align: center; padding: 30px; }
+  .status { font-size: 12px; color: var(--muted); }
+  .status.err { color: var(--red); }
+  .tag { display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 11px; white-space: nowrap; }
+  .tag.done { background: #dcfce7; color: #166534; }
+  .tag.wait { background: #fef3c7; color: #92400e; }
+  .tag.err { background: #fee2e2; color: #991b1b; }
+  .tag.skip { background: #e5e7eb; color: #374151; }
+  .tag.warn { background: #fef3c7; color: #92400e; }
+  .note { color: var(--warn); font-size: 12px; }
+  .foot { color: var(--muted); font-size: 12px; margin-top: 10px; }
+  .pager { display: flex; gap: 10px; align-items: center; margin-top: 12px; justify-content: flex-end; }
+  .pager button {
+    padding: 5px 12px; border: 1px solid var(--line); background: var(--card);
+    border-radius: 8px; cursor: pointer; font-size: 13px;
+  }
+  .pager button:disabled { opacity: .45; cursor: default; }
+  .tab .count {
+    display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 999px;
+    background: #e5e7eb; color: #374151; font-size: 11px; line-height: 16px;
+  }
+  .tab.active .count { background: var(--accent); color: #fff; }
+  .tabs .spacer { flex: 1; }
+  .tabs .tab.global { border-left: 1px solid var(--line); margin-left: 8px; padding-left: 20px; }
+  .tabs.devices { border-bottom: none; margin-top: -8px; margin-bottom: 14px; gap: 8px; }
+  .tabs.devices .tab {
+    padding: 4px 12px; border: 1px solid var(--line); border-radius: 999px;
+    background: var(--card); font-size: 13px;
+  }
+  .tabs.devices .tab.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>备份与征信</h1>
+    <span class="sub" id="target"></span>
+    <span class="sub" id="source"></span>
+    <span class="machine">
+      <span class="status" id="status"></span>
+    </span>
+  </header>
+
+  <!-- 第一行：地址；地址下有多个设备时才出现第二行设备 tab -->
+  <nav class="tabs" id="locationTabs"></nav>
+  <nav class="tabs devices" id="deviceTabs" style="display:none"></nav>
+
+  <div class="panel active" id="panel-backup">
+    <div class="banner" id="banner"></div>
+
+    <div class="cards">
+      <div class="card"><div class="label">桌面上要备份的文件</div><div class="value" id="cTotal">–</div><div class="hint" id="hRoot"></div></div>
+      <div class="card"><div class="label">已上传</div><div class="value green" id="cOk">–</div></div>
+      <div class="card"><div class="label">未上传</div><div class="value" id="cBad">–</div></div>
+      <div class="card"><div class="label">今日上传</div><div class="value" id="cToday">–</div><div class="hint" id="hToday"></div></div>
+      <div class="card"><div class="label">最近检查</div><div class="value" id="cCheck" style="font-size:18px">–</div><div class="hint" id="hCheck"></div></div>
+    </div>
+
+    <section>
+      <h2>桌面上现在有什么</h2>
+      <div class="filters">
+        <input type="text" id="q" placeholder="按文件名过滤…">
+        <span class="status" id="shown"></span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>文件</th><th class="num">大小</th><th>状态</th><th>最后上传</th></tr></thead>
+          <tbody id="tbody"></tbody>
+        </table>
+      </div>
+      <div class="empty" id="empty" style="display:none">桌面上还没有需要备份的文件</div>
+      <p class="foot" id="foot"></p>
+    </section>
+
+    <section>
+      <h2>每日上传（最近 14 天）</h2>
+      <div class="table-wrap plain">
+        <table class="days">
+          <thead><tr><th>日期</th><th class="num">上传成功</th><th>结果</th></tr></thead>
+          <tbody id="dayBody"></tbody>
+        </table>
+      </div>
+      <p class="foot">按每个文件最后一次成功上传的日期统计。当天没有新增或修改文件时，显示 0 是正常的。</p>
+    </section>
+  </div>
+
+  <div class="panel" id="panel-credit">
+    <div class="cards">
+      <div class="card"><div class="label">已整理</div><div class="value green" id="kDone">–</div><div class="hint" id="kUpdated">–</div></div>
+      <div class="card"><div class="label">总记录</div><div class="value" id="kTotal">–</div></div>
+      <div class="card"><div class="label">重复跳过</div><div class="value" id="kSkip">–</div></div>
+      <div class="card"><div class="label">待复核</div><div class="value warn" id="kFlag">–</div><div class="hint">识别有疑问，需人工确认</div></div>
+    </div>
+
+    <section>
+      <h2>征信文件明细</h2>
+      <div class="filters">
+        <input type="text" id="cq" placeholder="搜索姓名 / 文件名 / 备注…">
+        <select id="cstatus">
+          <option value="">全部状态</option>
+          <option value="已整理">已整理</option>
+          <option value="已跳过">已跳过</option>
+        </select>
+        <select id="csize">
+          <option value="20">20 条/页</option>
+          <option value="50" selected>50 条/页</option>
+          <option value="100">100 条/页</option>
+        </select>
+        <span class="status" id="cshown"></span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>姓名</th><th>出生日期</th><th>报告时间</th><th>状态</th><th>文件名</th><th>备注</th></tr>
+          </thead>
+          <tbody id="ctbody"></tbody>
+        </table>
+      </div>
+      <div class="empty" id="cempty" style="display:none">暂无数据</div>
+      <div class="pager">
+        <span class="status" id="cpage"></span>
+        <button id="cprev">上一页</button>
+        <button id="cnext">下一页</button>
+      </div>
+    </section>
+  </div>
+
+<script>
+'use strict';
+var TZ = 8;
+var WAIT_MINUTES = 5;
+var $ = function (id) { return document.getElementById(id); };
+
+/* ---------- 通用 ---------- */
+function localDate(iso) {
+  var d = new Date(iso); if (isNaN(d)) return null;
+  return new Date(d.getTime() + TZ * 3600000).toISOString().slice(0, 10);
+}
+function localTime(iso) {
+  var d = new Date(iso); if (isNaN(d)) return '–';
+  return new Date(d.getTime() + TZ * 3600000).toISOString().slice(5, 16).replace('T', ' ');
+}
+function fmtSize(n) {
+  n = Number(n) || 0;
+  if (n < 1024) return n + ' B';
+  if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
+  return (n / 1048576).toFixed(1) + ' MB';
+}
+function todayStr() {
+  return new Date(Date.now() + TZ * 3600000).toISOString().slice(0, 10);
+}
+
+/* ---------- 地址 / 设备 层级 ---------- */
+var groups = [];                 // [{ location, machines: [{ name, doc }] }]
+var selectedLocation = null;
+var selectedMachine = null;
+var activeTab = 'backup';
+
+var CARRIER_WORDS = ['移动', '联通', '电信', '铁通', '广电', '教育网', '鹏博士', '长城宽带',
+                     'Chinanet', 'CNC', 'UNICOM', 'CMNET'];
+
+/** 从 "中国 广西 玉林 移动" 取展示地址：去掉国家与运营商，取城市并去掉“市”。 */
+function shortLocation(raw) {
+  var text = (raw || '').trim();
+  if (!text) return '未知地址';
+  var parts = text.split(/\s+/).filter(function (p) {
+    return p && p !== '中国' && CARRIER_WORDS.indexOf(p) < 0;
+  });
+  var city = parts.length >= 2 ? parts[parts.length - 1] : (parts[0] || '');
+  city = city.replace(/市$/, '');
+  return city || '未知地址';
+}
+
+function renderLocationTabs() {
+  var nav = $('locationTabs');
+  nav.innerHTML = '';
+
+  groups.forEach(function (group) {
+    var tab = document.createElement('div');
+    tab.className = 'tab' +
+      (activeTab === 'backup' && group.location === selectedLocation ? ' active' : '');
+    tab.appendChild(document.createTextNode(group.location));
+    if (group.machines.length > 1) {
+      var badge = document.createElement('span');
+      badge.className = 'count';
+      badge.textContent = group.machines.length;
+      tab.appendChild(badge);
+    }
+    tab.onclick = function () {
+      activeTab = 'backup';
+      selectedLocation = group.location;
+      if (!group.machines.some(function (m) { return m.name === selectedMachine; })) {
+        selectedMachine = group.machines.length ? group.machines[0].name : null;
+      }
+      renderAll();
+      refresh(false);
+    };
+    nav.appendChild(tab);
+  });
+
+  var spacer = document.createElement('div');
+  spacer.className = 'spacer';
+  nav.appendChild(spacer);
+
+  // 征信整理不属于任何地址，单独放在最右侧，和地址同级但互不隶属。
+  var credit = document.createElement('div');
+  credit.className = 'tab global' + (activeTab === 'credit' ? ' active' : '');
+  credit.textContent = '征信整理';
+  credit.onclick = function () {
+    activeTab = 'credit';
+    renderAll();
+    loadCredit(1);
+  };
+  nav.appendChild(credit);
+}
+
+function currentGroup() {
+  for (var i = 0; i < groups.length; i++) {
+    if (groups[i].location === selectedLocation) return groups[i];
+  }
+  return null;
+}
+
+function currentMachine() {
+  var group = currentGroup();
+  if (!group) return null;
+  for (var i = 0; i < group.machines.length; i++) {
+    if (group.machines[i].name === selectedMachine) return group.machines[i];
+  }
+  return null;
+}
+
+/** 同一地址下有多台设备时，地址下方再出现一排设备 tab；只有一台就不占行。 */
+function renderDeviceTabs() {
+  var nav = $('deviceTabs');
+  nav.innerHTML = '';
+  var group = activeTab === 'backup' ? currentGroup() : null;
+  if (!group || group.machines.length <= 1) {
+    nav.style.display = 'none';
+    return;
+  }
+
+  nav.style.display = '';
+  group.machines.forEach(function (machine) {
+    var tab = document.createElement('div');
+    tab.className = 'tab' + (machine.name === selectedMachine ? ' active' : '');
+    tab.textContent = machine.name;
+    tab.onclick = function () {
+      selectedMachine = machine.name;
+      renderAll();
+    };
+    nav.appendChild(tab);
+  });
+}
+
+function renderAll() {
+  renderLocationTabs();
+  renderDeviceTabs();
+  $('panel-backup').classList.toggle('active', activeTab === 'backup');
+  $('panel-credit').classList.toggle('active', activeTab === 'credit');
+
+  if (activeTab !== 'backup') {
+    $('target').textContent = '';
+    $('source').textContent = '';
+    $('target').title = '';
+    $('source').title = '';
+    return;
+  }
+
+  var machine = currentMachine();
+  if (machine) {
+    render(machine.doc);
+    setStatus('更新于 ' + localTime(machine.doc.generatedUtc || new Date().toISOString()));
+  } else {
+    renderEmpty();
+  }
+}
+
+/* ---------- 备份统计 ---------- */
+var currentFiles = [];
+var currentDoc = null;
+
+/** 文件当前状态：已上传 / 待上传（刚改，备份会自己跟上）/ 未上传（超过 5 分钟还没传上去）。 */
+function fileStatus(f) {
+  if (f.uploaded) return 'uploaded';
+  var t = Date.parse(f.lastWriteUtc || '');
+  if (isNaN(t)) return 'pending';
+  return (Date.now() - t) / 60000 > WAIT_MINUTES ? 'pending' : 'waiting';
+}
+
+function normalizeDoc(doc) {
+  var legacy = !Array.isArray(doc.desktop);
+  var files = legacy
+    ? (doc.files || []).filter(function (f) { return f.lastSuccessUtc; })
+        .map(function (f) {
+          return { path: f.path, length: f.length, lastWriteUtc: f.lastSuccessUtc,
+                   uploaded: true, lastSuccessUtc: f.lastSuccessUtc };
+        })
+    : doc.desktop;
+  return { legacy: legacy, files: files };
+}
+
+function render(doc) {
+  currentDoc = doc;
+  var normalized = normalizeDoc(doc);
+  var files = normalized.files || [];
+  currentFiles = files;
+
+  $('target').textContent = doc.target ? ('目标：' + doc.target) : '';
+  var dev = (doc.device && doc.device.name) ? doc.device.name : (doc.machine || '');
+  var ip = doc.clientIp || doc.publicIp || '';
+  var loc = doc.ipLocation || '';
+  var src = [];
+  if (dev) src.push('设备 ' + dev);
+  if (ip) src.push('IP ' + ip + (loc ? '（' + loc + '）' : ''));
+  $('source').textContent = src.join(' · ');
+  var devTitle = [];
+  if (doc.device && doc.device.os) devTitle.push(doc.device.os);
+  if (doc.device && doc.device.user) devTitle.push('用户 ' + doc.device.user);
+  if (doc.publicIp && doc.publicIp !== doc.clientIp) devTitle.push('上报 IP ' + doc.publicIp);
+  $('source').title = devTitle.join(' · ');
+
+  var today = todayStr();
+  var ok = files.filter(function (f) { return f.uploaded; }).length;
+  var bad = files.length - ok;
+
+  /* 每日上传次数 */
+  var byDay = {};
+  if (Array.isArray(doc.days)) {
+    doc.days.forEach(function (d) { byDay[d.date] = Number(d.success) || 0; });
+  } else {
+    files.forEach(function (f) {
+      if (!f.lastSuccessUtc) return;
+      var d = localDate(f.lastSuccessUtc);
+      if (d) byDay[d] = (byDay[d] || 0) + 1;
+    });
+  }
+
+  /* 卡片 */
+  $('cTotal').textContent = files.length;
+  $('cOk').textContent = ok;
+  $('cBad').textContent = bad;
+  $('cBad').className = 'value ' + (bad > 0 ? 'red' : 'green');
+  $('cToday').textContent = byDay[today] || 0;
+  $('hToday').textContent = '本地日 ' + today;
+
+  var checked = doc.generatedUtc ? Date.parse(doc.generatedUtc) : NaN;
+  var mins = isNaN(checked) ? null : Math.max(0, Math.round((Date.now() - checked) / 60000));
+  $('cCheck').textContent = isNaN(checked) ? '–' : localTime(doc.generatedUtc);
+  $('hCheck').textContent = mins == null ? '' : (mins < 1 ? '刚刚' : mins + ' 分钟前');
+  $('hCheck').className = 'hint' + (mins != null && mins > 30 ? ' bad' : '');
+  $('hRoot').textContent = doc.root ? ('监控目录：' + doc.root) : '';
+
+  /* 顶部结论 */
+  var banner = $('banner');
+  banner.className = 'banner';
+  if (doc.rootError) {
+    banner.className = 'banner bad';
+    banner.textContent = doc.rootError;
+  } else if (mins != null && mins > 30) {
+    banner.className = 'banner bad';
+    banner.textContent = '这台电脑已 ' + mins + ' 分钟没有上报（可能关机了，或统计任务没在运行）。下面的数字可能已经过时。';
+  } else if (normalized.legacy) {
+    banner.className = 'banner info';
+    banner.textContent = '这台电脑的统计脚本还是旧版，只能看到已上传过的文件。更新后就能看到桌面上还没上传的文件。';
+  } else if (bad > 0) {
+    banner.className = 'banner bad';
+    banner.textContent = '有 ' + bad + ' 个文件还没有上传成功。';
+  } else {
+    banner.className = 'banner ok';
+    banner.textContent = files.length === 0 ? '桌面上目前没有需要备份的文件。' : '桌面上的文件全部已上传成功。';
+  }
+
+  /* 底部说明 */
+  var foot = [];
+  if (doc.unsupportedCount) {
+    foot.push('另有 ' + doc.unsupportedCount + ' 个文件不参与备份（快捷方式、程序、临时文件等）');
+  }
+  $('foot').textContent = foot.join('；');
+
+  renderTable();
+  renderDays(byDay, today);
+}
+
+function renderTable() {
+  var q = $('q').value.trim().toLowerCase();
+  var rank = { pending: 0, waiting: 1, uploaded: 2 };
+  var rows = currentFiles.filter(function (f) {
+    return !q || f.path.toLowerCase().indexOf(q) >= 0;
+  }).sort(function (a, b) {
+    var diff = rank[fileStatus(a)] - rank[fileStatus(b)];
+    if (diff !== 0) return diff;
+    return a.path.localeCompare(b.path, 'zh-CN');
+  });
+
+  var tbody = $('tbody'); tbody.innerHTML = '';
+  rows.forEach(function (f) {
+    var status = fileStatus(f);
+    var tr = document.createElement('tr');
+    var td1 = document.createElement('td'); td1.className = 'path'; td1.textContent = f.path;
+    var td2 = document.createElement('td'); td2.className = 'num'; td2.textContent = fmtSize(f.length);
+    var td3 = document.createElement('td');
+    var tag = document.createElement('span');
+    tag.className = 'tag ' + (status === 'uploaded' ? 'done' : (status === 'waiting' ? 'wait' : 'err'));
+    tag.textContent = status === 'uploaded' ? '已上传' : (status === 'waiting' ? '待上传' : '未上传');
+    td3.appendChild(tag);
+    var td4 = document.createElement('td');
+    td4.textContent = status === 'uploaded' && f.lastSuccessUtc ? localTime(f.lastSuccessUtc) : '—';
+    tr.appendChild(td1); tr.appendChild(td2); tr.appendChild(td3); tr.appendChild(td4);
+    tbody.appendChild(tr);
+  });
+
+  $('shown').textContent = '显示 ' + rows.length + ' / ' + currentFiles.length + ' 个文件';
+  $('empty').style.display = currentFiles.length ? 'none' : 'block';
+}
+
+function renderDays(byDay, today) {
+  var tbody = $('dayBody'); tbody.innerHTML = '';
+  var base = new Date(Date.now() + TZ * 3600000);
+  for (var i = 0; i < 14; i++) {
+    var date = new Date(base.getTime() - i * 86400000).toISOString().slice(0, 10);
+    var count = byDay[date] || 0;
+    var tr = document.createElement('tr');
+    var td1 = document.createElement('td');
+    td1.textContent = date + (date === today ? '（今天）' : '');
+    var td2 = document.createElement('td'); td2.className = 'num'; td2.textContent = count;
+    var td3 = document.createElement('td');
+    var tag = document.createElement('span');
+    tag.className = 'tag ' + (count > 0 ? 'done' : 'skip');
+    tag.textContent = count > 0 ? '有上传' : '无上传';
+    td3.appendChild(tag);
+    tr.appendChild(td1); tr.appendChild(td2); tr.appendChild(td3);
+    tbody.appendChild(tr);
+  }
+}
+
+function setStatus(text, err) {
+  var s = $('status'); s.textContent = text; s.className = err ? 'status err' : 'status';
+}
+
+function renderEmpty() {
+  currentFiles = [];
+  ['cTotal', 'cOk', 'cBad', 'cToday', 'cCheck'].forEach(function (id) { $(id).textContent = '–'; });
+  $('hCheck').textContent = ''; $('hRoot').textContent = ''; $('hToday').textContent = '';
+  $('banner').className = 'banner';
+  $('tbody').innerHTML = ''; $('dayBody').innerHTML = '';
+  $('empty').style.display = 'block';
+  setStatus('暂无数据（等待客户端首次推送）', true);
+}
+
+/** 拉取所有设备概况，按地址分组；保留当前选中的地址与设备。 */
+function refresh(showLoading) {
+  if (showLoading) setStatus('加载中…');
+
+  fetch('data/index.json', { cache: 'no-store' })
+    .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+    .then(function (idx) {
+      var names = Object.keys((idx && idx.machines) || {}).sort();
+      if (names.length === 0) throw new Error('empty');
+      return Promise.all(names.map(function (name) {
+        return fetch('data/' + name + '.json', { cache: 'no-store' })
+          .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+          .then(function (doc) { return { name: name, doc: doc }; })
+          .catch(function () { return { name: name, doc: null }; });
+      }));
+    })
+    .then(function (list) {
+      var byLocation = {};
+      var order = [];
+      list.forEach(function (item) {
+        if (!item.doc) return;
+        var location = shortLocation(item.doc.ipLocation);
+        if (!byLocation[location]) {
+          byLocation[location] = { location: location, machines: [] };
+          order.push(location);
+        }
+        byLocation[location].machines.push(item);
+      });
+      if (order.length === 0) throw new Error('empty');
+
+      groups = order.sort(function (a, b) { return a.localeCompare(b, 'zh-CN'); })
+        .map(function (location) {
+          byLocation[location].machines.sort(function (a, b) {
+            return a.name.localeCompare(b.name, 'zh-CN');
+          });
+          return byLocation[location];
+        });
+
+      if (!groups.some(function (g) { return g.location === selectedLocation; })) {
+        selectedLocation = groups[0].location;
+      }
+      var group = currentGroup();
+      if (!group || !group.machines.some(function (m) { return m.name === selectedMachine; })) {
+        selectedMachine = group && group.machines.length ? group.machines[0].name : null;
+      }
+
+      renderAll();
+    })
+    .catch(function () {
+      groups = [];
+      selectedLocation = null;
+      selectedMachine = null;
+      renderAll();
+      setStatus('暂无数据（等待客户端首次推送）', true);
+    });
+}
+
+/* ---------- 征信整理 ---------- */
+var creditPage = 1;
+var creditSize = 50;
+var creditTotal = 0;
+
+function loadCredit(page) {
+  creditPage = page || creditPage;
+  creditSize = Number($('csize').value) || 50;
+  var q = $('cq').value.trim();
+  var status = $('cstatus').value;
+  var url = 'credit?page=' + creditPage + '&size=' + creditSize +
+            '&q=' + encodeURIComponent(q) + '&status=' + encodeURIComponent(status);
+  setStatus('加载征信数据…');
+  fetch(url, { cache: 'no-store' })
+    .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+    .then(function (doc) {
+      var s = doc.stats || {};
+      $('kDone').textContent = s.done == null ? '–' : s.done;
+      $('kTotal').textContent = s.total == null ? '–' : s.total;
+      $('kSkip').textContent = s.skipped == null ? '–' : s.skipped;
+      $('kFlag').textContent = s.flagged == null ? '–' : s.flagged;
+      $('kUpdated').textContent = '最近同步 ' + localTime(new Date().toISOString());
+      creditTotal = doc.total || 0;
+      renderCredit(doc.rows || []);
+      var pages = Math.max(1, Math.ceil(creditTotal / creditSize));
+      $('cpage').textContent = '第 ' + creditPage + ' / ' + pages + ' 页，共 ' + creditTotal + ' 条';
+      $('cprev').disabled = creditPage <= 1;
+      $('cnext').disabled = creditPage >= pages;
+      $('cshown').textContent = '本页 ' + (doc.rows || []).length + ' 条';
+      $('cempty').style.display = creditTotal ? 'none' : 'block';
+      setStatus('征信数据已加载');
+    })
+    .catch(function (e) {
+      $('ctbody').innerHTML = '';
+      $('cempty').style.display = 'block';
+      setStatus('征信数据不可用（' + e.message + '）', true);
+    });
+}
+
+function renderCredit(rows) {
+  var tbody = $('ctbody'); tbody.innerHTML = '';
+  rows.forEach(function (r) {
+    var tr = document.createElement('tr');
+    var td1 = document.createElement('td'); td1.textContent = r.person || '';
+    var td2 = document.createElement('td');
+    td2.textContent = r.birth_date || '';
+    if (!r.birth_date) td2.className = 'note';
+    var td2b = document.createElement('td'); td2b.textContent = (r.report_time || '').slice(0, 16);
+    var td3 = document.createElement('td');
+    var tag = document.createElement('span');
+    tag.className = 'tag ' + (r.status === '已整理' ? 'done' : (r.status === '已跳过' ? 'skip' : 'warn'));
+    tag.textContent = r.status || '未知';
+    td3.appendChild(tag);
+    var td4 = document.createElement('td'); td4.className = 'path'; td4.textContent = r.new_name || '';
+    var td5 = document.createElement('td');
+    if (r.note) { var n = document.createElement('div'); n.className = 'note'; n.textContent = r.note; td5.appendChild(n); }
+    if (r.multi) { var m = document.createElement('div'); m.style.color = '#2563eb'; m.textContent = r.multi; td5.appendChild(m); }
+    tr.appendChild(td1); tr.appendChild(td2); tr.appendChild(td2b);
+    tr.appendChild(td3); tr.appendChild(td4); tr.appendChild(td5);
+    tbody.appendChild(tr);
+  });
+}
+
+$('q').oninput = renderTable;
+$('cq').oninput = (function () {
+  var t;
+  return function () { clearTimeout(t); t = setTimeout(function () { loadCredit(1); }, 300); };
+})();
+$('cstatus').onchange = function () { loadCredit(1); };
+$('csize').onchange = function () { loadCredit(1); };
+$('cprev').onclick = function () { if (creditPage > 1) loadCredit(creditPage - 1); };
+$('cnext').onclick = function () {
+  var pages = Math.max(1, Math.ceil(creditTotal / creditSize));
+  if (creditPage < pages) loadCredit(creditPage + 1);
+};
+
+refresh(true);
+setInterval(function () {
+  if (activeTab === 'backup') refresh(false);
+}, 60000);
+</script>
+</body>
+</html>

@@ -368,6 +368,10 @@ public sealed partial class PdfPreviewViewModel
     /// every crooked page is collected first, then all turns land in ONE in-place save. Quiet
     /// by contract — a page the engine cannot read (blank back, unusable OCR) stays untouched.
     /// </summary>
+    /// <summary>OCR orientation for newly inserted/appended scan pages. Follows the OCR
+    /// setting: when 扫描后自动检测方向 is off, the pages are kept exactly as scanned.</summary>
     private Task<int> OrientInsertedPagesAsync(int firstIndex, int count) =>
-        _postProcessor.OrientPagesAsync(firstIndex, count, PageCount, OrientationDpi);
+        _orientInsertedPages
+            ? _postProcessor.OrientPagesAsync(firstIndex, count, PageCount, OrientationDpi)
+            : Task.FromResult(0);
 }

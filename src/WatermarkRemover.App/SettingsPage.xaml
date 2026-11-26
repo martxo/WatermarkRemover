@@ -888,7 +888,32 @@
                             </Style>
                         </StackPanel.Style>
 
-                        <TextBlock Text="版面识别" Style="{StaticResource SectionTitle}" Margin="0,0,0,8"/>
+                        <!-- 自动识别开关：哪些流程会在后台自动调用 OCR。 -->
+                        <TextBlock Text="自动识别" Style="{StaticResource SectionTitle}" Margin="0,0,0,8"/>
+                        <Border Style="{StaticResource InsetCard}">
+                            <StackPanel>
+                                <CheckBox Content="扫描后自动检测页面方向"
+                                          FontSize="13"
+                                          VerticalContentAlignment="Center"
+                                          IsChecked="{Binding Settings.ScanAutoOrientEnabled, Mode=TwoWay}"/>
+                                <TextBlock Text="开启后，扫描落盘、追加或插入扫描页时会自动判断朝向并旋转（识别不出来就保持原样）。关掉后完全不做方向识别，扫描件按原样保存，需要时在预览里用「摆正」按页手动旋转。"
+                                           Style="{StaticResource RowCaption}"
+                                           Margin="0,10,0,0"/>
+                                <CheckBox Content="身份证合成时自动识别姓名与正反面"
+                                          FontSize="13"
+                                          VerticalContentAlignment="Center"
+                                          Margin="0,14,0,0"
+                                          IsChecked="{Binding Settings.IdCardAutoOcrEnabled, Mode=TwoWay}"/>
+                                <TextBlock Text="开启后，手机传图选身份证拼版时会先识别姓名和正反面，自动排序并命名。关掉后不再自动识别，也不会自动拼版；手动合成时按你选图的顺序直接拼版。"
+                                           Style="{StaticResource RowCaption}"
+                                           Margin="0,10,0,0"/>
+                                <TextBlock Text="另外：扫描、手机传文件、去水印完成后的「按内容自动命名」也是一个自动识别入口，开关在「通用设置 → 自动命名」。"
+                                           Style="{StaticResource RowCaption}"
+                                           Margin="0,10,0,0"/>
+                            </StackPanel>
+                        </Border>
+
+                        <TextBlock Text="版面识别" Style="{StaticResource SectionTitle}" Margin="0,16,0,8"/>
                         <Border Style="{StaticResource InsetCard}">
                             <StackPanel>
                                 <TextBlock Text="识别的第一步：怎么把页面切成区域。先识别版面、再逐区识别文字，可与下方的识别引擎自由组合（像搭积木一样搭配出一套解决方案）。"
@@ -1115,6 +1140,28 @@
                                 </Style.Triggers>
                             </Style>
                         </StackPanel.Style>
+
+                        <!-- 扫描卡死的一键急救：结束残留进程 + 官方软件进程，再重启自身 -->
+                        <TextBlock Text="扫描卡住 / 打印机不动" Style="{StaticResource SectionTitle}"/>
+                        <Border Style="{StaticResource InsetCard}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                    <TextBlock Text="疑难重启" Style="{StaticResource RowTitle}"/>
+                                    <TextBlock Text="扫描一直转、打印机不动、也不报错（官方软件同样失灵）时，一键结束本软件残留进程和 Brother 打印/扫描软件的运行进程，然后重新启动本软件。正在进行的扫描会中断，已扫描完成的页面已保存，不会丢失。"
+                                               Style="{StaticResource RowCaption}"
+                                               TextWrapping="Wrap" Margin="0,3,0,0"/>
+                                </StackPanel>
+                                <Button Grid.Column="1" Content="疑难重启"
+                                        Style="{StaticResource SmallButton}"
+                                        Padding="14,8"
+                                        VerticalAlignment="Center"
+                                        Click="OnTroubleshootRestart"/>
+                            </Grid>
+                        </Border>
 
                         <TextBlock Text="执行日志" Style="{StaticResource SectionTitle}"/>
                         <Border Style="{StaticResource InsetCard}">

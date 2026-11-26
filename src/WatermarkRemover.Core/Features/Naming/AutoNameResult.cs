@@ -27,6 +27,22 @@ public sealed class AutoNameResult
     /// </summary>
     public string SuggestedStem { get; }
 
+    /// <summary>Set when the independent enlarged re-read could not confirm this result; the
+    /// caller labels the row / report for a human check instead of trusting the name silently.</summary>
+    public bool NeedsManualReview { get; private set; }
+
+    /// <summary>Why the recheck flagged it (shown on the row and in the recognition report).</summary>
+    public string? ReviewEvidence { get; private set; }
+
+    /// <summary>Marks the suggestion for a human check and returns the same instance (chaining
+    /// at the naming call site does not lose the original fields).</summary>
+    public AutoNameResult MarkForReview(string evidence)
+    {
+        NeedsManualReview = true;
+        ReviewEvidence = evidence;
+        return this;
+    }
+
     /// <summary>
     /// The stem rule on its own, so the recognition report suggests exactly the file name the
     /// naming pipeline produces — the two used to be hand-rolled concatenations that drifted.
