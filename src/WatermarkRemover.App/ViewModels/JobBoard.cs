@@ -136,16 +136,19 @@ public sealed class JobBoard : ObservableObject
     public void ResetCompleted() => CompletedCount = 0;
 
     /// <summary>
-    /// Re-adds records read back from the task journal at startup. They are appended oldest first
-    /// (so the newest record still ends up on top) and counted, so the footer matches the list
-    /// instead of claiming zero finished files above a full one.
+    /// Re-adds records read back from the task journal at startup, newest first — the list is a
+    /// scan/processing history, so a restart must not invert it (index 0 is the top row).
     /// </summary>
     public void Restore(IReadOnlyList<FileJobViewModel> jobs)
     {
         ArgumentNullException.ThrowIfNull(jobs);
 
-        foreach (var job in jobs)
+        foreach (var job in jobs
+                     .OrderByDescending(j => j.SortTime)
+                     .ThenBy(j => j.DisplayName, StringComparer.Ordinal))
+        {
             Jobs.Add(job);
+        }
 
         if (jobs.Count == 0) return;
 

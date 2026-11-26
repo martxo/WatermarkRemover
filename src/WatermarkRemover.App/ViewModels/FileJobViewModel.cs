@@ -190,9 +190,13 @@ public sealed class FileJobViewModel : ObservableObject
     /// </summary>
     public string StatusLine =>
         State == JobState.Failed ? Detail
-        : NeedsReview ? $"需人工核实：{_reviewNote ?? "放大复查不一致"}"
+        : NeedsReview ? "需人工核实（点击查看原因）"
         : NamingNote is { Length: > 0 } note ? note
         : Detail;
+
+    /// <summary>Full recheck sentence for the tooltip / click dialog; null when not flagged.
+    /// The row itself only shows the short label, because the evidence is several lines long.</summary>
+    public string? ReviewDetail => NeedsReview ? _reviewNote : null;
 
     /// <summary>Only a failed job has a diagnostic worth copying.</summary>
     public bool ShowCopyError => State == JobState.Failed;
@@ -474,6 +478,7 @@ public sealed class FileJobViewModel : ObservableObject
             NeedsReview = flagged;
             OnPropertyChanged(nameof(NeedsReview));
             OnPropertyChanged(nameof(StatusLine));
+            OnPropertyChanged(nameof(ReviewDetail));
         }
 
         var dispatcher = System.Windows.Application.Current?.Dispatcher;
@@ -743,6 +748,10 @@ public sealed class FileJobViewModel : ObservableObject
     }
 
     public string ProcessedAtText => ProcessedAt?.ToString("yyyy-MM-dd HH:mm:ss") ?? string.Empty;
+
+    /// <summary>Strict history order key: finished rows use their completion (= scan) time;
+    /// a row still running has no time yet and sorts as the newest (top of the list).</summary>
+    public DateTime SortTime => ProcessedAt ?? DateTime.MaxValue;
 
     public void MarkProcessing(string processingText)
     {

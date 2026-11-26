@@ -39,7 +39,7 @@ public static class CreditReportNameLocator
     private const double CellBottomGap = 2.4;
 
     /// <summary>Zoom factor for the tiny cell crop — small images recognise poorly.</summary>
-    private const int CellZoom = 3;
+    private const int DefaultCellZoom = 3;
 
     /// <summary>Band probes per canvas aspect, in try order. A landscape report fed through
     /// the ADF comes out sideways on a portrait canvas (90/270); an upright landscape page
@@ -86,7 +86,8 @@ public static class CreditReportNameLocator
     /// (another document or a rotated page) or the value cell yields no usable name.
     /// </summary>
     public static async Task<string?> TryLocateNameAsync(
-        byte[] pageImage, IOcrEngine engine, Action<string, Exception?>? trace = null)
+        byte[] pageImage, IOcrEngine engine, Action<string, Exception?>? trace = null,
+        int cellZoom = DefaultCellZoom)
     {
         ArgumentNullException.ThrowIfNull(pageImage);
         ArgumentNullException.ThrowIfNull(engine);
@@ -113,7 +114,7 @@ public static class CreditReportNameLocator
                 using SKBitmap? rotated = degrees == 0 ? null : Rotate(page, degrees);
                 SKBitmap oriented = rotated ?? page;
                 string? name = await TryLocateInOrientationAsync(
-                    bounded, engine, oriented, degrees, trace).ConfigureAwait(false);
+                    bounded, engine, oriented, degrees, trace, cellZoom).ConfigureAwait(false);
                 if (name is not null) return name;
             }
 
@@ -134,7 +135,8 @@ public static class CreditReportNameLocator
         IOcrEngine engine,
         SKBitmap oriented,
         int degrees,
-        Action<string, Exception?>? trace)
+        Action<string, Exception?>? trace,
+        int cellZoom)
     {
         // 1. Probe pass on the top band only — a fraction of the full-page pixels.
         int bandHeight = Math.Max(1, (int)(oriented.Height * ProbeBandHeight));
@@ -164,7 +166,7 @@ public static class CreditReportNameLocator
             (int)(cell.X * band.Width), (int)(cell.Y * band.Height),
             Math.Max(1, (int)(cell.Width * band.Width)),
             Math.Max(1, (int)(cell.Height * band.Height)));
-        using var zoomed = Scale(cellBitmap, CellZoom);
+        using var zoomed = Scale(cellBitmap, cellZoom);
         IReadOnlyList<string> cellLines =
             await engine.RecognizeAsync(Encode(zoomed)).ConfigureAwait(false);
 
@@ -212,7 +214,7 @@ public static class CreditReportNameLocator
             int h = Math.Clamp((int)(cell.Height * page.Height), 1, page.Height - y);
 
             using var cellBitmap = Crop(page, x, y, w, h);
-            using var zoomed = Scale(cellBitmap, CellZoom);
+            using var zoomed = Scale(cellBitmap, DefaultCellZoom);
             IReadOnlyList<string> cellLines = await engine
                 .RecognizeAsync(Encode(zoomed)).ConfigureAwait(false);
 

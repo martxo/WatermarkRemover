@@ -121,6 +121,8 @@ public partial class MainWindow : Window
         InitializeComponent();
         AppLog.Info($"主窗口构造耗时 {Stopwatch.GetElapsedTime(ctorTicks).TotalMilliseconds:0} ms（含 XAML 解析）");
         DataContext = _viewModel;
+        // 每 30 分钟把本机日志上传到网盘（只在真实窗口启动，测试构造 ViewModel 时不跑）。
+        _viewModel.StartBackgroundLogUpload();
         // 记录行「反馈」：宿主打开反馈窗口，按该记录的操作号切片日志。
         _viewModel.RecordFeedbackRequested += OnRecordFeedbackRequested;
         // Tile clicks open the screen-level viewer (dark veil over the whole screen, film rail
@@ -921,6 +923,29 @@ public partial class MainWindow : Window
     /// <summary>First step of the account flow: clicking the user entry toggles the menu.</summary>
     private void OnUserEntryClick(object sender, RoutedEventArgs e) =>
         UserMenuPopup.IsOpen = !UserMenuPopup.IsOpen;
+
+    /// <summary>
+    /// Status-line click. A「需人工核实」row shows the full recheck evidence in a dialog instead of
+    /// opening the file: the row label is deliberately short (two readings disagreeing is a
+    /// sentence, not a filename), so the click is the only way to read it.
+    /// </summary>
+    private void OnJobStatusClick(object sender, MouseButtonEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is not FileJobViewModel job) return;
+
+        if (job.NeedsReview)
+        {
+            MessageBox.Show(this,
+                $"{job.DisplayName}\n\n{job.ReviewDetail ?? "放大二次识别不一致，建议人工核实。"}",
+                "需人工核实", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+        else if (DataContext is MainViewModel { } vm && job.OutputPath is { Length: > 0 } path)
+        {
+            vm.OpenOutputCommand.Execute(path);
+        }
+
+        e.Handled = true;
+    }
 
     /// <summary>Second step: the "设置" row enters the settings second-level page.</summary>
     private void OnOpenSettingsClick(object sender, RoutedEventArgs e)

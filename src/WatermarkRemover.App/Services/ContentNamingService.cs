@@ -288,7 +288,7 @@ public sealed class ContentNamingService
         {
             AutoNameResult result = AutoNameResult.Create(located, CreditReportTypeShortName);
             AppLog.Trace($"命名：自动命名成功 → {result.SuggestedStem}", null);
-            return await VerifyAsync(result, image, located, sourcePath, op).ConfigureAwait(true);
+            return await VerifyCreditAsync(result, image, sourcePath, op).ConfigureAwait(true);
         }
 
         IReadOnlyList<RecognizedLine> lines = await _ocr
@@ -310,8 +310,8 @@ public sealed class ContentNamingService
         {
             AutoNameResult fromGeometry = AutoNameResult.Create(fromLines, CreditReportTypeShortName);
             AppLog.Trace($"命名：自动命名成功 → {fromGeometry.SuggestedStem}", null);
-            return await VerifyAsync(
-                fromGeometry, image, TextOf(lines), sourcePath, op).ConfigureAwait(true);
+            return await VerifyCreditAsync(
+                fromGeometry, image, sourcePath, op).ConfigureAwait(true);
         }
 
         AutoNameResult? built = SmartNamingService.TryBuildName(lines, AppLog.Trace);
@@ -335,6 +335,23 @@ public sealed class ContentNamingService
     {
         OcrRecheck.Outcome outcome = await _recheck
             .CheckAsync(image, firstPassText, result.PersonName).ConfigureAwait(true);
+        return ReportRecheck(result, outcome, sourcePath, op);
+    }
+
+    /// <summary>征信固定版式：首轮名称来自姓名值格的高倍裁剪，复查也在同一个值格上换倍数
+    /// 再读一次——整页复查会因 OCR 的 2400px 输入上限把小格子糊掉，之前就是那样误报的。</summary>
+    private async Task<AutoNameResult> VerifyCreditAsync(
+        AutoNameResult result, byte[] image, string sourcePath, OperationScope op)
+    {
+        OcrRecheck.Outcome outcome = await _recheck
+            .CheckCreditNameAsync(image, result.PersonName).ConfigureAwait(true);
+        return ReportRecheck(result, outcome, sourcePath, op);
+    }
+
+    private AutoNameResult ReportRecheck(
+        AutoNameResult result, OcrRecheck.Outcome outcome,
+        string sourcePath, OperationScope op)
+    {
         op.Step("放大复查", outcome.Evidence);
         if (!outcome.NeedsReview) return result;
 

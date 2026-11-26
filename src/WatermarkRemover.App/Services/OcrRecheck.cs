@@ -2,6 +2,7 @@ using System.IO;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using WatermarkRemover.App.Logging;
+using WatermarkRemover.App.Naming;
 using WatermarkRemover.Core.Features.Ocr;
 
 namespace WatermarkRemover.App.Services;
@@ -18,9 +19,11 @@ internal sealed class OcrRecheck
     /// <summary>Upscale factor for the second read (2× is where thin strokes separate).</summary>
     private const double MaxUpscale = 2.0;
 
-    /// <summary>Long-side cap for the enlarged image: beyond this the OCR gets slower without
-    /// reading better, and a 4000px scan doubled would cost hundreds of MB.</summary>
-    private const int MaxLongSide = 3600;
+    /// <summary>Long-side cap for the enlarged image. The project's OCR input contract is
+    /// 2400px (see ImageOcrInput); going beyond it makes the engine shrink the page internally
+    /// and small header cells stop being read at all — that is exactly how the first version
+    /// produced "放大复查没读到名称" on perfectly clear credit reports.</summary>
+    private const int MaxLongSide = 2400;
 
     /// <summary>Levenshtein is O(n·m); naming pages are far shorter than this, the cap only
     /// protects against a runaway OCR dump.</summary>
@@ -34,6 +37,40 @@ internal sealed class OcrRecheck
     /// <summary>Verdict + the sentence shown on the row and in the report.</summary>
     public sealed record Outcome(bool NeedsReview, string Evidence);
 
+    /// <summary>
+    /// Credit report: the first pass reads the 姓名 value cell at 3× zoom (the header table is
+    /// tiny). Re-read the SAME cell at another zoom instead of the whole page — a full-page
+    /// second pass is a different task and used to fail on clear reports. Comparing two reads
+    /// of the same region is what actually tells us the characters are unambiguous.
+    /// </summary>
+    public async Task<Outcome> CheckCreditNameAsync(byte[] png, string personName)
+    {
+        if (_ocr is not IBoundedOcrEngine)
+            return new Outcome(false, "复查跳过：当前引擎不支持坐标");
+
+        try
+        {
+            string? second = await CreditReportNameLocator
+                .TryLocateNameAsync(png, _ocr, trace: null, cellZoom: 4).ConfigureAwait(false);
+            if (string.IsNullOrWhiteSpace(second))
+                return new Outcome(true,
+                    $"放大 4× 复查姓名值格没读到字（首轮「{personName}」），页面可能不清晰");
+
+            if (!string.Equals(Normalize(second), Normalize(personName), StringComparison.Ordinal))
+            {
+                return new Outcome(true,
+                    $"两轮识别不一致：首轮「{personName}」，放大复查「{second}」");
+            }
+
+            return new Outcome(false, $"放大 4× 复查姓名一致（{second}）");
+        }
+        catch (Exception ex)
+        {
+            AppLog.Trace("命名：征信姓名放大复查不可用，跳过", ex);
+            return new Outcome(false, "复查不可用（已跳过）");
+        }
+    }
+
     /// <param name="png">The oriented page image the first pass recognised (PNG bytes).</param>
     /// <param name="firstPassText">Text the first pass used (full-page lines, or the located name).</param>
     /// <param name="personName">First pass's name; placeholder names ("谁…") are not required to
@@ -43,6 +80,8 @@ internal sealed class OcrRecheck
         try
         {
             (byte[] enlarged, double factor) = Upscale(png);
+            if (enlarged.Length == 0)
+                return new Outcome(false, "复查跳过：原图已达识别上限");
             IReadOnlyList<string> lines = await _ocr.RecognizeAsync(enlarged).ConfigureAwait(false);
             string second = string.Join("\n", lines);
 
@@ -89,7 +128,9 @@ internal sealed class OcrRecheck
 
         double factor = Math.Min(MaxUpscale,
             (double)MaxLongSide / Math.Max(source.PixelWidth, source.PixelHeight));
-        if (factor < 1.1) factor = 1.1;
+        // Already at the engine's input limit: a second read of the identical image proves
+        // nothing (same input, same output) — report "skipped" instead of a fake verdict.
+        if (factor < 1.05) return (Array.Empty<byte>(), 1.0);
 
         var scaled = new TransformedBitmap(source, new ScaleTransform(factor, factor));
         var encoder = new PngBitmapEncoder();

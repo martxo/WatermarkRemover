@@ -1606,8 +1606,10 @@
                                                Visibility="{Binding HasThumbnail, Converter={StaticResource BoolToVis}}"/>
 
                                         <!-- Name row: the file name takes the remaining width, quick-suffix chips
-                                             sit to its right. -->
-                                        <Grid>
+                                             sit to its right. Fixed min height: the hover chips are taller than
+                                             the resting name pill, and letting them grow the row made the whole
+                                             list jump by a pixel every time the pointer crossed a record. -->
+                                        <Grid MinHeight="30">
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="*"/>
                                                 <ColumnDefinition Width="Auto"/>
@@ -1794,7 +1796,8 @@
                                             <TextBlock Grid.Column="0"
                                                        Text="{Binding StatusLine}"
                                                        FontSize="12"
-                                                       TextTrimming="CharacterEllipsis">
+                                                       TextTrimming="CharacterEllipsis"
+                                                       MouseLeftButtonUp="OnJobStatusClick">
                                                 <TextBlock.Style>
                                                     <Style TargetType="TextBlock">
                                                         <Setter Property="Foreground" Value="{StaticResource TextSecondaryBrush}"/>
@@ -1807,6 +1810,7 @@
                                                             <DataTrigger Binding="{Binding NeedsReview}" Value="True">
                                                                 <Setter Property="Foreground" Value="{StaticResource WarningBrush}"/>
                                                                 <Setter Property="FontWeight" Value="SemiBold"/>
+                                                                <Setter Property="ToolTip" Value="{Binding ReviewDetail}"/>
                                                             </DataTrigger>
                                                             <DataTrigger Binding="{Binding State}" Value="Failed">
                                                                 <Setter Property="Foreground" Value="{StaticResource DangerBrush}"/>
@@ -1818,11 +1822,6 @@
                                                         </Style.Triggers>
                                                     </Style>
                                                 </TextBlock.Style>
-                                                <TextBlock.InputBindings>
-                                                    <MouseBinding Gesture="LeftClick"
-                                                                  Command="{Binding DataContext.OpenOutputCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                                                  CommandParameter="{Binding OutputPath}"/>
-                                                </TextBlock.InputBindings>
                                             </TextBlock>
 
                                             <TextBlock Grid.Column="1"
