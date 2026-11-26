@@ -44,6 +44,25 @@ public sealed class AutomaticBackupStateStore
         }
     }
 
+    /// <summary>Every known success, path stripped: used to seed the content ledger so files
+    /// already backed up before the ledger existed are protected from the next folder move.</summary>
+    public IReadOnlyList<(string Fingerprint, string Sha256, DateTimeOffset LastSuccessUtc)> ContentIndex()
+    {
+        lock (_sync)
+        {
+            EnsureLoadedLocked();
+            var index = new List<(string, string, DateTimeOffset)>(_states.Count);
+            foreach (var pair in _states)
+            {
+                int separator = pair.Key.IndexOf('\n');
+                if (separator <= 0 || !IsUsable(pair.Value)) continue;
+                index.Add((pair.Key[..separator], pair.Value.Sha256, pair.Value.LastSuccessUtc));
+            }
+
+            return index;
+        }
+    }
+
     public bool Upsert(
         string configurationFingerprint,
         string relativePath,

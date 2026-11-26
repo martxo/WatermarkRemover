@@ -396,6 +396,40 @@ public sealed class AutomaticBackupTests : IDisposable
         Assert.Equal(30, settings.AutomaticBackupRescanMinutes);
     }
 
+    [Fact]
+    public async Task A_file_moved_to_another_folder_is_not_uploaded_again()
+    {
+        // 前台的每日整理会把客户文件夹挪进「昨日」目录：相对路径变了，旧路径的状态随后被清理。
+        // 只按路径判断就会整批重传；内容账本必须认出这是同一份文件。
+        string root = Path.Combine(_dir, "watched-move");
+        string original = Path.Combine(root, "客户", "甲.pdf");
+        Directory.CreateDirectory(Path.GetDirectoryName(original)!);
+        await File.WriteAllTextAsync(original, "same-content");
+
+        var store = new AutomaticBackupStateStore(Path.Combine(_dir, "move-state.json"));
+        int uploads = 0;
+        using var service = NewService(store, (_, _, _, _, _) =>
+        {
+            Interlocked.Increment(ref uploads);
+            return Task.CompletedTask;
+        });
+        AppSettings settings = ValidSettings(root);
+
+        await service.ApplyConfigurationAsync(settings);
+        await WaitUntilAsync(() => uploads == 1);
+
+        string moved = Path.Combine(root, "昨日", "客户", "甲.pdf");
+        Directory.CreateDirectory(Path.GetDirectoryName(moved)!);
+        File.Move(original, moved);
+        Directory.Delete(Path.Combine(root, "客户"), recursive: true);
+
+        string fingerprint = AutomaticBackupFileFilter.ConsentFingerprint(settings);
+        await WaitUntilAsync(() => store.TryGet(fingerprint, "昨日/客户/甲.pdf", out _));
+        await Task.Delay(300); // 给误传一个发生的窗口：真有第二次上传，这里会变成 2
+
+        Assert.Equal(1, uploads);
+    }
+
     private AutomaticBackupService NewService(
         AutomaticBackupStateStore store,
         Func<NetdiskUploadTarget, string, string, bool, CancellationToken, Task> upload) =>

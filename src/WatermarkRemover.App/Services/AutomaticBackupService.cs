@@ -1,5 +1,6 @@
 using System.IO;
 using System.Security.Cryptography;
+using WatermarkRemover.App.Logging;
 using WatermarkRemover.App.ViewModels;
 using WatermarkRemover.Core.Settings;
 
@@ -10,6 +11,7 @@ public sealed class AutomaticBackupService : ObservableObject, IDisposable
 {
     private static readonly TimeSpan MaximumRetryDelay = TimeSpan.FromMinutes(30);
     private readonly AutomaticBackupStateStore _stateStore;
+    private readonly AutomaticBackupContentLedger _contentLedger;
     private readonly string _snapshotDirectory;
     private readonly Func<NetdiskUploadTarget, string, string, bool, CancellationToken, Task> _uploadAsync;
     private readonly TimeSpan _stableWindow;
@@ -46,6 +48,11 @@ public sealed class AutomaticBackupService : ObservableObject, IDisposable
         TimeSpan retryInterval)
     {
         _stateStore = stateStore ?? throw new ArgumentNullException(nameof(stateStore));
+        // Content ledger lives next to state.json; seeded from existing path states so a folder
+        // that was already backed up is protected from the next move without waiting to upload.
+        _contentLedger = new AutomaticBackupContentLedger(
+            Path.Combine(Path.GetDirectoryName(_stateStore.FilePath)!, "uploaded-contents.json"));
+        _contentLedger.Seed(_stateStore.ContentIndex());
         ArgumentException.ThrowIfNullOrWhiteSpace(snapshotDirectory);
         _snapshotDirectory = Path.GetFullPath(snapshotDirectory);
         _uploadAsync = uploadAsync ?? throw new ArgumentNullException(nameof(uploadAsync));
@@ -116,9 +123,13 @@ public sealed class AutomaticBackupService : ObservableObject, IDisposable
                 generation.Worker = Task.Run(() => RunWorkerAsync(generation));
                 IsRunning = true;
                 Signal(generation);
+                AppLog.Info(
+                    $"自动备份：开始监控 {root} → " +
+                    $"{target.ProviderId}/{target.AccountName} {target.DriveName}{target.RemoteDirectory}");
             }
             catch (Exception ex)
             {
+                AppLog.Error("自动备份：启动监控失败", ex);
                 generation.Deactivate();
                 _generation = null;
                 generation.Dispose();
@@ -507,6 +518,7 @@ public sealed class AutomaticBackupService : ObservableObject, IDisposable
                     generation.ConfigurationFingerprint, relativePath, out AutomaticBackupState? state) &&
                 state!.Length == length && state.LastWriteUtc == lastWriteUtc)
             {
+                _contentLedger.Record(generation.ConfigurationFingerprint, state.Sha256, state.LastSuccessUtc);
                 RemovePendingIfUnchanged(generation, relativePath, length, lastWriteUtc);
                 return;
             }
@@ -523,6 +535,7 @@ public sealed class AutomaticBackupService : ObservableObject, IDisposable
                 state!.Length == length && state.LastWriteUtc == lastWriteUtc &&
                 string.Equals(state.Sha256, sha256, StringComparison.OrdinalIgnoreCase))
             {
+                _contentLedger.Record(generation.ConfigurationFingerprint, state.Sha256, state.LastSuccessUtc);
                 RemovePendingIfUnchanged(generation, relativePath, length, lastWriteUtc);
                 return;
             }
@@ -532,7 +545,23 @@ public sealed class AutomaticBackupService : ObservableObject, IDisposable
                 var refreshed = new AutomaticBackupState(length, lastWriteUtc, sha256, state.LastSuccessUtc);
                 if (!_stateStore.Upsert(generation.ConfigurationFingerprint, relativePath, refreshed))
                     throw new IOException("无法保存自动备份状态。");
+                _contentLedger.Record(generation.ConfigurationFingerprint, sha256, state.LastSuccessUtc);
                 RemovePendingIfUnchanged(generation, relativePath, length, lastWriteUtc);
+                return;
+            }
+
+            // 新路径但内容已上传过：前台把客户文件夹挪进「昨日」目录时相对路径会变，旧路径的
+            // 状态也会被清理，只按路径判断就会把整批文件重新传一遍。内容账本按 SHA-256 记住
+            // 内容，同内容直接把新路径标成已上传，不再占用带宽，也不在云端制造第二份。
+            if (state is null &&
+                _contentLedger.TryGetLastSuccess(
+                    generation.ConfigurationFingerprint, sha256, out DateTimeOffset knownSuccess))
+            {
+                var mirrored = new AutomaticBackupState(length, lastWriteUtc, sha256, knownSuccess);
+                if (!_stateStore.Upsert(generation.ConfigurationFingerprint, relativePath, mirrored))
+                    throw new IOException("无法保存自动备份状态。");
+                RemovePendingIfUnchanged(generation, relativePath, length, lastWriteUtc);
+                AppLog.Info($"自动备份：内容已上传过，跳过重复上传 → {relativePath}");
                 return;
             }
 
@@ -550,6 +579,10 @@ public sealed class AutomaticBackupService : ObservableObject, IDisposable
             var uploaded = new AutomaticBackupState(length, lastWriteUtc, sha256, successUtc);
             if (!_stateStore.Upsert(generation.ConfigurationFingerprint, relativePath, uploaded))
                 throw new IOException("无法保存自动备份状态。");
+            _contentLedger.Record(generation.ConfigurationFingerprint, sha256, successUtc);
+            AppLog.Info(
+                $"自动备份：已上传 {relativePath}（{length / 1024.0:0.0} KB，" +
+                $"{(state is not null ? "覆盖更新" : "新增")}）");
 
             RemovePendingIfUnchanged(generation, relativePath, length, lastWriteUtc);
             LastSuccessUtc = successUtc;
@@ -696,18 +729,25 @@ public sealed class AutomaticBackupService : ObservableObject, IDisposable
 
     private void RecordFailure(Generation generation, string relativePath, Exception exception)
     {
+        int failures;
+        TimeSpan retryDelay;
         lock (generation.Sync)
         {
             if (!generation.Pending.TryGetValue(relativePath, out PendingFile? pending)) return;
             pending.Failures++;
+            failures = pending.Failures;
             int exponent = Math.Min(pending.Failures - 1, 16);
             double milliseconds = Math.Min(
                 MaximumRetryDelay.TotalMilliseconds,
                 _initialRetryDelay.TotalMilliseconds * Math.Pow(2, exponent));
-            pending.NextAttemptUtc = DateTimeOffset.UtcNow + TimeSpan.FromMilliseconds(milliseconds);
+            retryDelay = TimeSpan.FromMilliseconds(milliseconds);
+            pending.NextAttemptUtc = DateTimeOffset.UtcNow + retryDelay;
         }
 
         LastError = exception.Message;
+        AppLog.Warn(
+            $"自动备份失败（第 {failures} 次，{retryDelay.TotalSeconds:0} 秒后重试）：" +
+            $"{relativePath}：{exception.Message}");
     }
 
     private static bool TryReadMetadata(
@@ -754,6 +794,7 @@ public sealed class AutomaticBackupService : ObservableObject, IDisposable
             return;
         }
 
+        AppLog.Info($"自动备份：停止后台监控（{generation.RootDirectory}）");
         generation.Deactivate();
         try
         {
