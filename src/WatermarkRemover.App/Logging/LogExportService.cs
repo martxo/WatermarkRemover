@@ -24,7 +24,7 @@ public static class LogExportService
         {
             try
             {
-                lines.AddRange(File.ReadLines(file));
+                lines.AddRange(ReadAllLinesShared(file));
             }
             catch
             {
@@ -33,6 +33,41 @@ public static class LogExportService
         }
 
         return LogFilter.FilterByRange(LogFilter.Parse(lines), from, to);
+    }
+
+    /// <summary>Entries in [from, now), oldest first. Used by the periodic cloud upload: the
+    /// report always covers the current local day, so each device uploads one growing file.</summary>
+    public static IReadOnlyList<LogEntry> CollectSince(DateTime from)
+    {
+        DateTime to = DateTime.Now;
+        var lines = new List<string>();
+        foreach (string file in FilesCovering(from, to))
+        {
+            try
+            {
+                lines.AddRange(ReadAllLinesShared(file));
+            }
+            catch
+            {
+                // Same rule as Collect: one unreadable file must not lose the others.
+            }
+        }
+
+        return LogFilter.FilterByRange(LogFilter.Parse(lines), from, to);
+    }
+
+    /// <summary>
+    /// Reads a daily file while AppLog is still writing it: the writer holds it with
+    /// FileShare.ReadWrite, so a default File.ReadLines (FileShare.Read) can be refused.
+    /// </summary>
+    private static List<string> ReadAllLinesShared(string path)
+    {
+        var lines = new List<string>();
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        using var reader = new StreamReader(stream);
+        while (reader.ReadLine() is { } line)
+            lines.Add(line);
+        return lines;
     }
 
     /// <summary>Daily files whose date can contain entries in [from, to], oldest first.</summary>
@@ -63,12 +98,18 @@ public static class LogExportService
     /// Self-contained report: environment header (version, OS, engine chain — the same fields as
     /// the copyable error report) followed by the raw entries with exception stacks intact.
     /// </summary>
-    public static string BuildReport(IReadOnlyList<LogEntry> entries, TimeSpan range)
+    public static string BuildReport(IReadOnlyList<LogEntry> entries, TimeSpan range) =>
+        BuildReport(
+            entries,
+            $"最近 {FormatRange(range)}（{DateTime.Now - range:yyyy-MM-dd HH:mm:ss} 起）");
+
+    /// <summary>Same report with an explicit range label (used by the rolling daily upload).</summary>
+    public static string BuildReport(IReadOnlyList<LogEntry> entries, string rangeLabel)
     {
         var report = new StringBuilder();
         DiagnosticReportBuilder.AppendEnvironmentHeader(report);
         report.AppendLine($"导出时间：{DateTime.Now:yyyy-MM-dd HH:mm:ss}");
-        report.AppendLine($"时间范围：最近 {FormatRange(range)}（{DateTime.Now - range:yyyy-MM-dd HH:mm:ss} 起）");
+        report.AppendLine($"时间范围：{rangeLabel}");
         report.AppendLine($"日志条数：{entries.Count}");
         DiagnosticReportBuilder.AppendEngineSection(report);
         report.AppendLine("---- 执行记录 ----");

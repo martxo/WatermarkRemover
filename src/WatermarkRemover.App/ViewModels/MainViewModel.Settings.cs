@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
+using System.Text.Json;
 using System.Windows;
 using WatermarkRemover.App.Logging;
 using WatermarkRemover.App.Ocr;
@@ -392,6 +393,55 @@ public sealed partial class MainViewModel
         SettingsPage = null;
     }
     /// <summary>Persists the live settings; false when the file could not be written.</summary>
+    /// <summary>与自动备份同一个账号/网盘；没有账号时返回 null，日志上传静默跳过。</summary>
+    private NetdiskUploadTarget? BuildLogUploadTarget()
+    {
+        AppSettings? effective = AutomaticBackupDefaults.BuildEffective(Settings, Netdisk.Accounts);
+        if (effective is null) return null;
+        return new NetdiskUploadTarget(
+            effective.AutomaticBackupProviderId,
+            effective.AutomaticBackupAccountName,
+            effective.AutomaticBackupDrive,
+            LogAutoUploadService.RemoteDirectory);
+    }
+
+    /// <summary>
+    /// 只记「哪些字段被改」，不记值——设置里可能有网盘凭据。基线在加载设置时抓取，
+    /// 每次保存成功后滚动到当前值。
+    /// </summary>
+    private void LogSettingsChanges()
+    {
+        try
+        {
+            string current = JsonSerializer.Serialize(Settings);
+            if (_settingsBaseline.Length == 0)
+            {
+                _settingsBaseline = current;
+                return;
+            }
+
+            using JsonDocument before = JsonDocument.Parse(_settingsBaseline);
+            using JsonDocument after = JsonDocument.Parse(current);
+            var changed = new List<string>();
+            foreach (JsonProperty property in after.RootElement.EnumerateObject())
+            {
+                // 两次都用同一个序列化器，原始文本可直接比较，不必做结构化比较。
+                if (!before.RootElement.TryGetProperty(property.Name, out JsonElement old) ||
+                    old.GetRawText() != property.Value.GetRawText())
+                    changed.Add(property.Name);
+            }
+
+            if (changed.Count > 0)
+                AppLog.Info($"设置变更：{string.Join("、", changed)}");
+            _settingsBaseline = current;
+        }
+        catch (JsonException)
+        {
+            // 比较失败不影响保存本身，放弃本轮差异记录。
+            _settingsBaseline = string.Empty;
+        }
+    }
+
     private bool SaveSettings()
     {
         // The pipeline preference may have changed: repoint the proxy before persisting so the
@@ -400,6 +450,7 @@ public sealed partial class MainViewModel
 
         if (SettingsService.Save(Settings))
         {
+            LogSettingsChanges();
             AppLog.Info("设置已保存");
             // Quick suffixes may have changed: refresh the chips of every existing job.
             Board.RefreshSuffixChips(Settings.QuickSuffixes);

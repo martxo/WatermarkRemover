@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
+using System.Text.Json;
 using System.Windows;
 using WatermarkRemover.App.Logging;
 using WatermarkRemover.App.Ocr;
@@ -65,6 +66,8 @@ public sealed partial class MainViewModel : ObservableObject
     private readonly ContentNamingService _naming;
     private readonly JobRenamer _renamer;
     private readonly PreviewStripCoordinator _preview;
+    private readonly LogAutoUploadService _logAutoUpload;
+    private string _settingsBaseline = string.Empty;
     private bool _isBusy;
     private bool _isScanning;
     private bool _isSettingsOpen;
@@ -94,6 +97,7 @@ public sealed partial class MainViewModel : ObservableObject
         _composition = composition ?? AppComposition.Shared;
 
         Settings = SettingsService.Load();
+        _settingsBaseline = JsonSerializer.Serialize(Settings);
         // Honour the pipeline pinned in settings (empty = automatic priority chains).
         AppOcrEngineChain.ApplyPipeline(Settings.PreferredLayoutStage, Settings.PreferredOcrEngine);
         Board = new JobBoard(_dialogs);
@@ -126,6 +130,8 @@ public sealed partial class MainViewModel : ObservableObject
             new AutomaticBackupStateStore(Path.Combine(
                 AppFolders.Root, "automatic-backup", "state.json")),
             Path.Combine(AppFolders.Root, "automatic-backup", "snapshots"));
+        // 每 30 分钟把本机日志上传到网盘，供集中分析；没有网盘账号时自动跳过。
+        _logAutoUpload = new LogAutoUploadService(Netdisk.Transfer, BuildLogUploadTarget);
         Netdisk.Settings.AccountSaved += (_, _) => OnAutomaticBackupAccountsChanged();
         Netdisk.AccountRemoved += (_, _) => OnAutomaticBackupAccountsChanged();
 
@@ -190,6 +196,16 @@ public sealed partial class MainViewModel : ObservableObject
         InitializeOutputWatcher();
         ApplyAutomaticBackupStartup();
         _ = ApplyAutomaticBackupConfigurationAsync();
+    }
+
+    /// <summary>
+    /// 启动每 30 分钟的日志云端上传。只由真实窗口调用：单元测试构造本类时不启动后台循环，
+    /// 避免测试进程把所在机器的日志传到云端。
+    /// </summary>
+    public void StartBackgroundLogUpload()
+    {
+        _logAutoUpload.Start();
+        AppLog.Info($"日志自动上传：已启动（每 30 分钟，目录 {LogAutoUploadService.RemoteDirectory}）");
     }
 
     /// <summary>Stops the running batch: files that have not started are marked 已停止.</summary>
